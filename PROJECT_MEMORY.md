@@ -29,6 +29,8 @@
 23. [2026-06-07 AI 推荐条胶囊化 UI 修复](#23-2026-06-07-ai-推荐条胶囊化-ui-修复)
 24. [2026-06-07 项目迁出 tmp 目录](#24-2026-06-07-项目迁出-tmp-目录)
 25. [2026-06-07 图片预览和七牛上传修复](#25-2026-06-07-图片预览和七牛上传修复)
+26. [2026-06-07 聊天区反复跳动与输入区稳定修复](#26-2026-06-07-聊天区反复跳动与输入区稳定修复)
+27. [2026-06-07 长链接卡片与网页视频浮层预览](#27-2026-06-07-长链接卡片与网页视频浮层预览)
 
 ## 1. 项目目标
 
@@ -995,3 +997,100 @@ UI 修复：
 - 不要把 `renderMessages()` 默认值改回 `"bottom"`。
 - 新增任何刷新入口时必须明确选择 `{ forceBottom: true }` 或 `{ keepPosition: true }`。
 - 新增图片消息渲染时，仍要让图片 load 回调走 guard，避免延迟抢滚动。
+
+## 27. 2026-06-07 长链接卡片与网页视频浮层预览
+
+用户要求：
+
+- 客户端对长链接会显示类似微信的网页卡片，带网页缩略图和右上角“详情”。
+- Web 二开版也要显示卡片，但希望点击“详情”后不是单纯跳出网页，而是在当前网页上浮动一个预览块。
+- 如果链接提供真实视频地址或播放器地址，浮层里优先预览视频。
+
+实现范围：
+
+- `public/app.js`
+  - 新增 `state.linkPreviewCache` 和 `state.activeLinkPreview`。
+  - `normalizeMessage()` 保留真实卡片字段：
+    - `cardTitle`
+    - `cardDesc`
+    - `cardImg`
+    - `cardUrl`
+    - 同时兼容 `miniProTitle/miniProDesc/miniProImg/miniProUrl` 等字段。
+  - `renderMessageContent()` 先判断图片，再判断链接卡片，避免图片 URL 被误渲染成网页卡片。
+  - 只有以下场景会提升为卡片：
+    - 原消息带真实卡片字段。
+    - `contentType` 是卡片/链接类。
+    - 消息内容本身就是一个纯 URL。
+  - 如果是一段文字里夹带 URL，不会吞掉文字，会保持原文并把 URL 渲染成可点击的蓝色内联按钮。
+  - 新增 `hydrateVisibleLinkCards()`，消息列表和右侧聊天记录渲染后会异步请求真实网页 meta，再刷新当前卡片。
+  - 新增浮层预览相关函数：
+    - `showLinkPreview`
+    - `renderActiveLinkPreview`
+    - `closeLinkPreview`
+    - `openActiveLinkPreview`
+    - `copyActiveLinkPreviewUrl`
+    - `getDirectPreviewVideoUrl`
+    - `getPreviewPlayerUrl`
+  - 浮层规则：
+    - 真实 `video/mp4` 等直链用 `<video controls>`。
+    - `twitter:player`、`og:video:iframe` 等播放器地址用 iframe。
+    - 普通网页用 iframe。
+    - 如果目标站禁止嵌入，显示真实提示并保留“打开网页”按钮。
+
+- `public/index.html`
+  - 新增 `#linkPreviewOverlay` 浮层结构。
+  - 包含标题、副标题、复制链接、打开网页、关闭按钮和预览 body。
+
+- `public/styles.css`
+  - 新增 `.message-link-card` 卡片样式。
+  - 卡片右上角固定“详情”，底部显示真实状态与打开/复制。
+  - 有真实缩略图时显示图片；无缩略图时显示域名缩写，不伪造图片。
+  - `.message-content.has-link-card` 去掉外层气泡边框，避免卡片套卡片。
+  - 新增 `.link-preview-overlay`、`.link-preview-panel`、`.link-preview-video`、`.link-preview-frame` 等浮层样式。
+
+- `server.js`
+  - 新增 `GET /local/link-preview?url=...`。
+  - 仅允许 `http/https`。
+  - 读取真实 HTML meta，不生成假标题、假图片：
+    - `og:title`
+    - `twitter:title`
+    - `<title>`
+    - `og:description`
+    - `twitter:description`
+    - `description`
+    - `og:image`
+    - `twitter:image`
+    - `og:video`
+    - `og:video:type`
+    - `twitter:player`
+    - `twitter:player:stream`
+  - 限制读取大小 `MAX_LINK_PREVIEW_BYTES = 900000`，避免整页无限拉取。
+  - 视频直链或 `video/*` 响应会直接返回 `video` 和 `videoType` 给前端。
+
+真实数据原则：
+
+- 不伪造网页标题、缩略图或视频地址。
+- 目标网页没有 meta 时，只显示真实 URL、域名和可打开入口。
+- 小红书等平台如果只返回标题、不给缩略图或视频，就只显示真实标题/域名，不补假图。
+- 如果 iframe 被站点 `X-Frame-Options` 或 CSP 禁止，浮层仍保留真实打开按钮。
+
+已验证：
+
+- `npm run check` 通过。
+- `git diff --check` 通过。
+- `GET http://localhost:5177/health` 返回 200。
+- `GET /local/link-preview?url=https://example.com/` 返回真实标题 `Example Domain`。
+- `GET /local/link-preview?url=https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4` 返回真实 `video/mp4` 和视频 URL。
+- `GET /local/link-preview?url=https://www.xiaohongshu.com/goods-detail/69eb394dae65c90001108dbd` 返回真实标题 `小红书`，没有伪造缩略图或视频。
+- 内置浏览器打开 `http://localhost:5177/`：
+  - 登录页可见。
+  - `#linkPreviewOverlay` 存在且默认隐藏。
+  - 浮层 panel 角色为 `dialog`。
+  - 无浏览器脚本错误。
+
+后续注意：
+
+- 真实业务验证仍需要等真实聊天消息里出现长链接或卡片字段。
+- 不要把所有含 URL 的长文本强行变成卡片，否则会丢失客户原话。
+- 如果后续抓包发现原客户端卡片字段名不同，需要优先扩展 `normalizeMessage()` 字段映射。
+- 视频平台通常不会直接给可播放 mp4，更多会给播放器 iframe 或禁止嵌入，Web 端只能按真实返回处理。

@@ -14,6 +14,8 @@ const DATA_DIR = path.join(__dirname, "data");
 const REPLY_SKILLS_FILE = path.join(DATA_DIR, "reply-skills.json");
 const API_CAPTURE_FILE = path.join(LOG_DIR, "api-capture.ndjson");
 const MAX_CAPTURE_TEXT = 8000;
+const MAX_LINK_PREVIEW_BYTES = 900000;
+const DIRECT_VIDEO_EXTENSIONS = /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8)(?:$|\?)/i;
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -518,6 +520,177 @@ function readBody(req) {
   });
 }
 
+function decodeHtmlEntities(value = "") {
+  return String(value)
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)));
+}
+
+function extractMetaContent(html, ...names) {
+  for (const name of names) {
+    const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const propertyRegex = new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']*)["'][^>]*>`, "i");
+    const reverseRegex = new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${escaped}["'][^>]*>`, "i");
+    const match = html.match(propertyRegex) || html.match(reverseRegex);
+    if (match?.[1]) return decodeHtmlEntities(match[1].trim());
+  }
+  return "";
+}
+
+function extractTitle(html) {
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "";
+  return decodeHtmlEntities(title.replace(/\s+/g, " ").trim());
+}
+
+function absolutizeUrl(baseUrl, value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    return new URL(text, baseUrl).toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizePreviewUrl(value) {
+  const text = String(value || "").trim();
+  if (!/^https?:\/\//i.test(text)) return "";
+  try {
+    const parsed = new URL(text);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function isVideoContentType(value) {
+  return /^video\//i.test(String(value || ""));
+}
+
+function isVideoFileUrl(value) {
+  try {
+    return DIRECT_VIDEO_EXTENSIONS.test(new URL(value).pathname);
+  } catch {
+    return false;
+  }
+}
+
+async function readLimitedResponse(response, limit = MAX_LINK_PREVIEW_BYTES) {
+  const reader = response.body?.getReader?.();
+  if (!reader) return await response.text();
+  const chunks = [];
+  let total = 0;
+  while (total < limit) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    const slice = value.slice(0, Math.max(0, limit - total));
+    chunks.push(Buffer.from(slice));
+    total += slice.length;
+    if (slice.length < value.length) break;
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function handleLinkPreview(req, res) {
+  if (req.method !== "GET") {
+    sendJson(res, 405, { success: false, message: "Method not allowed" });
+    return;
+  }
+
+  const parsed = new URL(req.url, `http://localhost:${PORT}`);
+  const url = normalizePreviewUrl(parsed.searchParams.get("url"));
+  if (!url) {
+    sendJson(res, 400, { success: false, message: "Invalid preview URL" });
+    return;
+  }
+
+  try {
+    const upstream = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 YouChat-Web-LinkPreview/1.0",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      },
+      signal: AbortSignal.timeout(8000)
+    });
+    const contentType = upstream.headers.get("content-type") || "";
+    if (isVideoContentType(contentType) || isVideoFileUrl(upstream.url || url)) {
+      const finalUrl = upstream.url || url;
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          url,
+          finalUrl,
+          title: path.basename(new URL(finalUrl).pathname) || new URL(finalUrl).hostname,
+          description: contentType || "video",
+          siteName: new URL(finalUrl).hostname,
+          video: finalUrl,
+          videoType: contentType || "video",
+          contentType,
+          loaded: true
+        }
+      });
+      return;
+    }
+
+    if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
+      const finalUrl = upstream.url || url;
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          url,
+          finalUrl,
+          title: path.basename(new URL(finalUrl).pathname) || new URL(finalUrl).hostname,
+          description: contentType || "",
+          siteName: new URL(finalUrl).hostname,
+          contentType,
+          loaded: true
+        }
+      });
+      return;
+    }
+
+    const html = await readLimitedResponse(upstream);
+    const finalUrl = upstream.url || url;
+    const image = extractMetaContent(html, "og:image", "twitter:image", "image");
+    const video = extractMetaContent(html, "og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream");
+    const player = extractMetaContent(html, "twitter:player", "og:video:iframe");
+    const videoType = extractMetaContent(html, "og:video:type", "twitter:player:stream:content_type");
+    sendJson(res, 200, {
+      success: true,
+      data: {
+        url,
+        finalUrl,
+        title: extractMetaContent(html, "og:title", "twitter:title") || extractTitle(html) || new URL(finalUrl).hostname,
+        description: extractMetaContent(html, "og:description", "twitter:description", "description"),
+        siteName: extractMetaContent(html, "og:site_name", "application-name") || new URL(finalUrl).hostname,
+        image: absolutizeUrl(finalUrl, image),
+        video: absolutizeUrl(finalUrl, video),
+        player: absolutizeUrl(finalUrl, player),
+        videoType,
+        status: upstream.status,
+        contentType,
+        loaded: true
+      }
+    });
+  } catch (error) {
+    sendJson(res, 502, {
+      success: false,
+      message: "Link preview request failed",
+      url,
+      error: error.message
+    });
+  }
+}
+
 function getTargetBase(reqUrl) {
   const parsed = new URL(reqUrl, `http://localhost:${PORT}`);
   const base = parsed.searchParams.get("__target") || DEFAULT_API_BASE;
@@ -762,6 +935,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url.startsWith("/local/oss-upload")) {
     await handleOssUpload(req, res);
+    return;
+  }
+
+  if (req.url.startsWith("/local/link-preview")) {
+    await handleLinkPreview(req, res);
     return;
   }
 

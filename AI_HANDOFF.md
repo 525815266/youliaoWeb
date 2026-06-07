@@ -26,7 +26,7 @@ Path note:
 - `public/app.js`: main frontend state, API calls, rendering, chat, tools, AI, skill learning.
 - `public/styles.css`: blue/white compact client UI.
 - `public/index.html`: app shell, AI settings, workbench layout.
-- `server.js`: static server, `/api` proxy, `/ai/chat/completions`, OSS upload proxy, local skill endpoints.
+- `server.js`: static server, `/api` proxy, `/ai/chat/completions`, OSS upload proxy, `/local/link-preview`, local skill endpoints.
 - `PROJECT_MEMORY.md`: full readable project memory.
 - `AI_HANDOFF.md`: this handoff map. Update it after meaningful changes.
 
@@ -139,6 +139,67 @@ Rules:
 - Right history panel should also load older records from top/scroll-up.
 - System notices are internal, not customer messages.
 - No-reply notifications should not trigger customer replies.
+
+## Link Cards And Preview Overlay
+
+User requirement:
+
+- Long links should render like the original client's WeChat-style card with real title/thumb and a `详情` action.
+- Web enhancement: `详情` opens an in-page floating preview block.
+- If real video/player metadata exists, the overlay should preview it.
+
+Important files/functions:
+
+- `public/app.js`
+  - `state.linkPreviewCache`
+  - `state.activeLinkPreview`
+  - `normalizeMessage`
+  - `renderMessageContent`
+  - `shouldRenderMessageLinkCard`
+  - `buildMessageLinkCard`
+  - `renderMessageLinkCard`
+  - `linkifyMessageText`
+  - `hydrateVisibleLinkCards`
+  - `loadLinkPreviewMeta`
+  - `showLinkPreview`
+  - `renderActiveLinkPreview`
+  - `getDirectPreviewVideoUrl`
+  - `getPreviewPlayerUrl`
+- `public/index.html`
+  - `#linkPreviewOverlay`
+- `public/styles.css`
+  - `.message-link-card`
+  - `.link-preview-overlay`
+  - `.link-preview-panel`
+  - `.link-preview-video`
+  - `.link-preview-frame`
+- `server.js`
+  - `MAX_LINK_PREVIEW_BYTES`
+  - `handleLinkPreview`
+  - route `/local/link-preview`
+
+Rules:
+
+- Do not fake title, thumbnail, or video metadata.
+- Preserve real card fields from the message when present: `cardTitle`, `cardDesc`, `cardImg`, `cardUrl`, and mini-program aliases.
+- Render images before link cards so image URLs still show as images.
+- Promote a plain URL into a card only when the message is a native card/link type or the whole message is just a URL.
+- If text contains a URL plus other words, keep the text and render the URL as a clickable inline blue button.
+- No thumbnail means show a domain abbreviation fallback, not a fake image.
+- Direct `video/*` or video file URLs use `<video>`.
+- Player URLs such as `twitter:player` or `og:video:iframe` use iframe.
+- Ordinary webpages use iframe, but some sites block embedding. Keep the `打开网页` button.
+
+Recent verification:
+
+- `npm run check`
+- `git diff --check`
+- `/health`
+- `/local/link-preview` with:
+  - `https://example.com/` -> real `Example Domain`.
+  - `https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4` -> real `video/mp4`.
+  - `https://www.xiaohongshu.com/goods-detail/69eb394dae65c90001108dbd` -> real `小红书`, no fake image/video.
+- In-app browser loaded `http://localhost:5177/`; overlay DOM exists, hidden by default, no console errors.
 
 ## Right Toolbar
 

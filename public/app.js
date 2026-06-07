@@ -183,6 +183,8 @@ const state = {
   historyHasMore: false,
   historyLoading: false,
   historyAutoLoading: false,
+  linkPreviewCache: {},
+  activeLinkPreview: null,
   activeContact: null,
   contextMenu: null,
   totalContacts: 0,
@@ -289,6 +291,14 @@ function boot() {
     "toolModalClose",
     "toolModalCancel",
     "toolModalConfirm",
+    "linkPreviewOverlay",
+    "linkPreviewPanel",
+    "linkPreviewTitle",
+    "linkPreviewSubtitle",
+    "linkPreviewBody",
+    "linkPreviewOpen",
+    "linkPreviewCopy",
+    "linkPreviewClose",
     "toastHost"
   ].forEach((id) => {
     el[id] = $(id);
@@ -347,6 +357,12 @@ function bindEvents() {
   el.toolModalClose.addEventListener("click", closeToolModal);
   el.toolModalCancel.addEventListener("click", closeToolModal);
   el.toolModalConfirm.addEventListener("click", confirmToolModal);
+  el.linkPreviewOverlay.addEventListener("click", (event) => {
+    if (event.target === el.linkPreviewOverlay) closeLinkPreview();
+  });
+  el.linkPreviewClose.addEventListener("click", closeLinkPreview);
+  el.linkPreviewOpen.addEventListener("click", openActiveLinkPreview);
+  el.linkPreviewCopy.addEventListener("click", copyActiveLinkPreviewUrl);
   el.quickReplyTool.addEventListener("click", () => setToolTab("quick"));
   el.orderTool.addEventListener("click", () => setToolTab("order"));
   el.skillReplyTool.addEventListener("click", () => setToolTab("skill"));
@@ -367,6 +383,7 @@ function bindEvents() {
       closeContextMenu();
       closeEmojiPopover();
       closeToolModal();
+      closeLinkPreview();
       hideAiSettings();
     }
   });
@@ -2230,7 +2247,11 @@ function normalizeMessage(item, index) {
     time: formatTime(timeRaw),
     sortTime: getTimeValue(timeRaw),
     contentType: Number(item.contentType || 0),
-    content: contentText
+    content: contentText,
+    cardTitle: firstValue(item.cardTitle, item.miniProTitle, item.title, item.name, ""),
+    cardDesc: firstValue(item.cardDesc, item.miniProDesc, item.description, item.desc, ""),
+    cardImg: firstValue(item.cardImg, item.miniProImg, item.imageUrl, item.img, item.icon, ""),
+    cardUrl: firstValue(item.cardUrl, item.miniProUrl, item.url, item.link, "")
   };
 }
 
@@ -2482,6 +2503,7 @@ function renderMessages(scrollMode = "none") {
   if (scrollMode === "bottom") {
     scrollElementToBottom(el.messageList, { watchImages: true });
   }
+  hydrateVisibleLinkCards(el.messageList);
 }
 
 function renderMessageBubble(message, options = {}) {
@@ -2491,13 +2513,14 @@ function renderMessageBubble(message, options = {}) {
   const isOutgoing = message.direction === "outgoing" || message.direction === "ai";
   const avatar = renderMessageAvatar(message, isOutgoing);
   const classes = ["message", message.direction || "incoming", options.compact ? "is-compact" : ""].filter(Boolean).join(" ");
+  const isLinkCard = shouldRenderMessageLinkCard(message);
   const body = `
     <div class="message-body">
       <div class="message-meta">
         <span class="message-sender">${escapeHtml(message.sender || "")}</span>
         <time>${escapeHtml(message.time || "")}</time>
       </div>
-      <div class="message-content">${renderMessageContent(message)}</div>
+      <div class="message-content${isLinkCard ? " has-link-card" : ""}">${renderMessageContent(message)}</div>
     </div>
   `;
   return `
@@ -2529,6 +2552,8 @@ function renderMessageContent(message) {
   if (message.contentType === 1 || isImageUrl(content)) {
     return `<img class="message-image" src="${escapeAttr(normalizeImageUrl(content))}" alt="聊天图片">`;
   }
+  const linkCard = buildMessageLinkCard(message);
+  if (linkCard) return renderMessageLinkCard(linkCard, message);
   if (message.contentType === 49 || message.cardTitle || message.cardDesc || message.cardImg || message.cardUrl) {
     return `
       <div class="message-card-content">
@@ -2539,10 +2564,288 @@ function renderMessageContent(message) {
       </div>
     `;
   }
-  return escapeHtml(content);
+  return linkifyMessageText(content);
+}
+
+function shouldRenderMessageLinkCard(message) {
+  const content = message.content || "";
+  if (message.contentType === 1 || isImageUrl(content)) return false;
+  return Boolean(buildMessageLinkCard(message));
+}
+
+function buildMessageLinkCard(message) {
+  const nativeUrl = firstValue(
+    message.cardUrl,
+    message.miniProUrl,
+    message.url
+  );
+  const contentUrl = extractFirstUrl(message.content);
+  const canPromoteContentUrl = message.contentType === 49 || message.contentType === 6 || isStandaloneUrlMessage(message.content, contentUrl);
+  const directUrl = nativeUrl || (canPromoteContentUrl ? contentUrl : "");
+  const hasCardFields = Boolean(message.cardTitle || message.cardDesc || message.cardImg || directUrl || message.contentType === 49 || message.contentType === 6);
+  if (!hasCardFields || !directUrl) return null;
+  const url = normalizeLinkUrl(directUrl);
+  if (!url) return null;
+  const cached = state.linkPreviewCache[url] || {};
+  const previewUrl = firstValue(cached.video, cached.player, cached.videoSecureUrl, "");
+  return {
+    url,
+    title: firstValue(message.cardTitle, message.miniProTitle, cached.title, getUrlHost(url), "链接卡片"),
+    desc: firstValue(message.cardDesc, message.miniProDesc, cached.description, ""),
+    image: firstValue(message.cardImg, message.miniProImg, cached.image, ""),
+    video: previewUrl,
+    videoType: firstValue(cached.videoType, cached.contentType, ""),
+    siteName: firstValue(message.miniProName, cached.siteName, getUrlHost(url), ""),
+    contentType: message.contentType
+  };
+}
+
+function renderMessageLinkCard(card, message) {
+  const hasImage = Boolean(card.image);
+  const status = state.linkPreviewCache[card.url]?.loading ? "正在获取预览" : card.video ? "可预览视频" : "网页预览";
+  const host = getUrlHost(card.url);
+  const fallbackText = (host || "LINK").slice(0, 4).toUpperCase();
+  return `
+    <article class="message-link-card" data-link-card="${escapeAttr(card.url)}" data-message-id="${escapeAttr(message.id || "")}">
+      <button class="link-card-detail" type="button" data-link-preview="${escapeAttr(card.url)}">详情</button>
+      <div class="link-card-main">
+        <div class="link-card-copy">
+          <strong>${escapeHtml(card.title || getUrlHost(card.url) || "链接卡片")}</strong>
+          ${card.desc ? `<p>${escapeHtml(card.desc)}</p>` : `<p>${escapeHtml(card.url)}</p>`}
+          <span>${escapeHtml(card.siteName || host || status)}</span>
+        </div>
+        <div class="link-card-thumb ${hasImage ? "" : "is-empty"}">
+          ${hasImage ? `<img src="${escapeAttr(normalizeImageUrl(card.image))}" alt="">` : `<span>${escapeHtml(fallbackText)}</span>`}
+        </div>
+      </div>
+      <div class="link-card-actions">
+        <span>${escapeHtml(status)}</span>
+        <button class="mini-action ghost" type="button" data-open-link="${escapeAttr(card.url)}">打开</button>
+        <button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.url)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>
+      </div>
+    </article>
+  `;
+}
+
+function extractFirstUrl(text) {
+  const match = String(text || "").match(/https?:\/\/[^\s<>"']+/i) || String(text || "").match(/\/\/[^\s<>"']+/i);
+  return match ? trimTrailingUrlPunctuation(match[0]) : "";
+}
+
+function extractUrls(text) {
+  const matches = String(text || "").match(/https?:\/\/[^\s<>"']+|\/\/[^\s<>"']+/gi) || [];
+  return [...new Set(matches.map(trimTrailingUrlPunctuation).map(normalizeLinkUrl).filter(Boolean))];
+}
+
+function trimTrailingUrlPunctuation(url) {
+  return String(url || "").replace(/[),.;\uFF0C\u3002\uFF1B\u3001]+$/g, "");
+}
+
+function isStandaloneUrlMessage(content, url) {
+  const raw = String(content || "").trim();
+  const normalizedUrl = normalizeLinkUrl(url);
+  if (!raw || !normalizedUrl) return false;
+  return normalizeLinkUrl(trimTrailingUrlPunctuation(raw)) === normalizedUrl;
+}
+
+function normalizeLinkUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const withProtocol = text.startsWith("//") ? `https:${text}` : text;
+  if (!/^https?:\/\//i.test(withProtocol)) return "";
+  try {
+    return new URL(withProtocol).toString();
+  } catch {
+    return "";
+  }
+}
+
+function getUrlHost(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "");
+  } catch {
+    return "";
+  }
+}
+
+function linkifyMessageText(content) {
+  const text = String(content || "");
+  const urls = extractUrls(text);
+  if (!urls.length) return escapeHtml(text);
+  let html = escapeHtml(text);
+  urls.forEach((url) => {
+    const escaped = escapeHtml(url);
+    html = html.replaceAll(escaped, `<button class="inline-link-button" type="button" data-link-preview="${escapeAttr(url)}">${escaped}</button>`);
+  });
+  return html;
+}
+
+function hydrateVisibleLinkCards(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-link-card]").forEach((node) => {
+    const url = node.dataset.linkCard || "";
+    if (!url || state.linkPreviewCache[url]?.loaded || state.linkPreviewCache[url]?.loading || state.linkPreviewCache[url]?.failed) return;
+    loadLinkPreviewMeta(url).catch((error) => {
+      state.linkPreviewCache[url] = { ...(state.linkPreviewCache[url] || {}), failed: true, loading: false, error: error.message };
+      log("link preview failed", { url, error: error.message });
+    });
+  });
+}
+
+async function loadLinkPreviewMeta(url) {
+  state.linkPreviewCache[url] = { ...(state.linkPreviewCache[url] || {}), loading: true };
+  const response = await fetch(`/local/link-preview?url=${encodeURIComponent(url)}`);
+  const payload = await response.json();
+  if (!response.ok || payload.success === false) {
+    throw new Error(payload.message || `HTTP ${response.status}`);
+  }
+  state.linkPreviewCache[url] = { ...payload.data, loading: false, loaded: true };
+  refreshRenderedLinkCard(url);
+  if (state.activeLinkPreview?.url === url) renderActiveLinkPreview();
+}
+
+function refreshRenderedLinkCard(url) {
+  const rerender = (messages, root) => {
+    if (!root) return;
+    const message = messages.find((item) => normalizeLinkUrl(firstValue(item.cardUrl, item.miniProUrl, extractFirstUrl(item.content))) === url);
+    if (!message) return;
+    root.querySelectorAll("[data-link-card]").forEach((node) => {
+      if (node.dataset.linkCard !== url) return;
+      const card = buildMessageLinkCard(message);
+      if (card) node.outerHTML = renderMessageLinkCard(card, message);
+    });
+  };
+  rerender(state.messages, el.messageList);
+  rerender(state.historyMessages, el.toolContent);
+}
+
+function showLinkPreview(url) {
+  const normalizedUrl = normalizeLinkUrl(url);
+  if (!normalizedUrl) {
+    toast("链接地址无效。", true);
+    return;
+  }
+  state.activeLinkPreview = { url: normalizedUrl };
+  const needsMeta = !state.linkPreviewCache[normalizedUrl]?.loaded && !state.linkPreviewCache[normalizedUrl]?.loading;
+  if (needsMeta) {
+    state.linkPreviewCache[normalizedUrl] = { ...(state.linkPreviewCache[normalizedUrl] || {}), loading: true };
+  }
+  renderActiveLinkPreview();
+  el.linkPreviewOverlay.classList.remove("is-hidden");
+  if (needsMeta) {
+    loadLinkPreviewMeta(normalizedUrl).catch((error) => {
+      state.linkPreviewCache[normalizedUrl] = { ...(state.linkPreviewCache[normalizedUrl] || {}), failed: true, loading: false, error: error.message };
+      renderActiveLinkPreview();
+    });
+  }
+}
+
+function renderActiveLinkPreview() {
+  const url = state.activeLinkPreview?.url || "";
+  const meta = state.linkPreviewCache[url] || {};
+  const title = meta.title || getUrlHost(url) || "链接详情";
+  el.linkPreviewTitle.textContent = title;
+  el.linkPreviewSubtitle.textContent = meta.description || url;
+  el.linkPreviewOpen.dataset.openLink = url;
+  el.linkPreviewCopy.dataset.copyUrl = url;
+  const videoUrl = getDirectPreviewVideoUrl(meta);
+  const playerUrl = getPreviewPlayerUrl(meta);
+  const imageUrl = meta.image ? normalizeImageUrl(meta.image) : "";
+  if (videoUrl) {
+    el.linkPreviewBody.innerHTML = `
+      <video class="link-preview-video" src="${escapeAttr(videoUrl)}" controls playsinline poster="${escapeAttr(imageUrl)}"></video>
+    `;
+    return;
+  }
+  if (playerUrl) {
+    el.linkPreviewBody.innerHTML = `
+      <iframe class="link-preview-frame" src="${escapeAttr(playerUrl)}" title="${escapeAttr(title)}" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" allow="fullscreen; autoplay; encrypted-media; picture-in-picture"></iframe>
+      <div class="link-preview-fallback">
+        <span>${escapeHtml(meta.loading ? "正在获取视频预览..." : "如果预览为空白，说明目标网页禁止嵌入。")}</span>
+      </div>
+    `;
+    return;
+  }
+  if (url) {
+    el.linkPreviewBody.innerHTML = `
+      <iframe class="link-preview-frame" src="${escapeAttr(url)}" title="${escapeAttr(title)}" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+      <div class="link-preview-fallback">
+        <span>${escapeHtml(meta.loading ? "正在获取网页预览..." : meta.failed ? "网页可能禁止嵌入，仍可打开原网页。" : "如果页面为空白，说明目标网页禁止嵌入。")}</span>
+      </div>
+    `;
+    return;
+  }
+  el.linkPreviewBody.innerHTML = '<div class="empty-state">暂无可预览链接。</div>';
+}
+
+function getDirectPreviewVideoUrl(meta = {}) {
+  const directUrl = normalizeLinkUrl(firstValue(meta.video, meta.videoSecureUrl, meta.stream, ""));
+  if (!directUrl) return "";
+  if (isVideoContentType(firstValue(meta.videoType, meta.contentType, "")) || isVideoUrl(directUrl)) return directUrl;
+  return "";
+}
+
+function getPreviewPlayerUrl(meta = {}) {
+  const playerUrl = normalizeLinkUrl(firstValue(meta.player, ""));
+  if (playerUrl) return playerUrl;
+  const videoUrl = normalizeLinkUrl(firstValue(meta.video, meta.videoSecureUrl, ""));
+  if (videoUrl && !getDirectPreviewVideoUrl(meta)) return videoUrl;
+  return "";
+}
+
+function isVideoContentType(value) {
+  return /^video\//i.test(String(value || ""));
+}
+
+function isVideoUrl(value) {
+  try {
+    const pathname = new URL(value).pathname;
+    return /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8)(?:$|\?)/i.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
+function closeLinkPreview() {
+  state.activeLinkPreview = null;
+  el.linkPreviewOverlay.classList.add("is-hidden");
+  el.linkPreviewBody.innerHTML = "";
+}
+
+function openActiveLinkPreview() {
+  const url = state.activeLinkPreview?.url || el.linkPreviewOpen.dataset.openLink || "";
+  openExternalLink(url);
+}
+
+function copyActiveLinkPreviewUrl() {
+  const url = state.activeLinkPreview?.url || el.linkPreviewCopy.dataset.copyUrl || "";
+  copyToClipboard(url);
+}
+
+function openExternalLink(url) {
+  const normalizedUrl = normalizeLinkUrl(url);
+  if (!normalizedUrl) {
+    toast("链接地址无效。", true);
+    return;
+  }
+  window.open(normalizedUrl, "_blank", "noopener,noreferrer");
 }
 
 function handleMessageListClick(event) {
+  const previewTarget = event.target.closest("[data-link-preview]");
+  if (previewTarget) {
+    event.preventDefault();
+    showLinkPreview(previewTarget.dataset.linkPreview || "");
+    return;
+  }
+
+  const openTarget = event.target.closest("[data-open-link]");
+  if (openTarget) {
+    event.preventDefault();
+    openExternalLink(openTarget.dataset.openLink || "");
+    return;
+  }
+
   const target = event.target.closest("[data-action]");
   if (!target || target.dataset.action !== "load-more-messages") return;
   if (!state.messageHasMore || state.messageLoading) return;
@@ -4588,6 +4891,7 @@ function renderToolContent() {
 
   el.toolContent.innerHTML = renderHistoryPanel();
   bindHistoryAutoLoad();
+  hydrateVisibleLinkCards(el.toolContent);
 }
 
 function renderQuickReplyPanel() {
@@ -4955,6 +5259,20 @@ function renderAccountDetails() {
 }
 
 function handleToolClick(event) {
+  const previewTarget = event.target.closest("[data-link-preview]");
+  if (previewTarget) {
+    event.preventDefault();
+    showLinkPreview(previewTarget.dataset.linkPreview || "");
+    return;
+  }
+
+  const openTarget = event.target.closest("[data-open-link]");
+  if (openTarget) {
+    event.preventDefault();
+    openExternalLink(openTarget.dataset.openLink || "");
+    return;
+  }
+
   const copyTarget = event.target.closest("[data-copy]");
   if (copyTarget) {
     copyToClipboard(copyTarget.dataset.copy || "");
