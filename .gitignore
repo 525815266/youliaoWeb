@@ -1,0 +1,8 @@
+node_modules/
+.env
+.env.*
+.youchat-patch-backups/
+*.log
+*.tmp
+*.temp
+Thumbs.db

@@ -1,0 +1,17 @@
+﻿{
+    "generatedAt":  "2026-06-07T10:24:03.6498540Z",
+    "oldAudit":  "C:\\tmp\\youchat-dev-web\\reports\\client-update-audit-20260607-173119.json",
+    "newAudit":  "C:\\tmp\\youchat-dev-web\\reports\\client-update-audit-20260607-173917.json",
+    "oldGeneratedAt":  "2026-06-07T09:31:19.1886618Z",
+    "newGeneratedAt":  "2026-06-07T09:39:17.2442750Z",
+    "fileChanges":  [
+
+                    ],
+    "endpointsAdded":  {
+
+                       },
+    "endpointsRemoved":  {
+
+                         },
+    "hasChanges":  false
+}

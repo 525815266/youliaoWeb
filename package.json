@@ -1,0 +1,13 @@
+{
+  "name": "youchat-dev-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Secondary-development web workbench for YouChat.",
+  "scripts": {
+    "dev": "node server.js",
+    "check": "node --check server.js && node --check public/app.js",
+    "patch:export": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-devkit-patch.ps1",
+    "client:audit": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/audit-client-update.ps1",
+    "client:audit:compare": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/compare-client-audits.ps1"
+  }
+}

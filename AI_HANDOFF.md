@@ -1,0 +1,577 @@
+﻿# AI Handoff Notes
+
+> Read this before changing the YouChat web dev project. This file is the compact map for future AI agents. Also read `PROJECT_MEMORY.md` for the human-readable full context.
+
+## Mission
+
+Build a real-data Web customer-service workbench from the Windows Electron YouChat client. Do not invent users, ids, orders, balances, chat records, or quick replies. Prefer real API, captured logs, original Electron references, and persistent local files.
+
+## Roots
+
+- Web project: `C:\youchat-dev-web`
+- Original client: `C:\Program Files\youchat-desktop`
+- Dev URL: `http://localhost:5177`
+- API capture log: `C:\youchat-dev-web\logs\api-capture.ndjson`
+- Local skills: `C:\youchat-dev-web\data\reply-skills.json`
+- Original API reference: `C:\Program Files\youchat-desktop\bin\YouChatService.xml`
+
+Path note:
+
+- Old temporary path was `C:\tmp\youchat-dev-web`.
+- Current official project root is `C:\youchat-dev-web`.
+- Do not continue edits from the old tmp path unless explicitly recovering backup files.
+
+## Key Files
+
+- `public/app.js`: main frontend state, API calls, rendering, chat, tools, AI, skill learning.
+- `public/styles.css`: blue/white compact client UI.
+- `public/index.html`: app shell, AI settings, workbench layout.
+- `server.js`: static server, `/api` proxy, `/ai/chat/completions`, OSS upload proxy, local skill endpoints.
+- `PROJECT_MEMORY.md`: full readable project memory.
+- `AI_HANDOFF.md`: this handoff map. Update it after meaningful changes.
+
+## Verification
+
+Run:
+
+```powershell
+cd C:\youchat-dev-web
+npm run check
+Invoke-WebRequest http://localhost:5177/health
+Invoke-WebRequest http://localhost:5177/app.js
+Invoke-WebRequest http://localhost:5177/styles.css
+```
+
+Playwright is not currently installed. Do not claim screenshot QA unless it is installed and actually run.
+
+## API Plumbing
+
+Frontend uses:
+
+- `api(path, data, options)`
+- `apiPath(path)`
+- `toFormData(data)`
+- `getData(payload)`
+- `getRecords(payload)`
+- `getTotal(payload)`
+- `getExplicitTotal(payload)`
+
+`server.js` captures every `/api/*` request/response into `logs/api-capture.ndjson`.
+
+## AccountId Gotcha
+
+Current conversation list count must use the customer-service account `id` from:
+
+`GET /Senstive/GetAccountList`
+
+Known real example:
+
+- userName: `Boom666`
+- nickName: `客服-王`
+- correct contact-list accountId: `id = 2`
+- long `accountId = 1556504756803862529` is not the current-list filter id.
+
+Important functions:
+
+- `ensureContactListAccountId`
+- `getContactListAccountId`
+- `buildContactListParams`
+- `loadContactCounts`
+- `loadContacts`
+
+Recent fix:
+
+- Added `state.accountIdResolved`.
+- Current tab now prefers verified `/Senstive/GetAccountList` `id`.
+- Avoid using stale `localStorage.youchat.accountId`, login name, or long merchant accountId for current list counts.
+
+## Contact List
+
+Important functions:
+
+- `loadContacts`
+- `sortContacts`
+- `renderContacts`
+- `renderConversationTabs`
+- `selectContactById`
+- `handleContactListKeydown`
+- `markContactRead`
+- `syncConsumedMessages`
+- `syncAllConsumedMessages`
+
+Behavior rules:
+
+- Tabs: `current`, `guestbook`, `history`.
+- Preserve active right toolbar tab when switching contacts.
+- Selected unread conversation should clear local badge and call consume API.
+- Keyboard up/down switches conversations when focus is in list.
+- Auto refresh should preserve scroll.
+
+Clear-list behavior:
+
+- `archiveAndClearCurrentList`
+- `filterLocallyClearedContacts`
+- `loadLocalHistoryContacts`
+- `persistLocalHistoryContacts`
+- `loadClearedContactState`
+- `persistClearedContactState`
+
+This local archive/filter is intentional. It prevents refresh from immediately repopulating a list after user chose “清空列表”.
+
+## Chat
+
+Important functions:
+
+- `loadMessages`
+- `fetchMessagePage`
+- `normalizeMessage`
+- `mergeMessages`
+- `renderMessages`
+- `renderMessageBubble`
+- `handleMessageListScroll`
+- `scrollElementToBottom`
+- `restorePrependScroll`
+
+Rules:
+
+- Main chat should show newest at bottom.
+- “Load more” is at top for older messages.
+- Right history panel should also load older records from top/scroll-up.
+- System notices are internal, not customer messages.
+- No-reply notifications should not trigger customer replies.
+
+## Right Toolbar
+
+Important functions:
+
+- `setToolTab`
+- `loadToolDataForActiveTab`
+- `renderToolContent`
+- `renderUserInfo`
+- `renderQuickReplyPanel`
+- `renderSkillReplyPanel`
+- `renderOrderPanel`
+- `renderAccountDetails`
+- `renderHistoryPanel`
+
+Rules:
+
+- Blue real values can be copied.
+- Orders are platform grouped.
+- Detail means account transaction/waterflow details.
+- Do not truncate important user info.
+- Keep selected tool tab when switching contacts.
+
+## Quick Replies
+
+APIs:
+
+- `/Faq/GetPageList`
+- `/Faq/GetTypeList`
+
+Functions:
+
+- `loadFaq`
+- `loadFaqCategories`
+- `renderQuickReplyPanel`
+
+UI rule:
+
+- Match original client idea: quick reply item with send and edit actions.
+- If quick replies are empty, inspect API params and `logs/api-capture.ndjson` before adding fallback content.
+
+## AI And Skill
+
+Defaults:
+
+- `DEFAULT_AI_BASE_URL = "https://sub2.sn55.cn/"`
+- `DEFAULT_AI_MODEL = "gpt-5.4-mini"`
+- API key is currently hardcoded by user request and persisted in localStorage.
+- `AI_PRESETS.deepseek` sets `baseUrl = "https://api.deepseek.com"` and `model = "deepseek-v4-flash"`.
+- DeepSeek uses its own API key. The preset must not overwrite the current key.
+
+Settings:
+
+- `state.aiEnabled`: AI recommendations enabled.
+- `state.skillAutoReply`: skill auto-send switch.
+- `state.skillAutoLearn`: manual reply learning switch.
+- `hydrateAiSettingsFields`
+- `saveAiSettings`
+- `persistAiSettings`
+
+Skill file:
+
+- `data/reply-skills.json`
+
+Local skill endpoints in `server.js`:
+
+- `GET /local/reply-skills`
+- `POST /local/reply-skills`
+- `POST /local/reply-skills/learn`
+
+Core functions:
+
+- `loadReplySkills`
+- `saveReplySkills`
+- `matchReplySkill`
+- `buildSkillSuggestion`
+- `maybeBuildSkillSuggestion`
+- `sendSuggestionSteps`
+- `learnFromManualReply`
+- `generateAiWithRelay`
+- `requestAiRelaySuggestions`
+- `requestAiChatReplies`
+- `refreshAiSuggestion`
+- `scheduleAutoAiSuggestion`
+- `generateAutoAiSuggestion`
+- `buildAutoSuggestionKey`
+- `renderAiSuggestionCard`
+- `optimizeSkillById`
+
+Recent AI behavior:
+
+- AI recommendation is automatic after selecting a contact or loading/merging messages.
+- It first tries skill. If no skill matches, it calls `/ai/chat/completions`.
+- It deduplicates by latest actionable customer message key.
+- Manual AI button still works and shows errors.
+- Auto AI failures are silent and logged.
+
+Recent AI UI:
+
+- Recommendation panel is a compact horizontal/list strip, not big cards, but now has a little more room than the first compact version.
+- Left label: `AI 推荐`, `文字优化`, or `skill 回复`.
+- Right list: 1 to 3 candidates, each with `采用` and `发送`.
+- Left rail includes `换一换`, which regenerates a different tone/style.
+- Global apply/send buttons are hidden in the strip. Bottom `采用推荐` remains as backup.
+- Keep this compact. Do not let AI recommendations hide the textarea.
+
+Skill optimize:
+
+- Skill match card and skill rows have an `优化` button.
+- `optimizeSkillById(id)` uses current skill text, draft text, draft image count, latest customer message, and recent conversation.
+- It only optimizes text. It must not infer image contents.
+- Optimized suggestions use `keepDraftImages` so applying/sending preserves staged images.
+
+DeepSeek:
+
+- Official OpenAI-compatible base as verified on 2026-06-07: `https://api.deepseek.com`.
+- Chat completions path is `/chat/completions`, not `/v1/chat/completions`.
+- Preset model is `deepseek-v4-flash`.
+- Do not use old preset names `deepseek-chat` or `deepseek-reasoner`; official docs indicate they are deprecated after 2026-07-24 15:59 UTC.
+- `server.js:getAiChatCompletionsUrl()` special-cases DeepSeek so both `https://api.deepseek.com` and `https://api.deepseek.com/v1` resolve to `/chat/completions`.
+- `proxyAi` passes through `reasoning_effort` and `thinking` for future model options.
+
+## Image And Composer
+
+Functions:
+
+- `handleReplyPaste`
+- `handleReplyDrop`
+- `sendText`
+- `sendImageFile`
+- `sendChatContent`
+- `uploadImage`
+- `uploadImageViaLocalProxy`
+
+Rules:
+
+- Pasted images are staged in composer.
+- Text and images can be prepared together, but are sent through separate API steps.
+- Draft AI optimization changes text only and keeps original images.
+- Manual replies, including image URLs, should be learned when `skillAutoLearn` is true.
+
+## Friend Requests
+
+APIs:
+
+- `/Contact/GetNewFirend`
+- `/Contact/NewFirendAccept`
+- `/Contact/NewFirendIgnor`
+
+Functions:
+
+- `loadFriendRequests`
+- `renderFriendRequestsDialog`
+- `handleFriendRequestDecision`
+
+## Server
+
+`server.js` important areas:
+
+- `proxyApi`: forwards real YouChat API and captures logs.
+- `proxyAi`: OpenAI-compatible relay.
+- `proxyOssUpload`: image upload helper.
+- local skill read/write/learn routes.
+- `/health`: returns server and default AI config.
+
+Do not log raw API keys. Use masking helpers if adding logs.
+
+## Portable Patch System
+
+The project now has a portable zip overlay patch workflow. Use it when the user wants to move this web dev kit to another folder, another machine, or a fresh client-source location.
+
+Files:
+
+- `PATCH_GUIDE.md`: human instructions.
+- `tools/export-devkit-patch.ps1`: exports a zip patch into `patches/`.
+- `tools/import-devkit-patch.ps1`: imports a patch into any target path and backs up overwritten files.
+- `tools/audit-client-update.ps1`: audits the original Electron client after updates.
+- `tools/compare-client-audits.ps1`: compares two audit JSON reports and lists key file and endpoint changes.
+
+Commands:
+
+```powershell
+npm run patch:export
+npm run client:audit
+npm run client:audit:compare
+```
+
+Patch format:
+
+- `payload/`: overlay files.
+- `youchat-devkit-manifest.json`: file hashes plus original-client fingerprints.
+- `PATCH_README.md`: short import guide.
+- `PATCH_GUIDE.md` is included in the payload so imported targets keep the full guide.
+
+Import backups:
+
+- `<TargetPath>\.youchat-patch-backups\<timestamp>`
+- `import-report.json` is written there.
+
+After Electron client updates:
+
+1. Run `npm run client:audit`.
+2. Run `npm run client:audit:compare`.
+3. Review `reports/client-update-audit-*.md` and `reports/client-audit-compare-*.md`.
+4. If iconfont, Braft CSS, emoji sprite, `YouChatService.xml`, or endpoint candidates changed, inspect mappings/API params before exporting a new patch.
+5. Update `PROJECT_MEMORY.md`, `AI_HANDOFF.md`, and `PATCH_GUIDE.md` when this workflow changes.
+
+## UI Register
+
+Product UI, not marketing. Keep:
+
+- blue/white YouChat client style
+- dense, calm, scannable layout
+- small radius around 5 to 6px
+- stable text and scroll positions
+
+Avoid:
+
+- fake dashboard cards
+- purple AI gradients
+- large decorative panels
+- AI recommendation blocks that cover the input area
+- invented data
+
+## Native Icons
+
+Do not use random external icon glyphs for the client UI. Current native sources:
+
+- YouChat iconfont: `C:\Program Files\youchat-desktop\wwwroot\fontIcon\iconfont.css`
+- Braft editor iconfont embedded in original chatHistory CSS. `server.js` extracts it through `/native-icons/braft-icons.woff`.
+- Original emoji sprite: `C:\Program Files\youchat-desktop\wwwroot\static\emojiSource.cdbf96da.png`, served through `/static/emojiSource.cdbf96da.png`.
+
+Current mappings:
+
+- Composer: `bfi-emoji`, `bfi-code`, `bfi-media`, red packet sprite, `bfi-camera`, `bfi-pushpin`, YouChat `client-icon-ai`.
+- Settings/user/enter: YouChat iconfont `\e605`, `\e60e`, `\e60d`.
+- Refresh/close/copy/search/login dropdown: `bfi-replay`, `bfi-close`, `bfi-copy`, `bfi-search`, `bfi-drop-down`.
+- `pro_icon.svg` and `icons/icon-128x128.png` in the original package are Ant Design Pro defaults, not YouChat brand assets. Do not swap the app logo to those.
+
+Validation from 2026-06-07:
+
+- `/native-icons/braft-icons.woff` returned 200, `font/woff`, length 11348.
+- `/static/emojiSource.cdbf96da.png` returned 200, `image/png`, length 616827.
+- Composer toolbar CDP check: 7 icon buttons are 30x30, font icons 17x17, red packet 18x18.
+
+## Chat Scroll
+
+Important bug fix:
+
+- `scrollToFirstUnreadMessage()` must only target `[data-red-point="true"]`.
+- Do not fallback to `.message.incoming`; that jumps ordinary conversations to the first customer message.
+- `selectContactById()` now calls `hasUnreadMessageAnchor()` before jumping to unread. If there is no real red-point anchor, it calls `scheduleMessageListBottom({ watchImages: true })`.
+- CDP check verified a selected unread conversation without red-point anchors ends with `bottomGap = 0`.
+
+## Current Change Log
+
+2026-06-07:
+
+- Added `PROJECT_MEMORY.md`.
+- Added `AI_HANDOFF.md`.
+- Added automatic AI recommendations on contact selection and message refresh.
+- Added auto AI dedupe state and functions.
+- Refactored AI relay call so manual and automatic calls share core logic.
+- Changed AI recommendation UI from card blocks to compact list strip.
+- Added `accountIdResolved` and tightened current-list accountId selection.
+- Verified `npm run check`.
+
+2026-06-07 follow-up:
+
+- Moved the AI suggestion close button to the top-right corner of the suggestion strip.
+- Kept the left rail as a label only: `AI 推荐`, `文字优化`, or `skill 回复`.
+- Restyled candidates as real list rows with number, two-line text, `采用`, and `发送`.
+- Fixed duplicate numbering such as `1. 1.` by returning raw text for single-step suggestions in `formatSuggestionText`.
+- Updated AI prompt to request 1 to 3 replies, preferably as a JSON array.
+- Added `buildLocalSuggestionVariants` so a single model reply can be expanded into up to three usable candidates.
+- Verified `npm run check`.
+
+2026-06-07 friend request fix:
+
+- `GET/POST /Contact/GetNewFirend` with no `scene/scenes` returns `total: 0` in current real API behavior.
+- Single sources work. Verified examples:
+  - `scene=17, scenes=17` 微信卡片: `total: 1453`.
+  - `scene=3, scenes=3` 搜索微信号: `total: 7`.
+  - `scene=30, scenes=30` 扫描二维码: `total: 3`.
+- Therefore the UI “全部来源” must not call the empty-source request.
+- Added `FRIEND_ALL_SOURCE_VALUES`.
+- Added `loadFriendRequestsBySource(source, page, size)`.
+- Added `loadAllFriendRequestSources(page, size)` to request all source scenes, merge, sort, de-dupe, and frontend-paginate.
+- Added `mergeFriendRequests(records)`.
+- Added `state.friendSourceCounts` and source-count badges in the friend source tabs.
+- Replaced the ugly friend request text icon with a CSS-drawn two-person icon.
+- Friend request badge hides at 0 and displays `99+` over 99.
+- Verified `npm run check`, `/health`, `/app.js`, `/styles.css`, and direct proxy calls for empty source, 17, 3, 30.
+
+2026-06-07 history contact access:
+
+- History tab contact cards now show a hover-only access button.
+- Added `getContactHoverActions(contact, contactId)`:
+  - `guestbook`: access + close.
+  - `history`: access only via `data-contact-action="access-history"`.
+  - `current`: close only.
+- `handleContactAction` routes `access-history` to `accessHistoryContact(contact)`.
+- `accessHistoryContact` calls real `/Conversation/AccessIn` with `contactId` and `accountId`.
+- On success it removes the contact from local history cache, switches `state.listTab` to `current`, refreshes contacts, and selects the live contact if returned.
+- If backend sync is slow, it temporarily inserts the accessed contact into current list so the user sees immediate feedback.
+- Verified `npm run check`, `/app.js`, and `/styles.css`.
+
+2026-06-07 native icons and chat-bottom fix:
+
+- `server.js` now has `CLIENT_WWWROOT`, Braft icon extraction, and original emoji sprite serving.
+- `public/index.html` composer toolbar uses original Braft/YouChat iconfont classes and the original red packet sprite.
+- `public/styles.css` defines `youchat-iconfont`, `braft-icons`, native glyph mappings, and normalized icon sizes.
+- Dynamic buttons in `public/app.js` use native close/copy/search/enter icons.
+- Login account dropdown uses `bfi-drop-down`; password eye remains CSS because no original eye glyph was found.
+- Fixed contact switching scroll by removing `.message.incoming` as unread fallback.
+- Verified `npm run check`, `/health`, native asset routes, and CDP layout/scroll checks.
+
+2026-06-07 portable patch system:
+
+- Added `PATCH_GUIDE.md`.
+- Added `tools/export-devkit-patch.ps1`.
+- Added `tools/import-devkit-patch.ps1`.
+- Added `tools/audit-client-update.ps1`.
+- Added `tools/compare-client-audits.ps1`.
+- Added npm scripts `patch:export`, `client:audit`, and `client:audit:compare`.
+- Export patch is a zip overlay, not git diff, so it can be imported into arbitrary directories.
+- Import backs up overwritten files into `.youchat-patch-backups`.
+- Client audit records iconfont/Braft/emoji/YouChatService fingerprints and endpoint candidates for update tracking.
+- Client audit compare reports key file hash changes plus added/removed endpoint candidates.
+- Export payload includes `PATCH_GUIDE.md` so imported targets keep the complete migration guide.
+
+2026-06-07 skill optimize, refresh suggestion, and DeepSeek:
+
+- Added `AI_PRESETS` with `sub2` and `deepseek`.
+- AI settings modal now has provider preset buttons.
+- DeepSeek preset fills `https://api.deepseek.com` and `deepseek-v4-flash` without overwriting API key.
+- `server.js` special-cases DeepSeek chat completions URL and passes `reasoning_effort` / `thinking`.
+- Added `requestAiChatReplies` helper.
+- Added `refreshAiSuggestion`, bound to the new `换一换` button.
+- `换一换` rotates tone instructions: natural reassurance, concise direct, patient explanation, soft conversational.
+- Added skill `优化` actions in the match card and every skill row.
+- Added `optimizeSkillById`, combining skill text, draft text, staged image count, latest customer message, and recent context.
+- Recommendation strip has more breathing room while staying above the composer and not hiding the textarea.
+- Verified `npm run check`, `/health`, `/app.js`, `/styles.css`, and DeepSeek URL mapping.
+
+2026-06-07 convergence audit:
+
+- User asked to收敛 all previous requirements and missing docs.
+- `README.md` was stale. It now documents `/ai/chat/completions` as the main AI path, DeepSeek preset, `换一换`, skill `优化`, friend requests, clear-list archive, patch export, and client audit flow.
+- `PRODUCT.md` no longer says to keep preview/fake data when APIs fail. Current rule: show real failure state and logs, no fake users/orders/messages.
+- Legacy `generateAi()` in `public/app.js` no longer calls `/ChatContent/GenerateRealAIReply`; it delegates to `generateAiWithRelay()`.
+- Friend request badge now preloads real source totals via `loadFriendRequestBadgeTotals()` on connect and refresh.
+- Friend request badge preload uses empty nickname/robot filters so dialog search does not corrupt the global badge count.
+- `loadAllFriendRequestSources()` now uses `loadFriendRequestsFromSourceWindow()` to fetch enough source pages for the current aggregate page before merging, reducing empty "全部来源" pages when source totals are large.
+- Added `FRIEND_AGGREGATE_SOURCE_PAGE_SIZE = 50`.
+- DeepSeek URL mapping now normalizes `https://api.deepseek.com/v1/chat/completions` to `https://api.deepseek.com/chat/completions`.
+- Still needs real-client verification for FAQ parameter variants and history cursor behavior if the user reports empty data.
+
+2026-06-07 AI suggestion pill UI:
+
+- User complained the AI recommendation strip above the composer looked clipped and stitched together.
+- `public/styles.css` changed only.
+- `.composer` is now `overflow: visible`.
+- `.ai-suggestion-card` no longer has the large outer bordered panel.
+- `.ai-suggestion-head` is a compact pill group for label, `换一换`, and close.
+- Each `.ai-suggestion-option` is an independent content-sized pill with `width: fit-content`.
+- Removed `-webkit-line-clamp` from `.ai-suggestion-option p`; do not bring it back.
+- Long text wraps naturally with `white-space: pre-wrap` and `overflow-wrap: anywhere`.
+- Candidate container still has a max height so huge suggestions do not swallow the textarea.
+- Headless Chrome test screenshot: `C:\youchat-dev-web\ai-suggestion-pill-check.png`.
+
+2026-06-07 image paste and Qiniu upload:
+
+- User reported pasted images became flattened in the composer and image send failed with "OSS upload endpoint is missing".
+- Real `GetOssConfig` capture showed Qiniu, not Ali OSS:
+  - `cloudType: 0`
+  - `qnDomain: https://qiniu.yunsert.com`
+  - `qnRegionUrl: http://upload.qiniup.com`
+  - `qnToken: ...`
+- `public/app.js` now recognizes `qnRegionUrl/qiniuUploadUrl/qnUploadUrl` as upload endpoint.
+- Qiniu form uses `{ key, token, file }` when `qnToken/qiniuToken/uploadToken` exists.
+- Final image URL uses `qnDomain/qiniuDomain/publicDomain/cdnDomain + objectKey`.
+- `server.js` local `/local/oss-upload` proxy also supports Qiniu fields for CORS fallback.
+- Composer layout fix:
+  - `.chat-pane` bottom composer row is `auto`, not fixed `202px`.
+  - `.composer` has `min-height: 202px`, max height capped.
+  - `.draft-image-tray` is non-shrinking with 74-82px height.
+  - `.draft-image` is fixed 62x62.
+- If future capture returns Tencent COS fields like `txHostUrl`, `txPolicy`, `txQak`, `txQsignature`, add COS form support.
+
+2026-06-07 chat jump and composer stabilization:
+
+- User reported repeated jumping/flicker in the main chat, especially around auto refresh, AI suggestions, and pasted images.
+- Root cause was not just the textarea. The old flow forced bottom scroll too often:
+  - `loadMessages(1, "replace")` rendered `"bottom"` before and after network responses.
+  - `renderMessages()` defaulted to `"bottom"`.
+  - image `load/error` callbacks from `scrollElementToBottom(..., watchImages)` could fire later and steal the scroll position.
+  - right-side history used similar replace-to-bottom behavior.
+- `public/app.js` changes:
+  - `renderMessages(scrollMode = "none")` is now stable by default.
+  - `loadMessages(page, mode, options)` supports `{ forceBottom: true }` and `{ keepPosition: true }`.
+  - send flows use `{ forceBottom: true }`.
+  - manual refresh uses `{ keepPosition: true }`.
+  - auto merge only follows bottom if the user was already near bottom.
+  - new `scrollRequestId` + `scrollRequestIds` WeakMap invalidates stale image-load scroll callbacks.
+  - new `restoreScrollTop()` preserves viewport for refresh/merge when the user is reading older content.
+  - `restorePrependScroll()` and `scrollElementToBottom()` now guard against user scroll-away.
+  - `loadHistoryMessages(page, mode, options)` mirrors the same scroll rules for the right history tab.
+  - `renderAiSuggestionCard()` only keeps the main chat at bottom when the user was already at bottom.
+  - `renderDraftImages()` toggles `.composer.has-draft-images` for old Electron/browser compatibility.
+- `public/styles.css` changes:
+  - `.chat-pane` grid rows are `58px minmax(0, 1fr) minmax(0, auto) auto`.
+  - AI recommendation strip is between message list and composer, consuming chat area height instead of pushing the composer down.
+  - `.composer` is a fixed bottom grid workbench with stable toolbar, image tray, textarea, and send row.
+  - `.composer.has-draft-images` and `:has(.draft-image-tray:not(.is-hidden))` expand the composer upward when images exist.
+  - `.draft-image-tray` is fixed at 74px; `.draft-image` is fixed 62x62.
+  - `.ai-suggestion-card` is a compact horizontal queue-style strip with visible close/refresh controls and internal scrolling.
+- Maintenance rules:
+  - Do not move `#aiSuggestionCard` back inside `footer.composer`.
+  - Do not change `renderMessages()` default back to `"bottom"`.
+  - Every new message refresh entry must explicitly choose `forceBottom` or `keepPosition`.
+  - Preserve image-load scroll guards whenever image rendering changes.
+- Verified:
+  - `npm run check`
+  - `GET /health` 200
+  - `GET /app.js` 200
+  - `GET /styles.css` 200
+
+## Non-Negotiables
+
+- Do not fake searchable user IDs.
+- Do not fake order records.
+- Do not convert internal system notices into customer messages.
+- Do not overwrite unrelated user changes.
+- Use `apply_patch` for manual edits.
+- Update this file and `PROJECT_MEMORY.md` after meaningful work.
