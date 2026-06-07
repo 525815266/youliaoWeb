@@ -15,6 +15,8 @@
   --danger: #be2d2d;
   --shadow-soft: 0 18px 50px rgba(32, 83, 143, 0.12);
   --radius: 6px;
+  --composer-height: 136px;
+  --ai-suggestion-height: 0px;
 }
 
 @font-face {
@@ -998,10 +1000,12 @@ textarea:focus-visible {
 
 .conversation-tab {
   position: relative;
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: auto auto;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  column-gap: 4px;
+  row-gap: 1px;
   min-width: 0;
   border: 1px solid #d4dfed;
   border-right: 0;
@@ -1022,6 +1026,17 @@ textarea:focus-visible {
 .conversation-tab em {
   color: #0d63c7;
   font-style: normal;
+}
+
+.conversation-tab small {
+  grid-column: 1 / -1;
+  min-width: 0;
+  color: #6f7e91;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .conversation-tab i {
@@ -1060,8 +1075,9 @@ textarea:focus-visible {
 }
 
 .chat-pane {
+  position: relative;
   display: grid;
-  grid-template-rows: 58px minmax(0, 1fr) minmax(0, auto) auto;
+  grid-template-rows: 58px minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
   background: #eef3f8;
@@ -1207,7 +1223,7 @@ textarea:focus-visible {
   gap: 12px;
   min-height: 0;
   overflow: auto;
-  padding: 18px 20px;
+  padding: 18px 20px calc(18px + var(--ai-suggestion-height));
 }
 
 .day-divider {
@@ -1517,12 +1533,12 @@ textarea:focus-visible {
 
 .composer {
   display: grid;
-  grid-template-rows: auto auto auto minmax(78px, 1fr) auto;
-  gap: 6px;
-  min-height: 196px;
-  height: clamp(196px, 28dvh, 278px);
-  max-height: 278px;
-  padding: 8px 12px 10px;
+  grid-template-rows: auto auto auto minmax(46px, 1fr) auto;
+  gap: 4px;
+  min-height: 128px;
+  height: clamp(128px, 17dvh, 158px);
+  max-height: 158px;
+  padding: 7px 12px 8px;
   border-top: 1px solid var(--line);
   background: #fff;
   overflow: hidden;
@@ -1530,8 +1546,8 @@ textarea:focus-visible {
 
 .composer.has-draft-images,
 .composer:has(.draft-image-tray:not(.is-hidden)) {
-  height: clamp(252px, 36dvh, 312px);
-  max-height: 312px;
+  height: clamp(204px, 29dvh, 238px);
+  max-height: 238px;
 }
 
 .tool-button.strong {
@@ -1585,20 +1601,24 @@ textarea:focus-visible {
 }
 
 .ai-suggestion-card {
-  position: relative;
-  z-index: 2;
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--composer-height) + 8px);
+  z-index: 6;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
+  align-items: center;
+  gap: 7px;
   min-height: 0;
-  max-height: min(128px, 18dvh);
+  max-height: min(118px, 18dvh);
   margin: 0;
-  padding: 7px 12px 6px;
-  overflow: hidden;
-  border-top: 1px solid #d8e6f4;
-  background: linear-gradient(180deg, rgba(246, 251, 255, 0.96), rgba(237, 246, 255, 0.94));
-  box-shadow: 0 -8px 18px rgba(28, 73, 124, 0.06);
+  padding: 7px;
+  overflow: visible;
+  border: 1px solid #c9dff5;
+  border-radius: 18px;
+  background: rgba(248, 252, 255, 0.97);
+  box-shadow: 0 10px 28px rgba(28, 73, 124, 0.14);
 }
 
 .ai-suggestion-card.is-hidden {
@@ -1618,7 +1638,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: flex-start;
   gap: 4px;
-  min-height: 30px;
+  min-height: 28px;
   padding: 2px 3px;
   border: 1px solid #c8dff8;
   border-radius: 999px;
@@ -1627,8 +1647,8 @@ textarea:focus-visible {
 }
 
 .ai-suggestion-head .mini-action {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border-color: #cfe2f6;
   border-radius: 50%;
@@ -1646,8 +1666,8 @@ textarea:focus-visible {
 
 .ai-suggestion-head .suggestion-refresh {
   width: auto;
-  min-width: 54px;
-  height: 26px;
+  min-width: 52px;
+  height: 24px;
   margin: 0;
   padding: 0 10px;
   border-color: #c7def8;
@@ -1669,7 +1689,7 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: 1fr;
   min-width: 0;
-  max-height: calc(min(128px, 18dvh) - 14px);
+  max-height: calc(min(118px, 18dvh) - 14px);
   align-content: start;
   gap: 5px;
   overflow: auto;
@@ -1682,10 +1702,10 @@ textarea:focus-visible {
   align-items: start;
   gap: 8px;
   width: 100%;
-  min-height: 34px;
-  padding: 6px 7px 6px 9px;
+  min-height: 32px;
+  padding: 5px 6px 5px 9px;
   border: 1px solid #d6e8fa;
-  border-radius: 14px;
+  border-radius: 15px;
   background: #fff;
   box-shadow: 0 4px 14px rgba(28, 73, 124, 0.06);
 }
@@ -1711,7 +1731,7 @@ textarea:focus-visible {
 
 .ai-suggestion-option p {
   min-width: 0;
-  max-height: 42px;
+  max-height: 40px;
   margin: 0;
   overflow: auto;
   color: #1f2937;
@@ -1729,13 +1749,13 @@ textarea:focus-visible {
 }
 
 .ai-suggestion-card.is-no-reply {
-  background: transparent;
+  background: rgba(248, 250, 252, 0.97);
 }
 
 .ai-suggestion-card strong {
   display: inline-flex;
   align-items: center;
-  height: 26px;
+  height: 24px;
   margin: 0;
   padding: 0 8px;
   border-radius: 999px;
@@ -1822,16 +1842,18 @@ textarea:focus-visible {
   resize: none;
   border: 1px solid #d8e1ec;
   border-radius: var(--radius);
-  padding: 10px;
+  padding: 8px 10px;
   color: #172033;
   background: #fff;
 }
 
 .send-row {
   justify-content: flex-end;
+  min-height: 30px;
 }
 
 .send-button {
+  height: 30px;
   width: 92px;
 }
 
@@ -3263,7 +3285,9 @@ textarea:focus-visible {
 
   .ai-suggestion-card {
     grid-template-columns: 1fr;
-    width: 100%;
+    left: 10px;
+    right: 10px;
+    bottom: calc(var(--composer-height) + 6px);
     max-height: 146px;
   }
 

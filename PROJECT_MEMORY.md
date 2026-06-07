@@ -31,6 +31,7 @@
 25. [2026-06-07 图片预览和七牛上传修复](#25-2026-06-07-图片预览和七牛上传修复)
 26. [2026-06-07 聊天区反复跳动与输入区稳定修复](#26-2026-06-07-聊天区反复跳动与输入区稳定修复)
 27. [2026-06-07 长链接卡片与网页视频浮层预览](#27-2026-06-07-长链接卡片与网页视频浮层预览)
+28. [2026-06-08 历史计数来源与输入区位置修复](#28-2026-06-08-历史计数来源与输入区位置修复)
 
 ## 1. 项目目标
 
@@ -1094,3 +1095,76 @@ UI 修复：
 - 不要把所有含 URL 的长文本强行变成卡片，否则会丢失客户原话。
 - 如果后续抓包发现原客户端卡片字段名不同，需要优先扩展 `normalizeMessage()` 字段映射。
 - 视频平台通常不会直接给可播放 mp4，更多会给播放器 iframe 或禁止嵌入，Web 端只能按真实返回处理。
+
+## 28. 2026-06-08 历史计数来源与输入区位置修复
+
+用户反馈：
+
+- 左侧底部 `历史 23` 看起来不合理，怀疑是否真的是服务端历史会话数量。
+- 输入框位置仍然不舒服，AI 推荐条和输入区的关系看起来像在互相挤压。
+
+历史计数结论：
+
+- `logs/api-capture.ndjson` 里最近多次真实请求 `/Contact/GetContactList`，其中 `isHistory=true`、`pageSize=1` 的响应是：
+  - `{"success":true,"message":null,"data":0}`
+- 因此当前看到的 `23` 不能解释为悠聊后端历史会话总数。
+- 这个 `23` 来自 Web 本地清空列表归档：
+  - `state.localHistoryContacts`
+  - `localStorage` key：`youchat.localHistoryContacts`
+  - 入口：`archiveAndClearCurrentList()`
+- 这是为了让“清空列表”真的在 Web 端清空当前列表，并把被清空的会话暂存到历史列表，避免定时刷新马上把当前列表刷回来。
+
+本次实现：
+
+- `public/app.js`
+  - 新增 `state.listServerCounts` 和 `state.listLocalCounts`，分别记录接口数量和本地归档数量。
+  - 新增 `getConversationTabCountMeta()` 和 `formatTabCount()`。
+  - `renderConversationTabs()` 不再把历史数量只显示成一个裸数字。
+  - 历史 tab 现在会显示来源：
+    - 只有接口数：显示接口数量，来源为 `接口`。
+    - 只有本地归档：显示本地数量，来源为 `本地`。
+    - 两者都有：显示 `接口数+本地数`，来源为 `接口+本地`。
+  - `title` 会说明完整口径，例如“历史接口暂无数据，本地清空归档 23”。
+  - `loadContactCounts()` 对 `data:0` 做显式 0 处理，不再误用旧 fallback。
+  - `loadContacts()` 在历史 tab 合并服务端历史会话和本地归档，但单独保留两类计数。
+  - `archiveAndClearCurrentList()` 清空后同步刷新本地历史计数。
+
+输入区和 AI 推荐浮层修复：
+
+- `public/app.js`
+  - 新增 `observeComposerLayout()` 和 `updateComposerLayoutMetrics()`。
+  - 使用 `ResizeObserver` 监听 `.composer` 和 `#aiSuggestionCard` 高度。
+  - 写入 CSS 变量：
+    - `--composer-height`
+    - `--ai-suggestion-height`
+  - `showWorkbench()`、`renderDraftImages()`、`renderAiSuggestionCard()` 后都会重新测量，避免登录页隐藏工作台或贴图后浮层位置不准。
+
+- `public/styles.css`
+  - `.chat-pane` 改为稳定三行：`58px minmax(0, 1fr) auto`。
+  - `#aiSuggestionCard` 不再占正常文档流，不再把 composer 往下挤。
+  - `.ai-suggestion-card` 改为绝对定位浮层：
+    - `bottom: calc(var(--composer-height) + 8px)`
+    - 位置贴在底部输入区上方。
+  - `.message-list` 底部 padding 使用 `--ai-suggestion-height` 预留浮层空间，推荐条出现时不会遮住最新消息。
+  - `.composer` 默认高度压缩为 `clamp(128px, 17dvh, 158px)`。
+  - 有图片草稿时 `.composer` 扩展为 `clamp(204px, 29dvh, 238px)`，只向上压缩聊天区，不向下挤掉输入框。
+  - 移动端去掉绝对定位浮层的 `width: 100%`，避免 `left/right + width` 造成横向溢出。
+
+设计原则：
+
+- 这里是客服工作台，不是卡片化后台；输入框必须稳定贴底，客服不能因为 AI 推荐条出现而找不到输入区。
+- AI 推荐可以压缩聊天记录可视区域，但不能挤压或遮挡输入区。
+- 历史 tab 必须说明真实来源，不能把本地归档数包装成接口历史数。
+
+验证：
+
+- `npm run check` 通过。
+- `git diff --check` 通过。
+- `GET http://localhost:5177/health` 返回 200。
+- 抓包日志确认 `isHistory=true` 的 `GetContactList` 当前返回 `data:0`。
+
+后续注意：
+
+- 如果后续抓包证明原客户端底部“历史” tab 使用了另一个接口或不同参数，应优先把 Web 历史 tab 改成真实接口口径，而不是继续依赖本地归档。
+- 不要把 `.ai-suggestion-card` 放回文档流里，否则输入框会再次被挤压。
+- 不要把历史 tab 的 `本地` 来源标签删掉，除非已经能用接口拿到真实历史总数。

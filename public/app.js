@@ -189,6 +189,8 @@ const state = {
   contextMenu: null,
   totalContacts: 0,
   listCounts: { current: 0, guestbook: 0, history: 0 },
+  listServerCounts: { current: 0, guestbook: 0, history: 0 },
+  listLocalCounts: { current: 0, guestbook: 0, history: 0 },
   listUnreadCounts: { current: 0, guestbook: 0, history: 0 },
   friendRequests: [],
   friendRequestTotal: 0,
@@ -211,6 +213,7 @@ const el = {};
 let refreshTimer = null;
 let scrollRequestId = 0;
 const scrollRequestIds = new WeakMap();
+let composerResizeObserver = null;
 
 function $(id) {
   return document.getElementById(id);
@@ -307,6 +310,7 @@ function boot() {
   hydrateLoginFields();
   hydrateAiSettingsFields();
   bindEvents();
+  observeComposerLayout();
   renderAll();
   loadReplySkills();
 }
@@ -428,6 +432,32 @@ function showAiSettings() {
 
 function hideAiSettings() {
   el.aiSettingsOverlay.classList.add("is-hidden");
+}
+
+function observeComposerLayout() {
+  if (!el.aiSuggestionCard || !el.replyText) return;
+  const composer = el.replyText.closest(".composer");
+  if (!composer) return;
+  updateComposerLayoutMetrics();
+  if (window.ResizeObserver) {
+    composerResizeObserver?.disconnect();
+    composerResizeObserver = new ResizeObserver(() => updateComposerLayoutMetrics());
+    composerResizeObserver.observe(composer);
+    composerResizeObserver.observe(el.aiSuggestionCard);
+  } else {
+    window.addEventListener("resize", updateComposerLayoutMetrics);
+  }
+}
+
+function updateComposerLayoutMetrics() {
+  const composer = el.replyText?.closest(".composer");
+  if (!composer || !el.aiSuggestionCard) return;
+  const composerHeight = Math.ceil(composer.getBoundingClientRect().height || 0);
+  document.documentElement.style.setProperty("--composer-height", `${composerHeight}px`);
+  const suggestionHeight = el.aiSuggestionCard.classList.contains("is-hidden")
+    ? 0
+    : Math.ceil(el.aiSuggestionCard.getBoundingClientRect().height || 0);
+  document.documentElement.style.setProperty("--ai-suggestion-height", `${suggestionHeight}px`);
 }
 
 function saveAiSettings(event) {
@@ -623,6 +653,7 @@ function showWorkbench() {
   el.workbenchView.classList.remove("is-hidden");
   el.operatorName.textContent = `客服 ${state.account || "未登录"}`;
   updateConnectionState(false);
+  requestAnimationFrame(updateComposerLayoutMetrics);
 }
 
 function showLogin() {
@@ -664,17 +695,55 @@ function renderConversationTabs() {
   document.querySelectorAll("[data-list-tab]").forEach((button) => {
     const tab = button.dataset.listTab;
     const labels = { current: "当前", guestbook: "留言", history: "历史" };
-    const count = Number(state.listCounts[tab] || 0);
+    const countMeta = getConversationTabCountMeta(tab);
     const unread = Number(state.listUnreadCounts[tab] || 0);
-    const countLabel = count > 9999 ? "9999+" : String(count || 0);
     button.classList.toggle("is-active", tab === state.listTab);
     button.classList.toggle("has-unread", unread > 0);
+    button.title = countMeta.title;
     button.innerHTML = `
       <span>${labels[tab] || tab}</span>
-      <em>${countLabel}</em>
+      <em>${countMeta.label}</em>
+      ${countMeta.source ? `<small>${countMeta.source}</small>` : ""}
       ${unread ? `<i>${unread > 99 ? "99+" : unread}</i>` : ""}
     `;
   });
+}
+
+function getConversationTabCountMeta(tab) {
+  const total = Number(state.listCounts[tab] || 0);
+  if (tab !== "history") {
+    return {
+      label: formatTabCount(total),
+      title: ""
+    };
+  }
+
+  const serverCount = Number(state.listServerCounts.history || 0);
+  const localCount = Number(state.listLocalCounts.history || state.localHistoryContacts.length || 0);
+  if (localCount && serverCount) {
+    return {
+      label: `${formatTabCount(serverCount)}+${formatTabCount(localCount)}`,
+      source: "接口+本地",
+      title: `历史接口 ${serverCount}，本地清空归档 ${localCount}`
+    };
+  }
+  if (localCount) {
+    return {
+      label: formatTabCount(localCount),
+      source: "本地",
+      title: `历史接口暂无数据，本地清空归档 ${localCount}`
+    };
+  }
+  return {
+    label: formatTabCount(serverCount || total),
+    source: "接口",
+    title: "历史接口返回数量"
+  };
+}
+
+function formatTabCount(value) {
+  const count = Number(value || 0);
+  return count > 9999 ? "9999+" : String(count);
 }
 
 function apiPath(path) {
@@ -850,6 +919,10 @@ function getExplicitTotal(payload) {
   return value === undefined || value === null || value === "" ? null : Number(value);
 }
 
+function hasZeroDataPayload(payload) {
+  return getData(payload) === 0;
+}
+
 function summarize(payload) {
   const text = JSON.stringify(payload);
   if (!text || text.length < 900) return payload;
@@ -937,6 +1010,7 @@ async function loadContactCounts() {
   await ensureContactListAccountId();
   const tabs = ["current", "guestbook", "history"];
   const hasCurrentAccountId = Boolean(getContactListAccountId());
+  state.listLocalCounts.history = state.localHistoryContacts.length;
   const results = await Promise.allSettled(tabs.map((tab) => (
     api("/Contact/GetContactList", buildContactListParams(tab, { pageSize: 1, searchStr: "" }))
   )));
@@ -950,14 +1024,13 @@ async function loadContactCounts() {
     }
     const explicitTotal = getExplicitTotal(result.value);
     const fallbackTotal = tab === state.listTab ? state.contacts.length : Number(state.listCounts[tab] || 0);
-    const total = explicitTotal === null ? fallbackTotal : explicitTotal;
-    state.listCounts[tab] = Math.max(0, Number(total || 0));
+    const total = explicitTotal === null ? (hasZeroDataPayload(result.value) ? 0 : fallbackTotal) : explicitTotal;
+    const normalizedTotal = Math.max(0, Number(total || 0));
+    state.listServerCounts[tab] = normalizedTotal;
+    state.listCounts[tab] = tab === "history"
+      ? normalizedTotal + Number(state.listLocalCounts.history || 0)
+      : normalizedTotal;
   });
-
-  state.listCounts.history = Math.max(
-    Number(state.listCounts.history || 0),
-    state.localHistoryContacts.length
-  );
   renderConversationTabs();
 }
 
@@ -974,14 +1047,19 @@ async function loadContacts(options = {}) {
     let params = buildContactListParams(state.listTab);
     let payload = await api("/Contact/GetContactList", params);
     let explicitTotal = getExplicitTotal(payload);
-    let contacts = sortContacts(getRecords(payload).map(normalizeContact).map(applyReadStateToContact));
+    let serverContacts = sortContacts(getRecords(payload).map(normalizeContact).map(applyReadStateToContact));
+    let contacts = serverContacts;
     rememberAccountIdFromContacts(contacts);
     if (state.listTab === "current" && !params.accountId && state.accountId) {
       params = buildContactListParams(state.listTab);
       payload = await api("/Contact/GetContactList", params);
       explicitTotal = getExplicitTotal(payload);
-      contacts = sortContacts(getRecords(payload).map(normalizeContact).map(applyReadStateToContact));
+      serverContacts = sortContacts(getRecords(payload).map(normalizeContact).map(applyReadStateToContact));
+      contacts = serverContacts;
     }
+    const serverTotal = explicitTotal === null ? serverContacts.length : Math.max(0, Number(explicitTotal || 0));
+    state.listServerCounts[state.listTab] = serverTotal;
+    state.listLocalCounts.history = state.localHistoryContacts.length;
     if (state.listTab === "history") {
       contacts = sortContacts(mergeContactsById(contacts, state.localHistoryContacts.map(applyReadStateToContact)));
     } else {
@@ -990,11 +1068,13 @@ async function loadContacts(options = {}) {
 
     state.contacts = contacts;
     const canTrustTotal = state.listTab !== "current" || Boolean(params.accountId);
-    state.totalContacts = !canTrustTotal
+    state.totalContacts = state.listTab === "history"
+      ? Math.max(contacts.length, serverTotal + Number(state.listLocalCounts.history || 0))
+      : !canTrustTotal
       ? contacts.length
       : explicitTotal === null
       ? contacts.length
-      : Math.max(Number(explicitTotal || 0), state.listTab === "history" ? contacts.length : 0);
+      : Number(explicitTotal || 0);
     if (state.listTab !== "history" && contacts.length < Number(state.totalContacts || 0)) {
       state.totalContacts = contacts.length;
     }
@@ -1522,7 +1602,8 @@ function archiveAndClearCurrentList() {
   state.totalContacts = 0;
   state.listCounts[tab] = 0;
   state.listUnreadCounts[tab] = 0;
-  state.listCounts.history = Math.max(Number(state.listCounts.history || 0), state.localHistoryContacts.length);
+  state.listLocalCounts.history = state.localHistoryContacts.length;
+  state.listCounts.history = Number(state.listServerCounts.history || 0) + Number(state.listLocalCounts.history || 0);
   resetContactScopedState();
   state.messages = [];
   renderAll();
@@ -3111,6 +3192,7 @@ function renderDraftImages() {
       <button type="button" data-remove-draft-image="${escapeAttr(image.id)}" aria-label="移除图片"><i class="native-icon bfi-close" aria-hidden="true"></i></button>
     </figure>
   `).join("");
+  requestAnimationFrame(updateComposerLayoutMetrics);
 }
 
 function handleDraftImageClick(event) {
@@ -4452,6 +4534,7 @@ function renderAiSuggestionCard() {
       </article>
     `).join("");
   }
+  requestAnimationFrame(updateComposerLayoutMetrics);
   if (shouldKeepMessageBottom) {
     requestAnimationFrame(() => scheduleMessageListBottom());
   }

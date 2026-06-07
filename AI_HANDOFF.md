@@ -106,6 +106,11 @@ Behavior rules:
 - Selected unread conversation should clear local badge and call consume API.
 - Keyboard up/down switches conversations when focus is in list.
 - Auto refresh should preserve scroll.
+- History tab count is split by source:
+  - `state.listServerCounts.history`: real `/Contact/GetContactList` `isHistory=true` count.
+  - `state.listLocalCounts.history`: local clear-list archive count from `state.localHistoryContacts`.
+  - Recent real captures show `isHistory=true` returning `data:0`, so a displayed `本地23` is local archive, not backend history total.
+  - Do not remove the `本地`/`接口` source label unless a verified real history endpoint/count replaces it.
 
 Clear-list behavior:
 
@@ -117,6 +122,14 @@ Clear-list behavior:
 - `persistClearedContactState`
 
 This local archive/filter is intentional. It prevents refresh from immediately repopulating a list after user chose “清空列表”.
+
+Recent history-count functions:
+
+- `getConversationTabCountMeta`
+- `formatTabCount`
+- `hasZeroDataPayload`
+- `state.listServerCounts`
+- `state.listLocalCounts`
 
 ## Chat
 
@@ -299,12 +312,23 @@ Recent AI behavior:
 
 Recent AI UI:
 
-- Recommendation panel is a compact horizontal/list strip, not big cards, but now has a little more room than the first compact version.
+- Recommendation panel is a compact floating strip above the composer, not big cards and not part of the normal document flow.
 - Left label: `AI 推荐`, `文字优化`, or `skill 回复`.
 - Right list: 1 to 3 candidates, each with `采用` and `发送`.
 - Left rail includes `换一换`, which regenerates a different tone/style.
 - Global apply/send buttons are hidden in the strip. Bottom `采用推荐` remains as backup.
-- Keep this compact. Do not let AI recommendations hide the textarea.
+- Keep this compact. It may cover/consume a little message-list space, but it must never push the composer downward or hide the textarea.
+
+Composer/AI layout details:
+
+- `observeComposerLayout()` and `updateComposerLayoutMetrics()` maintain:
+  - `--composer-height`
+  - `--ai-suggestion-height`
+- `.ai-suggestion-card` is `position: absolute` in `.chat-pane`, with `bottom: calc(var(--composer-height) + 8px)`.
+- `.message-list` uses bottom padding based on `--ai-suggestion-height` so latest messages are not hidden by the floating strip.
+- `.chat-pane` rows should stay `58px minmax(0, 1fr) auto`.
+- `.composer` default height is compact; image drafts expand it upward only.
+- Do not move `#aiSuggestionCard` back inside `footer.composer` or into normal layout flow.
 
 Skill optimize:
 
