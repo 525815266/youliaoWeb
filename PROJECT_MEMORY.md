@@ -32,6 +32,7 @@
 26. [2026-06-07 聊天区反复跳动与输入区稳定修复](#26-2026-06-07-聊天区反复跳动与输入区稳定修复)
 27. [2026-06-07 长链接卡片与网页视频浮层预览](#27-2026-06-07-长链接卡片与网页视频浮层预览)
 28. [2026-06-08 历史计数来源与输入区位置修复](#28-2026-06-08-历史计数来源与输入区位置修复)
+29. [2026-06-08 当前会话账号过滤回退与数量修复](#29-2026-06-08-当前会话账号过滤回退与数量修复)
 
 ## 1. 项目目标
 
@@ -166,6 +167,16 @@ Invoke-WebRequest http://localhost:5177/styles.css
 - 返回里的长 `accountId: 1556504756803862529` 不是当前会话列表的筛选 ID。
 
 如果当前页签显示类似 `8018` 这种全局数量，通常说明 accountId 口径错了。已在 `public/app.js` 中增加 `accountIdResolved`，强制优先用 `/Senstive/GetAccountList` 校验后的 `id`，并避免旧缓存污染当前列表。
+
+2026-06-08 补充：`/Contact/GetContactList` 在传 `accountId=2` 时会偶发返回 `{"success":true,"message":null,"data":0}`。这个结构不是带 `total: 0` 的明确空列表，不能直接拿来清空当前会话。现在 Web 端会先试客服账号过滤；若只拿到 `data:0` 这种不完整空响应，则再试不带 `accountId` 的真实全局接口，并在 tab 上标记 `全局回退`。如果全局也失败，保留上一批真实列表并标记 `保留`，不再把消息数量刷坏。
+
+当前会话数量来源标签：
+
+- `客服`：来自 `/Senstive/GetAccountList` 的客服账号 `id` 过滤结果。
+- `全局回退`：客服账号过滤返回 `data:0`，已回退到不带 `accountId` 的真实全局列表。
+- `全局`：没有拿到可用客服账号筛选 ID，只能显示全局真实接口。
+- `保留`：本次接口返回不可靠空数据或刷新失败，暂时保留上一批真实会话。
+- `已清空`：用户刚执行过清空列表，本地过滤仍在生效，等待新回复后再进入当前列表。
 
 会话排序：
 
@@ -1168,3 +1179,85 @@ UI 修复：
 - 如果后续抓包证明原客户端底部“历史” tab 使用了另一个接口或不同参数，应优先把 Web 历史 tab 改成真实接口口径，而不是继续依赖本地归档。
 - 不要把 `.ai-suggestion-card` 放回文档流里，否则输入框会再次被挤压。
 - 不要把历史 tab 的 `本地` 来源标签删掉，除非已经能用接口拿到真实历史总数。
+
+## 29. 2026-06-08 当前会话账号过滤回退与数量修复
+
+用户反馈：
+
+- 会话列表的消息数量坏了。
+- 当前列表拿不到数据。
+
+根因：
+
+- 前一版为了避免 `当前 8018` 这种全局数量误导，强制当前页签携带 `/Senstive/GetAccountList` 返回的客服账号 `id=2` 去请求 `/Contact/GetContactList`。
+- 最近真实抓包显示，同样的 `accountId=2` 请求会返回：
+  - `{"success":true,"message":null,"data":0}`
+- 前端把这个 `data:0` 当作权威空列表处理，于是：
+  - `state.contacts = []`
+  - `state.totalContacts = 0`
+  - `state.listCounts.current = 0`
+- 因此左侧会话和消息数量看起来像“都拿不到数据”。
+
+本次实现：
+
+- `public/app.js`
+  - 新增 `CONTACT_LIST_ACCOUNT_IDS_STORAGE_KEY = "youchat.contactListAccountIds"`。
+  - 新增 `state.contactListAccountIds`，持久化客服列表筛选候选 ID。
+  - 新增 `state.listCountSources`，记录每个 tab 的数量来源。
+  - 新增账号候选与持久化函数：
+    - `loadContactListAccountIds()`
+    - `persistContactListAccountIds()`
+    - `rememberContactListAccountIds()`
+    - `extractContactListAccountIds()`
+    - `uniqueContactListAccountIds()`
+  - `extractContactListAccountIds()` 优先取客服账号对象的 `id/accId`，只有短数字 `accountId` 才作为候选，避免把长商户 `accountId=1556504756803862529` 误当成当前会话筛选 ID。
+  - 登录账号变化时清理旧 `youchat.accountId` 和 `youchat.contactListAccountIds`，避免换账号后旧筛选污染。
+  - 新增会话列表请求封装：
+    - `fetchContactListWithFallback()`
+    - `fetchContactListPayload()`
+    - `getContactListPayloadTotal()`
+    - `isUsefulContactListResult()`
+    - `isExplicitEmptyContactListResult()`
+    - `shouldPreserveEmptyContactResult()`
+
+请求策略：
+
+- 当前 tab：
+  - 先用客服账号候选 ID 请求 `/Contact/GetContactList`。
+  - 如果返回带 `total: 0` 且不是 `data:0`，认为是真实明确空列表。
+  - 如果返回 `data:0`，认为是不可靠空响应，继续请求不带 `accountId` 的真实全局列表。
+  - 如果全局回退有数据，展示真实全局数据并标记 `全局回退`，不伪装成客服账号数量。
+  - 如果全局回退失败或仍是空响应，并且页面已有真实会话，则保留已有会话，标记 `保留`。
+- 留言、历史 tab：
+  - 继续按各自参数请求，不强行加当前客服 `accountId`。
+- 清空列表后：
+  - `loadContactCounts()` 检测 `shouldKeepListLocallyCleared(tab)`，保持 `已清空` 来源，不再被全局回退数量覆盖。
+
+界面变化：
+
+- 当前 tab 数字下面会显示来源：
+  - `客服`
+  - `全局回退`
+  - `全局`
+  - `保留`
+  - `已清空`
+  - `客服空`
+  - `接口空`
+- 左侧顶部客户总数也追加当前来源，例如 `8018 个客户 · 全局回退`。
+- 这些标签是为了真实说明口径，不是美化假数据。
+
+验证：
+
+- `npm run check` 通过。
+- `git diff --check` 通过。
+- `GET http://localhost:5177/health` 返回 200。
+- `GET http://localhost:5177/app.js` 返回 200。
+- `GET http://localhost:5177/styles.css` 返回 200。
+- 直连 `/api/Contact/GetContactList` 的 shell 探测当前返回 502，是上游 `192.168.9.83` 不可达导致，不能作为业务逻辑失败依据。
+
+后续注意：
+
+- 不要再把 `data:0` 直接当作“当前会话明确为 0”。
+- 明确空列表应以 `data.records/list` 加 `total: 0` 这种结构为准。
+- 如果后续抓包发现原客户端当前列表还带其他参数，例如时间窗口、机器人 ID 或状态字段，应扩展 `buildContactListParams()`，不要删除现有 fallback 保护。
+- 如果要显示当前客服精准数量，必须看到 `source === "account"`；`全局回退` 只能说明真实接口有全局数据。

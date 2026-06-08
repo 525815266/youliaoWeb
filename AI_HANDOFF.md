@@ -85,6 +85,21 @@ Recent fix:
 - Current tab now prefers verified `/Senstive/GetAccountList` `id`.
 - Avoid using stale `localStorage.youchat.accountId`, login name, or long merchant accountId for current list counts.
 
+2026-06-08 current-list fallback fix:
+
+- `accountId=2` can return `{"success":true,"message":null,"data":0}` for `/Contact/GetContactList`.
+- Treat `data:0` as an ambiguous empty response, not as authority to clear the list.
+- Explicit empty means a structured payload with `records/list` and `total: 0`, not bare `data:0`.
+- `state.contactListAccountIds` persists candidates from `/Senstive/GetAccountList`.
+- `extractContactListAccountIds()` should prefer short local customer-service ids (`id`, `accId`). Do not use the long merchant `accountId` unless future captures prove it is valid.
+- `fetchContactListWithFallback()` tries account-filtered current list first, then no-account global fallback only when account-filtered data is ambiguous/empty.
+- `state.listCountSources.current` labels the current count source:
+  - `account`: real current-agent filtered count.
+  - `global-fallback`: account filter returned `data:0`, real no-account fallback is shown.
+  - `stale`: keep previous real list because refresh/count returned unreliable empty data or failed.
+  - `local-cleared`: user cleared current list and local filter is active.
+- Never show a fallback/global count as if it were the precise current-agent count.
+
 ## Contact List
 
 Important functions:
@@ -102,6 +117,8 @@ Important functions:
 Behavior rules:
 
 - Tabs: `current`, `guestbook`, `history`.
+- Current tab must not clear `state.contacts` or `state.listCounts.current` just because `/Contact/GetContactList` with `accountId` returns bare `data:0`.
+- If current account-filtered data is ambiguous, fall back to no-account real data and label it `全局回退`; if fallback also fails, preserve the existing real list and label it `保留`.
 - Preserve active right toolbar tab when switching contacts.
 - Selected unread conversation should clear local badge and call consume API.
 - Keyboard up/down switches conversations when focus is in list.
@@ -126,10 +143,15 @@ This local archive/filter is intentional. It prevents refresh from immediately r
 Recent history-count functions:
 
 - `getConversationTabCountMeta`
+- `getListCountSourceLabel`
+- `getListCountSourceTitle`
 - `formatTabCount`
 - `hasZeroDataPayload`
+- `fetchContactListWithFallback`
+- `fetchContactListPayload`
 - `state.listServerCounts`
 - `state.listLocalCounts`
+- `state.listCountSources`
 
 ## Chat
 
