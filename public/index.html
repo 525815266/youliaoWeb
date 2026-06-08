@@ -128,7 +128,26 @@
         <div class="client-status">
           <span id="connectionState" class="status-pill">未连接</span>
           <span id="operatorName">客服 Boom666</span>
-          <button id="aiSettingsButton" class="plain-button icon-plain-button" type="button" title="AI 设置" aria-label="AI 设置"><i class="native-icon client-icon-settings" aria-hidden="true"></i></button>
+          <div class="client-top-actions" aria-label="原生客户端功能">
+            <button id="clientBackendButton" class="plain-button icon-plain-button top-action-button" type="button" title="统计后台" aria-label="统计后台"><i class="native-icon client-icon-dashboard" aria-hidden="true"></i></button>
+            <button id="clientGlobalSearchButton" class="plain-button icon-plain-button top-action-button" type="button" title="聊天记录全局搜索" aria-label="聊天记录全局搜索"><i class="native-icon client-icon-chat-record" aria-hidden="true"></i></button>
+            <button id="clientStatsButton" class="plain-button icon-plain-button top-action-button" type="button" title="消息统计面板" aria-label="消息统计面板"><i class="native-icon client-icon-chart" aria-hidden="true"></i></button>
+            <button id="clientNoticeButton" class="plain-button icon-plain-button top-action-button has-badge" type="button" title="通知" aria-label="通知">
+              <i class="native-icon client-icon-notice" aria-hidden="true"></i>
+              <span id="clientNoticeBadge" class="top-action-badge" data-empty="true">0</span>
+            </button>
+            <span class="topbar-divider" aria-hidden="true"></span>
+            <button id="clientSettingsButton" class="plain-button icon-plain-button top-action-button" type="button" title="客户端设置" aria-label="客户端设置" aria-expanded="false"><i class="native-icon client-icon-settings" aria-hidden="true"></i></button>
+            <div id="clientSettingsMenu" class="client-settings-menu is-hidden" role="menu" aria-label="客户端设置菜单">
+              <button type="button" role="menuitem" data-client-menu="settings"><i class="native-icon client-icon-settings" aria-hidden="true"></i><span>设置</span></button>
+              <button type="button" role="menuitem" data-client-menu="database"><i class="native-icon client-icon-database" aria-hidden="true"></i><span>数据库管理</span></button>
+              <button type="button" role="menuitem" data-client-menu="pause"><i class="native-icon client-icon-pause" aria-hidden="true"></i><span id="clientPauseMenuText">挂起</span></button>
+              <button type="button" role="menuitem" data-client-menu="logout"><i class="native-icon client-icon-logout" aria-hidden="true"></i><span>退出登录</span></button>
+              <button type="button" role="menuitem" data-client-menu="close"><i class="native-icon bfi-close" aria-hidden="true"></i><span>关闭程序</span></button>
+            </div>
+          </div>
+          <span class="topbar-divider ai-divider" aria-hidden="true"></span>
+          <button id="aiSettingsButton" class="plain-button ai-top-button" type="button" title="AI 设置" aria-label="AI 设置"><i class="native-icon client-icon-ai" aria-hidden="true"></i><span>AI</span></button>
           <button id="returnLogin" class="plain-button" type="button">返回登录</button>
         </div>
       </header>

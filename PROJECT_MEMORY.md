@@ -1786,3 +1786,158 @@ ORDER BY COUNT(*) DESC;
 - 知名网站没有真实缩略图时，允许使用站点 logo 作为平台识别 fallback，这不属于假商品图。
 - 如果新增更多平台，只扩展 `KNOWN_SITE_LOGOS`，不要在 `renderMessageLinkCard()` 里写特殊分支。
 - 外链 favicon 可能被拦截，所以必须保留本地 SVG `imageFallback`。
+
+## 39. 2026-06-08 原生客户端右上角功能区
+
+用户反馈：
+
+- 原生 Windows 客户端右上角除了 AI 设置外，还有一组客户端功能：
+  - 设置
+  - 数据库管理
+  - 挂起
+  - 退出登录
+  - 关闭程序
+  - 统计后台
+  - 聊天记录全局搜索
+  - 消息统计面板
+  - 通知
+- Web 版此前把右上角齿轮直接做成 AI 设置，和原生客户端设置混在一起。
+- 需要把原生客户端功能按钮、真实接口、图标和弹窗样式一起完善，并和 Web AI 设置明确区分。
+
+原生接口来源：
+
+- `C:\Program Files\youchat-desktop\bin\YouChatService.xml`
+  - `ChatContentController.SearchList(contacts, robots, keyWord, startTime, endTime, index, size)`
+  - `NoticeController.GetEvents(warnType)`
+  - `NoticeController.GetList(msgType, warnType, eventType, startTime, endTime, accountId, robotId, index, size)`
+  - `NoticeController.ConsumeNotice(noticeId)`
+  - `SummaryController.RealTimeSummary(startTime, endTime)`
+  - `SystemController.GetConnectionString`
+  - `SystemController.SetConnectionString(connectionString, DbType)`
+  - `SystemController.GetOptions`
+  - `SystemController.SetOptions(dataBaseOptions, commonOptions, jobOptions, aiOptions)`
+- `C:\Program Files\youchat-desktop\wwwroot\fontIcon\iconfont.json`
+  - `聊天记录`：`\e60c`
+  - `配置管理`：`\e605`
+  - `统计概览`：`\e600`
+  - `工作量/图表`：`\e607`
+  - `退出登录`：`\e60f`
+  - `高级搜索`：`\e665`
+
+已修改：
+
+- `public/index.html`
+  - 顶栏新增 `.client-top-actions` 原生客户端按钮组：
+    - `clientBackendButton`：统计后台
+    - `clientGlobalSearchButton`：聊天记录全局搜索
+    - `clientStatsButton`：消息统计面板
+    - `clientNoticeButton`：通知，带 `clientNoticeBadge`，最多显示 `99+`
+    - `clientSettingsButton`：客户端设置菜单
+  - 新增 `clientSettingsMenu` 菜单：
+    - 设置
+    - 数据库管理
+    - 挂起/恢复
+    - 退出登录
+    - 关闭程序
+  - AI 设置改为独立 `ai-top-button`，使用 AI 图标和 `AI` 文本，和客户端齿轮用分隔线隔开。
+- `public/app.js`
+  - 新增 `CLIENT_PAUSED_STORAGE_KEY`、`GLOBAL_SEARCH_PAGE_SIZE`、`CLIENT_NOTICE_PAGE_SIZE`、`DB_TYPE_OPTIONS`。
+  - `state` 新增：
+    - `clientPaused`
+    - `clientOptions`
+    - `clientConnectionString`
+    - `globalSearch`
+    - `clientStats`
+    - `clientNotice`
+  - 新增客户端设置菜单逻辑：
+    - `toggleClientSettingsMenu()`
+    - `handleClientSettingsMenuClick()`
+    - `toggleClientPause()`
+    - `updateClientChromeState()`
+  - `挂起` 是 Web 本地暂停自动刷新，因为当前 XML 没有找到明确服务端挂起接口；状态持久化到 `localStorage`。
+  - `统计后台` 使用当前 API 地址推导 `/abnormal` 页面，例如 `http://192.168.9.83:18080/abnormal`。
+  - 新增 `showClientOptionsModal()`：
+    - 读取 `/System/GetOptions`
+    - 分组展示 `commonOptions/jobOptions/aiOptions/dataBaseOptions`
+    - 保存调用 `/System/SetOptions`
+    - 明确说明这是悠聊服务端 AI 配置，不覆盖 Web AI 推荐设置。
+  - 新增 `showDatabaseModal()`：
+    - 读取 `/System/GetConnectionString`
+    - 保存调用 `/System/SetConnectionString`
+    - 当前真实返回是 `databaseType: 0`，页面用数字枚举提交，不再把 `MySql` 字符串当作类型值。
+  - 新增 `showGlobalSearchModal()`：
+    - 调用 `/ChatContent/SearchList`
+    - 支持关键字、用户/ID/备注、机器人、日期范围、分页
+    - 结果表含用户、机器人、来源、消息内容、发送时间、复制
+    - 搜索结果内链接继续走已有链接预览。
+  - 新增 `showClientStatsModal()`：
+    - 调用 `/Summary/RealTimeSummary`
+    - 当前真实返回是嵌套结构：`{ success, data: { success, data: [...] } }`
+    - 分段字段为：`it/count/fromUser/fromUserRedpointCount/fromRobot/fromKefu/contactCount`
+    - 指标卡按真实分段汇总：消息总量、用户普通消息、用户红点消息、机器人消息、客服回复、触达客户、峰值客户、时间分段
+    - 用内联 SVG 绘制趋势，带网格和时间刻度，不引入新依赖。
+  - 新增 `showClientNoticeModal()`：
+    - 调用 `/Notice/GetList`
+    - 调用 `/Notice/GetEvents`
+    - 支持分页、复制和 `/Notice/ConsumeNotice`
+    - 当前真实通知列表返回总数为 `data.total.value`，列表为 `data.data`。
+    - 自动刷新链路中追加 `loadClientNoticeBadge()`，失败只写日志，不影响客服主路径。
+  - `openToolModal()` 新增 `size` 变体：
+    - `tool-modal-wide`
+    - `tool-modal-large`
+    - `tool-modal-xl`
+  - 新增通用辅助：
+    - `clonePlainObject()`
+    - `castLike()`
+    - `splitListValue()`
+    - `toDateTimeLocal()`
+    - `fromDateTimeLocal()`
+    - `formatFullTime()`
+    - `humanizeKey()`
+    - `contentTypeName()`
+    - `unwrapPayloadData()`
+    - `getRecordsDeep()`
+    - `getTotalDeep()`
+    - `normalizeDbType()`
+    - `estimateNoticeUnread()`
+- `public/styles.css`
+  - 补齐原生 iconfont 映射：
+    - `client-icon-dashboard`
+    - `client-icon-chat-record`
+    - `client-icon-chart`
+    - `client-icon-notice`
+    - `client-icon-database`
+    - `client-icon-pause`
+    - `client-icon-logout`
+  - 新增顶栏按钮、角标、分隔线、AI 按钮和客户端设置菜单样式。
+  - 新增客户端功能弹窗样式：
+    - 全局搜索表格
+    - 设置分组
+    - 原始 JSON 查看
+    - 消息统计指标和 SVG 图表
+    - 通知列表
+
+验证结果：
+
+- `npm run check` 通过。
+- `git diff --check` 通过，仅有 Windows CRLF 提示。
+- 浏览器打开 `http://localhost:5177` 可正常加载登录页，页面标题为 `悠聊 Web 客服工作台`。
+- 本地服务 `http://localhost:5177` 返回 200。
+- 直连飞牛接口验证：
+  - `/System/GetOptions` 返回真实 `commonOptions/jobOptions/aiOptions/dataBaseOptions`。
+  - `/System/GetConnectionString` 返回真实 `connectionString` 和 `databaseType: 0`。
+  - `/Summary/RealTimeSummary` 返回真实嵌套分段数组。
+  - `/Notice/GetList` 返回真实 `{ total: { value: 0 }, data: [] }`。
+  - `/ChatContent/SearchList` 返回真实 `{ total: 0, list: [] }`。
+- 浏览器插件可以读取登录页 DOM，但自动输入/点击时遇到插件虚拟剪贴板限制；本轮没有继续用浏览器强行绕过登录态，也没有提交任何假数据或模拟用户。
+
+维护规则：
+
+- AI 设置入口必须继续和客户端齿轮分开，避免把 Web AI 配置误写入悠聊服务端配置。
+- `挂起` 目前只暂停 Web 自动刷新。如果后续抓包确认原生客户端有服务端挂起接口，再替换 `toggleClientPause()`。
+- 全局聊天搜索必须用 `/ChatContent/SearchList`，不要用当前会话 `/ChatContent/GetList` 冒充全局结果。
+- 消息统计快速面板用 `/Summary/RealTimeSummary`；统计后台按钮打开 `/abnormal`，二者不是同一个入口。
+- 通知角标目前按 `/Notice/GetList` 返回结构自适应，若抓包确认有未读专用字段或接口，应优先改 `loadClientNoticeBadge()`。
+- `getData()` 是全局老函数，不要为了统计/通知粗暴改它；深层嵌套取数统一用 `unwrapPayloadData()`、`getRecordsDeep()`、`getTotalDeep()`，避免影响联系人、订单、快捷回复等旧链路。
+- 本地 `/api` 代理偶发 `fetch failed` 时，先用直连 `http://192.168.9.83:18080/api/...` 分辨是代理请求格式/连接复用问题，还是飞牛服务端真实失败。
+- 客户端设置保存有风险，后续改字段时必须保留原始 JSON 查看区，方便确认真实服务端返回结构。

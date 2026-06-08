@@ -786,6 +786,62 @@ ALTER TABLE `ChatContent_2026_06_08`
 - Keep the history override. Without it, right-side history adds normal message padding back to rich cards.
 - Temporary visual QA page `public/card-preview.html` was created and deleted; do not expect it in the repo.
 
+2026-06-08 native top-right client functions:
+
+- User wanted the original Windows client's top-right settings/actions replicated, and separated from Web AI settings.
+- `public/index.html` topbar now has:
+  - `clientBackendButton`: opens stats backend.
+  - `clientGlobalSearchButton`: global chat history search.
+  - `clientStatsButton`: message statistics panel.
+  - `clientNoticeButton` + `clientNoticeBadge`: notifications.
+  - `clientSettingsButton` + `clientSettingsMenu`: native client menu.
+  - `aiSettingsButton`: separate AI button, not the native gear.
+- `public/app.js` added state for:
+  - `clientPaused`
+  - `clientOptions`
+  - `clientConnectionString`
+  - `globalSearch`
+  - `clientStats`
+  - `clientNotice`
+- Native data shape fixes added in this pass:
+  - `DB_TYPE_OPTIONS`: submit numeric database enum values. Current real `/System/GetConnectionString` returns `databaseType: 0`.
+  - `unwrapPayloadData()`, `getRecordsDeep()`, `getTotalDeep()`: use these for nested native panel payloads instead of changing global `getData()`.
+  - `normalizeStatsRecords()` now unwraps `/Summary/RealTimeSummary` shape `{ data: { success, data: [...] } }`.
+  - Stats rows use real fields `it`, `count`, `fromUser`, `fromUserRedpointCount`, `fromRobot`, `fromKefu`, `contactCount`.
+  - `/Notice/GetList` total is currently `data.total.value`; list is `data.data`.
+- Real interfaces wired:
+  - `/System/GetOptions`
+  - `/System/SetOptions`
+  - `/System/GetConnectionString`
+  - `/System/SetConnectionString`
+  - `/ChatContent/SearchList`
+  - `/Summary/RealTimeSummary`
+  - `/Notice/GetEvents`
+  - `/Notice/GetList`
+  - `/Notice/ConsumeNotice`
+- Important functions:
+  - `showClientOptionsModal`
+  - `showDatabaseModal`
+  - `showGlobalSearchModal`
+  - `showClientStatsModal`
+  - `showClientNoticeModal`
+  - `loadClientNoticeBadge`
+  - `toggleClientPause`
+  - `handleToolModalBodyClick`
+- `openToolModal(config)` supports `size: "wide" | "large" | "xl"`.
+- `统计后台` opens `/abnormal` on the current API host, e.g. `http://192.168.9.83:18080/abnormal`.
+- `挂起` is currently local Web auto-refresh pause only. No server-side suspend endpoint was found in `YouChatService.xml`.
+- `public/styles.css` adds native icon mappings:
+  - `client-icon-dashboard`
+  - `client-icon-chat-record`
+  - `client-icon-chart`
+  - `client-icon-notice`
+  - `client-icon-database`
+  - `client-icon-pause`
+  - `client-icon-logout`
+- Do not merge native client settings with Web AI settings. The native options modal may show server `aiOptions`, but those are service-side options and must not overwrite `localStorage` AI relay settings.
+- If local `/api` proxy probes show transient `fetch failed`, verify the same route directly against `http://192.168.9.83:18080/api/...` before assuming the native API is broken. During this pass direct upstream probes worked for System, Summary, Notice, and SearchList, while a few proxy probes were intermittent.
+
 ## Non-Negotiables
 
 - Do not fake searchable user IDs.

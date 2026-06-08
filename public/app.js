@@ -90,8 +90,21 @@ const DETAIL_PAGE_SIZE = 20;
 const READ_STATE_STORAGE_KEY = "youchat.readContactState";
 const CLEARED_CONTACTS_STORAGE_KEY = "youchat.clearedContactState";
 const CONTACT_LIST_ACCOUNT_IDS_STORAGE_KEY = "youchat.contactListAccountIds";
+const CLIENT_PAUSED_STORAGE_KEY = "youchat.client.paused";
 const CLEAR_LIST_GRACE_MS = 30000;
 const CONTACT_LIST_ACCOUNT_ID_PATTERN = /^[1-9]\d{0,9}$/;
+const GLOBAL_SEARCH_PAGE_SIZE = 20;
+const CLIENT_NOTICE_PAGE_SIZE = 20;
+const DB_TYPE_OPTIONS = [
+  { value: "0", label: "MySql" },
+  { value: "1", label: "SqlServer" },
+  { value: "2", label: "Sqlite" },
+  { value: "3", label: "Oracle" },
+  { value: "4", label: "PostgreSQL" },
+  { value: "5", label: "达梦" },
+  { value: "8", label: "MySqlConnector" },
+  { value: "13", label: "ClickHouse" }
+];
 const EMOJI_SHORTCUTS = [
   "[微笑]",
   "[撇嘴]",
@@ -209,6 +222,45 @@ const state = {
   historyAutoLoading: false,
   linkPreviewCache: {},
   activeLinkPreview: null,
+  clientPaused: localStorage.getItem(CLIENT_PAUSED_STORAGE_KEY) === "true",
+  clientOptions: null,
+  clientOptionsLoading: false,
+  clientConnectionString: "",
+  clientDbType: "",
+  globalSearch: {
+    keyword: "",
+    contacts: "",
+    robots: "",
+    startTime: "",
+    endTime: "",
+    page: 1,
+    total: 0,
+    records: [],
+    loading: false,
+    error: ""
+  },
+  clientStats: {
+    startTime: "",
+    endTime: "",
+    data: null,
+    records: [],
+    loading: false,
+    error: ""
+  },
+  clientNotice: {
+    page: 1,
+    total: 0,
+    unread: 0,
+    msgType: "",
+    warnType: "",
+    eventType: "",
+    startTime: "",
+    endTime: "",
+    records: [],
+    events: [],
+    loading: false,
+    error: ""
+  },
   activeContact: null,
   contextMenu: null,
   totalContacts: 0,
@@ -257,6 +309,14 @@ function boot() {
     "backStep",
     "versionNote",
     "returnLogin",
+    "clientBackendButton",
+    "clientGlobalSearchButton",
+    "clientStatsButton",
+    "clientNoticeButton",
+    "clientNoticeBadge",
+    "clientSettingsButton",
+    "clientSettingsMenu",
+    "clientPauseMenuText",
     "aiSettingsButton",
     "aiSettingsOverlay",
     "aiSettingsPanel",
@@ -343,6 +403,12 @@ function bindEvents() {
   el.backStep.addEventListener("click", () => toast("当前先按客户端连接页处理，场景选择页后续可补。"));
   el.versionNote.addEventListener("click", () => toast("Web 二开版已改为读取真实悠聊接口数据。"));
   el.returnLogin.addEventListener("click", showLogin);
+  el.clientBackendButton.addEventListener("click", openStatsBackend);
+  el.clientGlobalSearchButton.addEventListener("click", showGlobalSearchModal);
+  el.clientStatsButton.addEventListener("click", showClientStatsModal);
+  el.clientNoticeButton.addEventListener("click", showClientNoticeModal);
+  el.clientSettingsButton.addEventListener("click", toggleClientSettingsMenu);
+  el.clientSettingsMenu.addEventListener("click", handleClientSettingsMenuClick);
   el.aiSettingsButton.addEventListener("click", showAiSettings);
   el.closeAiSettings.addEventListener("click", hideAiSettings);
   el.aiSettingsOverlay.addEventListener("click", (event) => {
@@ -383,6 +449,9 @@ function bindEvents() {
   el.toolModalClose.addEventListener("click", closeToolModal);
   el.toolModalCancel.addEventListener("click", closeToolModal);
   el.toolModalConfirm.addEventListener("click", confirmToolModal);
+  el.toolModalBody.addEventListener("click", handleToolModalBodyClick);
+  el.toolModalBody.addEventListener("change", handleToolModalBodyChange);
+  el.toolModalBody.addEventListener("keydown", handleToolModalBodyKeydown);
   el.linkPreviewOverlay.addEventListener("click", (event) => {
     if (event.target === el.linkPreviewOverlay) closeLinkPreview();
   });
@@ -403,10 +472,12 @@ function bindEvents() {
   el.contactList.addEventListener("keydown", handleContactListKeydown);
   el.contactList.addEventListener("contextmenu", handleContactContextMenu);
   document.addEventListener("click", closeContextMenu);
+  document.addEventListener("click", closeClientSettingsMenuOnOutside);
   document.addEventListener("click", closeEmojiOnOutside);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeContextMenu();
+      closeClientSettingsMenu();
       closeEmojiPopover();
       closeToolModal();
       closeLinkPreview();
@@ -454,6 +525,872 @@ function showAiSettings() {
 
 function hideAiSettings() {
   el.aiSettingsOverlay.classList.add("is-hidden");
+}
+
+function toggleClientSettingsMenu(event) {
+  event.stopPropagation();
+  const open = el.clientSettingsMenu.classList.contains("is-hidden");
+  if (open) {
+    el.clientSettingsMenu.classList.remove("is-hidden");
+    el.clientSettingsButton.setAttribute("aria-expanded", "true");
+  } else {
+    closeClientSettingsMenu();
+  }
+}
+
+function closeClientSettingsMenu() {
+  if (!el.clientSettingsMenu) return;
+  el.clientSettingsMenu.classList.add("is-hidden");
+  el.clientSettingsButton?.setAttribute("aria-expanded", "false");
+}
+
+function closeClientSettingsMenuOnOutside(event) {
+  if (!el.clientSettingsMenu || el.clientSettingsMenu.classList.contains("is-hidden")) return;
+  if (el.clientSettingsMenu.contains(event.target) || el.clientSettingsButton.contains(event.target)) return;
+  closeClientSettingsMenu();
+}
+
+function handleClientSettingsMenuClick(event) {
+  const target = event.target.closest("[data-client-menu]");
+  if (!target) return;
+  event.stopPropagation();
+  closeClientSettingsMenu();
+
+  const action = target.dataset.clientMenu;
+  if (action === "settings") {
+    showClientOptionsModal();
+  } else if (action === "database") {
+    showDatabaseModal();
+  } else if (action === "pause") {
+    toggleClientPause();
+  } else if (action === "logout") {
+    showLogin();
+    toast("已退出当前 Web 工作台。");
+  } else if (action === "close") {
+    closeWorkbenchWindow();
+  }
+}
+
+function toggleClientPause() {
+  state.clientPaused = !state.clientPaused;
+  localStorage.setItem(CLIENT_PAUSED_STORAGE_KEY, String(state.clientPaused));
+  if (state.clientPaused) {
+    stopAutoRefresh();
+    toast("已挂起：自动刷新已暂停。");
+  } else {
+    startAutoRefresh();
+    toast("已恢复：自动刷新重新开启。");
+  }
+  updateClientChromeState();
+  updateConnectionState(false);
+}
+
+function closeWorkbenchWindow() {
+  toast("网页端无法像 Electron 一样强制关闭程序，已尝试关闭当前标签页。");
+  window.close();
+}
+
+function updateClientChromeState() {
+  if (el.clientPauseMenuText) {
+    el.clientPauseMenuText.textContent = state.clientPaused ? "恢复" : "挂起";
+  }
+  if (el.clientSettingsButton) {
+    el.clientSettingsButton.classList.toggle("is-paused", state.clientPaused);
+  }
+}
+
+async function showClientOptionsModal() {
+  state.clientOptionsLoading = true;
+  state.clientOptions = null;
+  openToolModal({
+    type: "client-options",
+    size: "wide",
+    title: "客户端设置",
+    confirmText: "保存",
+    body: renderClientOptionsModal(),
+    onConfirm: saveClientOptionsFromModal
+  });
+
+  try {
+    const payload = await api("/System/GetOptions", {});
+    state.clientOptions = getData(payload) || payload || {};
+    log("client options", summarize(state.clientOptions));
+  } catch (error) {
+    state.clientOptions = { __error: error.message };
+  } finally {
+    state.clientOptionsLoading = false;
+    if (state.activeModal?.type === "client-options") {
+      el.toolModalBody.innerHTML = renderClientOptionsModal();
+    }
+  }
+}
+
+function renderClientOptionsModal() {
+  if (state.clientOptionsLoading) {
+    return '<div class="client-modal-loading">正在读取 /System/GetOptions...</div>';
+  }
+  if (state.clientOptions?.__error) {
+    return `
+      <div class="client-modal-error">
+        <strong>设置读取失败</strong>
+        <p>${escapeHtml(state.clientOptions.__error)}</p>
+      </div>
+      <p class="modal-hint">这里调用原生接口 /System/GetOptions。接口恢复后再打开即可看到真实配置。</p>
+    `;
+  }
+
+  const options = state.clientOptions || {};
+  return `
+    <div class="client-settings-grid">
+      <section class="client-settings-block">
+        <h4>常规设置</h4>
+        ${renderEditableOptionFields(options.commonOptions || options.CommonOptions || options.common || {}, "commonOptions")}
+      </section>
+      <section class="client-settings-block">
+        <h4>任务设置</h4>
+        ${renderEditableOptionFields(options.jobOptions || options.JobOptions || options.job || {}, "jobOptions")}
+      </section>
+      <section class="client-settings-block">
+        <h4>服务端 AI 设置</h4>
+        <p class="modal-hint">这是悠聊服务端配置，和右上角单独的 Web AI 推荐设置互不覆盖。</p>
+        ${renderEditableOptionFields(options.aiOptions || options.AiOptions || options.ai || {}, "aiOptions")}
+      </section>
+      <section class="client-settings-block">
+        <h4>数据库设置</h4>
+        ${renderEditableOptionFields(options.dataBaseOptions || options.DataBaseOptions || options.databaseOptions || {}, "dataBaseOptions")}
+      </section>
+    </div>
+    <details class="raw-json-box">
+      <summary>查看原始配置 JSON</summary>
+      <pre>${escapeHtml(JSON.stringify(options, null, 2))}</pre>
+    </details>
+  `;
+}
+
+function renderEditableOptionFields(group, namespace) {
+  const entries = Object.entries(group || {}).filter(([, value]) => isEditablePrimitive(value));
+  if (!entries.length) return '<p class="empty-state compact">接口未返回可直接编辑的字段。</p>';
+  return `
+    <div class="client-option-fields">
+      ${entries.slice(0, 24).map(([key, value]) => `
+        <label class="modal-field compact-field">
+          <span>${escapeHtml(key)}</span>
+          ${typeof value === "boolean"
+            ? `<select data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}"><option value="true" ${value ? "selected" : ""}>true</option><option value="false" ${!value ? "selected" : ""}>false</option></select>`
+            : `<input data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}" value="${escapeAttr(value)}" />`}
+        </label>
+      `).join("")}
+    </div>
+  `;
+}
+
+function isEditablePrimitive(value) {
+  return value === null || ["string", "number", "boolean"].includes(typeof value);
+}
+
+async function saveClientOptionsFromModal() {
+  const original = state.clientOptions || {};
+  if (!Object.keys(original).length || original.__error) {
+    toast("没有可保存的客户端设置。", true);
+    return false;
+  }
+
+  const next = clonePlainObject(original);
+  el.toolModalBody.querySelectorAll("[data-client-option]").forEach((input) => {
+    const [namespace, key] = String(input.dataset.clientOption || "").split(".");
+    if (!namespace || !key) return;
+    const sourceGroup = original[namespace] || original[toPascalCase(namespace)] || {};
+    const targetGroup = next[namespace] || next[toPascalCase(namespace)] || {};
+    targetGroup[key] = castLike(input.value, sourceGroup[key]);
+    if (next[namespace]) next[namespace] = targetGroup;
+    else next[toPascalCase(namespace)] = targetGroup;
+  });
+
+  try {
+    await api("/System/SetOptions", {
+      dataBaseOptions: next.dataBaseOptions || next.DataBaseOptions || {},
+      commonOptions: next.commonOptions || next.CommonOptions || {},
+      jobOptions: next.jobOptions || next.JobOptions || {},
+      aiOptions: next.aiOptions || next.AiOptions || {}
+    }, { asJson: true });
+    state.clientOptions = next;
+    toast("客户端设置已提交到 /System/SetOptions。");
+    closeToolModal();
+    return true;
+  } catch (error) {
+    toast(`保存客户端设置失败：${error.message}`, true);
+    return false;
+  }
+}
+
+async function showDatabaseModal() {
+  state.clientConnectionString = "";
+  state.clientDbType = "";
+  openToolModal({
+    type: "database",
+    title: "数据库管理",
+    confirmText: "保存连接",
+    body: '<div class="client-modal-loading">正在读取 /System/GetConnectionString...</div>',
+    onConfirm: saveDatabaseConnectionFromModal
+  });
+
+  try {
+    const payload = await api("/System/GetConnectionString", {});
+    const data = getData(payload);
+    const connection = typeof data === "string"
+      ? data
+      : firstValue(data?.connectionString, data?.ConnectionString, data?.connStr, payload?.connectionString, "");
+    state.clientConnectionString = String(connection || "");
+    state.clientDbType = normalizeDbType(firstValue(
+      data?.databaseType,
+      data?.DatabaseType,
+      data?.dbType,
+      data?.DbType,
+      data?.type,
+      payload?.databaseType,
+      payload?.dbType,
+      ""
+    ));
+  } catch (error) {
+    state.clientConnectionString = "";
+    state.clientDbType = "";
+    log("database connection load failed", { error: error.message });
+    toast(`数据库连接读取失败：${error.message}`, true);
+  } finally {
+    if (state.activeModal?.type === "database") {
+      el.toolModalBody.innerHTML = renderDatabaseModal();
+    }
+  }
+}
+
+function renderDatabaseModal() {
+  return `
+    <label class="modal-field">
+      <span>数据库类型</span>
+      <select id="clientDbType">
+        ${DB_TYPE_OPTIONS.map((type) => `
+          <option value="${escapeAttr(type.value)}" ${normalizeDbType(state.clientDbType) === type.value ? "selected" : ""}>${escapeHtml(`${type.label} (${type.value})`)}</option>
+        `).join("")}
+      </select>
+    </label>
+    <label class="modal-field">
+      <span>连接字符串</span>
+      <textarea id="clientConnectionString" rows="7" placeholder="接口未返回连接字符串">${escapeHtml(state.clientConnectionString)}</textarea>
+    </label>
+    <p class="modal-hint">该区域调用原生接口 /System/GetConnectionString 与 /System/SetConnectionString。修改前请确认服务端数据库备份。</p>
+  `;
+}
+
+async function saveDatabaseConnectionFromModal() {
+  const connectionString = $("clientConnectionString")?.value.trim() || "";
+  const dbType = normalizeDbType($("clientDbType")?.value || state.clientDbType || "0");
+  if (!connectionString) {
+    toast("请输入数据库连接字符串。", true);
+    return false;
+  }
+
+  try {
+    await api("/System/SetConnectionString", {
+      connectionString,
+      databaseType: dbType,
+      DbType: dbType,
+      type: dbType
+    });
+    state.clientConnectionString = connectionString;
+    state.clientDbType = dbType;
+    toast("数据库连接已提交。");
+    closeToolModal();
+    return true;
+  } catch (error) {
+    toast(`保存数据库连接失败：${error.message}`, true);
+    return false;
+  }
+}
+
+function openStatsBackend() {
+  const backendUrl = getStatsBackendUrl();
+  window.open(backendUrl, "_blank", "noopener,noreferrer");
+  toast("已打开原生统计后台页面。");
+}
+
+function getStatsBackendUrl() {
+  try {
+    const url = new URL(state.apiBase);
+    url.pathname = "/abnormal";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "/abnormal";
+  }
+}
+
+function showGlobalSearchModal() {
+  const now = new Date();
+  const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  state.globalSearch = {
+    ...state.globalSearch,
+    startTime: state.globalSearch.startTime || toDateTimeLocal(start),
+    endTime: state.globalSearch.endTime || toDateTimeLocal(now),
+    page: 1,
+    error: ""
+  };
+  openToolModal({
+    type: "global-search",
+    size: "xl",
+    title: "聊天记录全局搜索",
+    confirmText: "查询",
+    body: renderGlobalSearchModal(),
+    onConfirm: () => runGlobalSearch(1)
+  });
+  if (!state.globalSearch.records.length) runGlobalSearch(1, { keepModalOpen: true });
+}
+
+async function runGlobalSearch(page = state.globalSearch.page, options = {}) {
+  syncGlobalSearchFields();
+  state.globalSearch.page = page;
+  state.globalSearch.loading = true;
+  state.globalSearch.error = "";
+  renderActiveModalBody();
+
+  try {
+    const payload = await api("/ChatContent/SearchList", {
+      contacts: splitListValue(state.globalSearch.contacts),
+      robots: splitListValue(state.globalSearch.robots),
+      keyWord: state.globalSearch.keyword,
+      startTime: fromDateTimeLocal(state.globalSearch.startTime),
+      endTime: fromDateTimeLocal(state.globalSearch.endTime),
+      index: page,
+      size: GLOBAL_SEARCH_PAGE_SIZE
+    });
+    state.globalSearch.records = getRecordsDeep(payload).map(normalizeGlobalSearchRecord);
+    state.globalSearch.total = getTotalDeep(payload);
+    state.globalSearch.page = page;
+  } catch (error) {
+    state.globalSearch.records = [];
+    state.globalSearch.total = 0;
+    state.globalSearch.error = error.message;
+  } finally {
+    state.globalSearch.loading = false;
+    renderActiveModalBody();
+    if (!options.keepModalOpen && !state.globalSearch.error) {
+      toast("全局聊天记录查询完成。");
+    }
+  }
+  return false;
+}
+
+function renderGlobalSearchModal() {
+  const search = state.globalSearch;
+  const totalText = search.loading ? "查询中" : search.total ? `共 ${search.total} 条` : "无结果";
+  return `
+    <div class="global-search-layout">
+      <div class="global-search-filters">
+        <label class="modal-field">
+          <span>关键字</span>
+          <input id="globalSearchKeyword" value="${escapeAttr(search.keyword)}" placeholder="消息内容、昵称、订单号" />
+        </label>
+        <label class="modal-field">
+          <span>用户昵称 / ID / 备注</span>
+          <input id="globalSearchContacts" value="${escapeAttr(search.contacts)}" placeholder="多个用逗号或空格分隔" />
+        </label>
+        <label class="modal-field">
+          <span>机器人 ID</span>
+          <input id="globalSearchRobots" value="${escapeAttr(search.robots)}" placeholder="多个用逗号或空格分隔" />
+        </label>
+        <label class="modal-field">
+          <span>开始时间</span>
+          <input id="globalSearchStart" type="datetime-local" value="${escapeAttr(search.startTime)}" />
+        </label>
+        <label class="modal-field">
+          <span>结束时间</span>
+          <input id="globalSearchEnd" type="datetime-local" value="${escapeAttr(search.endTime)}" />
+        </label>
+        <div class="modal-inline-actions">
+          <button type="button" class="light-button" data-client-modal-action="global-reset">重置</button>
+          <button type="button" class="send-button" data-client-modal-action="global-search">查询</button>
+        </div>
+      </div>
+      <div class="client-table-headline">
+        <strong>搜索结果</strong>
+        <span>${escapeHtml(totalText)}</span>
+      </div>
+      ${search.error ? `<div class="client-modal-error compact"><strong>查询失败</strong><p>${escapeHtml(search.error)}</p></div>` : ""}
+      <div class="client-table-wrap">
+        <table class="client-data-table">
+          <thead>
+            <tr>
+              <th>用户</th>
+              <th>所属机器人</th>
+              <th>来源</th>
+              <th>消息内容</th>
+              <th>发送时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${search.records.length ? search.records.map(renderGlobalSearchRow).join("") : `<tr><td colspan="6" class="empty-state">${search.loading ? "正在查询真实聊天记录..." : "暂无聊天记录结果。"}</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <div class="pager-row">
+        <button class="mini-action" type="button" data-client-modal-action="global-prev" ${search.page <= 1 || search.loading ? "disabled" : ""}>上一页</button>
+        <span>第 ${search.page} 页</span>
+        <button class="mini-action" type="button" data-client-modal-action="global-next" ${!hasNextGlobalSearchPage() || search.loading ? "disabled" : ""}>下一页</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderGlobalSearchRow(row) {
+  return `
+    <tr>
+      <td><strong>${escapeHtml(row.userName || "-")}</strong>${row.contactId ? `<small>${copyButton(row.contactId)}</small>` : ""}</td>
+      <td>${escapeHtml(row.robotName || "-")}${row.robotId ? `<small>${copyButton(row.robotId)}</small>` : ""}</td>
+      <td>${escapeHtml(row.source || "-")}</td>
+      <td class="client-message-cell">${renderSearchContent(row.content)}</td>
+      <td>${escapeHtml(row.time || "-")}</td>
+      <td>
+        <button class="mini-action" type="button" data-copy="${escapeAttr(row.content)}">复制</button>
+      </td>
+    </tr>
+  `;
+}
+
+function normalizeGlobalSearchRecord(item, index = 0) {
+  const contact = item.contact || {};
+  const robot = item.robot || {};
+  const contactId = firstValue(item.contactId, item.chatId, contact.id, contact.contactId, "");
+  return {
+    ...item,
+    id: firstValue(item.id, item.msgId, item.messageId, `search-${index}`),
+    contactId,
+    userName: firstValue(item.userNick, item.nickName, item.contactName, item.userName, contact.userNick, contact.userName, contact.remark, "-"),
+    robotName: firstValue(item.robotName, robot.robotRemark, robot.robotName, item.accountName, "-"),
+    robotId: firstValue(item.robotId, item.robotUniqueId, robot.robotId, robot.robotUniqueId, ""),
+    source: firstValue(item.sourceName, item.source, item.msgTypeName, contentTypeName(item.contentType), messageDirectionName(item), "-"),
+    content: getMessageContentText(item) || firstValue(item.message, item.text, item.content, ""),
+    time: formatFullTime(firstValue(item.sendTime, item.createTime, item.createDate, item.time, item.msgTime, ""))
+  };
+}
+
+function hasNextGlobalSearchPage() {
+  const search = state.globalSearch;
+  return search.records.length >= GLOBAL_SEARCH_PAGE_SIZE && (!search.total || search.page * GLOBAL_SEARCH_PAGE_SIZE < search.total);
+}
+
+function syncGlobalSearchFields() {
+  state.globalSearch.keyword = $("globalSearchKeyword")?.value.trim() || state.globalSearch.keyword || "";
+  state.globalSearch.contacts = $("globalSearchContacts")?.value.trim() || state.globalSearch.contacts || "";
+  state.globalSearch.robots = $("globalSearchRobots")?.value.trim() || state.globalSearch.robots || "";
+  state.globalSearch.startTime = $("globalSearchStart")?.value || state.globalSearch.startTime || "";
+  state.globalSearch.endTime = $("globalSearchEnd")?.value || state.globalSearch.endTime || "";
+}
+
+function resetGlobalSearchFilters() {
+  state.globalSearch = {
+    ...state.globalSearch,
+    keyword: "",
+    contacts: "",
+    robots: "",
+    startTime: "",
+    endTime: "",
+    page: 1,
+    total: 0,
+    records: [],
+    error: ""
+  };
+  showGlobalSearchModal();
+}
+
+function showClientStatsModal() {
+  const now = new Date();
+  const start = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  state.clientStats = {
+    ...state.clientStats,
+    startTime: state.clientStats.startTime || toDateTimeLocal(start),
+    endTime: state.clientStats.endTime || toDateTimeLocal(now),
+    error: ""
+  };
+  openToolModal({
+    type: "client-stats",
+    size: "large",
+    title: "消息统计面板",
+    confirmText: "刷新",
+    body: renderClientStatsModal(),
+    onConfirm: refreshClientStats
+  });
+  if (!state.clientStats.data) refreshClientStats({ keepModalOpen: true });
+}
+
+async function refreshClientStats(options = {}) {
+  syncClientStatsFields();
+  state.clientStats.loading = true;
+  state.clientStats.error = "";
+  renderActiveModalBody();
+  try {
+    const payload = await api("/Summary/RealTimeSummary", {
+      startTime: fromDateTimeLocal(state.clientStats.startTime),
+      endTime: fromDateTimeLocal(state.clientStats.endTime)
+    });
+    const statsData = unwrapPayloadData(payload);
+    state.clientStats.data = statsData || payload || {};
+    state.clientStats.records = normalizeStatsRecords(statsData);
+  } catch (error) {
+    state.clientStats.data = null;
+    state.clientStats.records = [];
+    state.clientStats.error = error.message;
+  } finally {
+    state.clientStats.loading = false;
+    renderActiveModalBody();
+    if (!options.keepModalOpen && !state.clientStats.error) toast("消息统计已刷新。");
+  }
+  return false;
+}
+
+function renderClientStatsModal() {
+  const stats = state.clientStats;
+  const metrics = extractStatsMetrics(stats.data);
+  return `
+    <div class="client-stats-layout">
+      <div class="client-stats-filters">
+        <label class="modal-field">
+          <span>开始时间</span>
+          <input id="clientStatsStart" type="datetime-local" value="${escapeAttr(stats.startTime)}" />
+        </label>
+        <label class="modal-field">
+          <span>结束时间</span>
+          <input id="clientStatsEnd" type="datetime-local" value="${escapeAttr(stats.endTime)}" />
+        </label>
+        <button type="button" class="send-button" data-client-modal-action="stats-refresh">刷新</button>
+      </div>
+      ${stats.error ? `<div class="client-modal-error compact"><strong>统计读取失败</strong><p>${escapeHtml(stats.error)}</p></div>` : ""}
+      <div class="stats-metric-grid">
+        ${metrics.length ? metrics.map((metric) => `
+          <article class="stats-metric">
+            <span>${escapeHtml(metric.label)}</span>
+            <strong>${escapeHtml(metric.value)}</strong>
+          </article>
+        `).join("") : `<p class="empty-state compact">${stats.loading ? "正在读取真实统计..." : "接口未返回可展示指标。"}</p>`}
+      </div>
+      <div class="stats-chart">
+        ${renderStatsChart(stats.records)}
+      </div>
+      <details class="raw-json-box">
+        <summary>查看接口原始返回</summary>
+        <pre>${escapeHtml(JSON.stringify(stats.data || {}, null, 2))}</pre>
+      </details>
+    </div>
+  `;
+}
+
+function syncClientStatsFields() {
+  state.clientStats.startTime = $("clientStatsStart")?.value || state.clientStats.startTime || "";
+  state.clientStats.endTime = $("clientStatsEnd")?.value || state.clientStats.endTime || "";
+}
+
+function normalizeStatsRecords(data) {
+  const records = findFirstArray(unwrapPayloadData(data)) || [];
+  return records.map((item, index) => {
+    const raw = item && typeof item === "object" ? item : { value: item };
+    return {
+      label: firstValue(raw.it, raw.time, raw.date, raw.hour, raw.name, raw.title, `${index + 1}`),
+      value: toNumber(firstValue(raw.count, raw.total, raw.value, raw.num, 0)),
+      raw
+    };
+  });
+}
+
+function extractStatsMetrics(data) {
+  const records = normalizeStatsRecords(data);
+  if (records.length) {
+    const sums = records.reduce((acc, item) => {
+      const raw = item.raw || {};
+      acc.count += toNumber(raw.count);
+      acc.fromUser += toNumber(raw.fromUser);
+      acc.fromUserRedpointCount += toNumber(raw.fromUserRedpointCount);
+      acc.fromRobot += toNumber(raw.fromRobot);
+      acc.fromKefu += toNumber(raw.fromKefu);
+      acc.contactCount += toNumber(raw.contactCount);
+      acc.maxContactCount = Math.max(acc.maxContactCount, toNumber(raw.contactCount));
+      return acc;
+    }, {
+      count: 0,
+      fromUser: 0,
+      fromUserRedpointCount: 0,
+      fromRobot: 0,
+      fromKefu: 0,
+      contactCount: 0,
+      maxContactCount: 0
+    });
+    return [
+      { label: "消息总量", value: formatStatValue(sums.count) },
+      { label: "用户普通消息", value: formatStatValue(sums.fromUser) },
+      { label: "用户红点消息", value: formatStatValue(sums.fromUserRedpointCount) },
+      { label: "机器人消息", value: formatStatValue(sums.fromRobot) },
+      { label: "客服回复", value: formatStatValue(sums.fromKefu) },
+      { label: "触达客户", value: formatStatValue(sums.contactCount) },
+      { label: "峰值客户", value: formatStatValue(sums.maxContactCount) },
+      { label: "时间分段", value: formatStatValue(records.length) }
+    ];
+  }
+
+  const unwrapped = unwrapPayloadData(data);
+  if (!unwrapped || typeof unwrapped !== "object" || Array.isArray(unwrapped)) return [];
+  const labels = {
+    count: "消息总量",
+    fromUser: "用户普通消息",
+    fromUserRedpointCount: "用户红点消息",
+    fromRobot: "机器人消息",
+    fromKefu: "客服回复",
+    contactCount: "触达客户",
+    userMsgCount: "用户普通消息",
+    userRedMsgCount: "用户红点消息",
+    robotMsgCount: "机器人消息",
+    accountReplyCount: "客服回复",
+    userCount: "用户总数",
+    total: "总数"
+  };
+  return Object.entries(unwrapped)
+    .filter(([, value]) => value !== "" && value !== null && value !== undefined && !Number.isNaN(Number(value)))
+    .slice(0, 8)
+    .map(([key, value]) => ({
+      label: labels[key] || humanizeKey(key),
+      value: formatStatValue(value)
+    }));
+}
+
+function renderStatsChart(records) {
+  const points = (records || [])
+    .filter((item) => Number.isFinite(Number(item.value)))
+    .map((item) => ({ ...item, value: Number(item.value) }))
+    .slice(-36);
+  if (!points.length) return '<div class="empty-state compact">暂无可绘制趋势数据。</div>';
+  const width = 760;
+  const height = 210;
+  const padding = { top: 18, right: 22, bottom: 34, left: 44 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+  const max = Math.max(...points.map((item) => Number(item.value)), 1);
+  const step = points.length > 1 ? chartWidth / (points.length - 1) : chartWidth;
+  const coords = points.map((item, index) => {
+    const x = Math.round(padding.left + index * step);
+    const y = Math.round(padding.top + chartHeight - (Number(item.value) / max) * chartHeight);
+    return { x, y, item };
+  });
+  const line = coords.map((point) => `${point.x},${point.y}`).join(" ");
+  const area = `${padding.left},${padding.top + chartHeight} ${line} ${padding.left + chartWidth},${padding.top + chartHeight}`;
+  const labelIndexes = uniqueNumbers([0, Math.floor((points.length - 1) / 2), points.length - 1]);
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const y = Math.round(padding.top + chartHeight - ratio * chartHeight);
+    const value = Math.round(max * ratio);
+    return `
+      <line x1="${padding.left}" y1="${y}" x2="${padding.left + chartWidth}" y2="${y}" stroke="#e3ebf5" stroke-width="1"></line>
+      <text x="${padding.left - 8}" y="${y + 4}" text-anchor="end" fill="#7a8798" font-size="10">${escapeHtml(value)}</text>
+    `;
+  }).join("");
+  return `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="消息统计趋势">
+      <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
+      ${gridLines}
+      <polygon points="${escapeAttr(area)}" fill="rgba(22, 141, 242, 0.1)"></polygon>
+      <polyline points="${escapeAttr(line)}" fill="none" stroke="#168df2" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      ${coords.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#0d63c7"><title>${escapeHtml(point.item.label)}：${escapeHtml(point.item.value)}</title></circle>`).join("")}
+      ${labelIndexes.map((index) => {
+        const point = coords[index];
+        return `<text x="${point.x}" y="${height - 10}" text-anchor="${index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}" fill="#68758a" font-size="10">${escapeHtml(point.item.label)}</text>`;
+      }).join("")}
+    </svg>
+  `;
+}
+
+function showClientNoticeModal() {
+  openToolModal({
+    type: "client-notice",
+    size: "wide",
+    title: "通知",
+    confirmText: "刷新",
+    body: renderClientNoticeModal(),
+    onConfirm: () => loadClientNotices(1)
+  });
+  loadClientNotices(1, { keepModalOpen: true });
+  loadClientNoticeEvents();
+}
+
+async function loadClientNoticeEvents() {
+  try {
+    const payload = await api("/Notice/GetEvents", {
+      warnType: state.clientNotice.warnType
+    });
+    state.clientNotice.events = getRecordsDeep(payload);
+    if (state.activeModal?.type === "client-notice") renderActiveModalBody();
+  } catch (error) {
+    log("notice events failed", { error: error.message });
+  }
+}
+
+async function loadClientNotices(page = state.clientNotice.page, options = {}) {
+  syncClientNoticeFields();
+  state.clientNotice.page = page;
+  state.clientNotice.loading = true;
+  state.clientNotice.error = "";
+  renderActiveModalBody();
+  try {
+    const payload = await api("/Notice/GetList", {
+      msgType: state.clientNotice.msgType,
+      warnType: state.clientNotice.warnType,
+      eventType: state.clientNotice.eventType,
+      startTime: fromDateTimeLocal(state.clientNotice.startTime),
+      endTime: fromDateTimeLocal(state.clientNotice.endTime),
+      accountId: state.accountId || "",
+      robotId: "",
+      index: page,
+      size: CLIENT_NOTICE_PAGE_SIZE
+    });
+    state.clientNotice.records = getRecordsDeep(payload).map(normalizeNoticeRecord);
+    state.clientNotice.total = getTotalDeep(payload);
+    state.clientNotice.unread = estimateNoticeUnread(payload, state.clientNotice.records);
+    renderClientNoticeBadge();
+  } catch (error) {
+    state.clientNotice.records = [];
+    state.clientNotice.total = 0;
+    state.clientNotice.error = error.message;
+  } finally {
+    state.clientNotice.loading = false;
+    renderActiveModalBody();
+    if (!options.keepModalOpen && !state.clientNotice.error) toast("通知已刷新。");
+  }
+  return false;
+}
+
+async function loadClientNoticeBadge() {
+  try {
+    const payload = await api("/Notice/GetList", {
+      index: 1,
+      size: 1
+    });
+    const total = getTotalDeep(payload);
+    state.clientNotice.unread = total;
+    renderClientNoticeBadge();
+  } catch (error) {
+    log("notice badge failed", { error: error.message });
+  }
+}
+
+function renderClientNoticeModal() {
+  const notice = state.clientNotice;
+  const totalText = notice.loading ? "加载中" : notice.total ? `共 ${notice.total} 条` : "暂无通知";
+  const eventOptions = normalizeNoticeEvents(notice.events);
+  return `
+    <div class="client-notice-layout">
+      <div class="client-notice-filters">
+        <label class="modal-field">
+          <span>消息类型</span>
+          <input id="clientNoticeMsgType" value="${escapeAttr(notice.msgType)}" placeholder="留空为全部" />
+        </label>
+        ${renderNoticeFilterField("clientNoticeWarnType", "预警类型", notice.warnType, "warnType")}
+        ${eventOptions.length ? `
+          <label class="modal-field">
+            <span>事件类型</span>
+            <select id="clientNoticeEventType">
+              <option value="">全部事件</option>
+              ${eventOptions.map((event) => `<option value="${escapeAttr(event.value)}" ${String(notice.eventType) === String(event.value) ? "selected" : ""}>${escapeHtml(event.label)}</option>`).join("")}
+            </select>
+          </label>
+        ` : renderNoticeFilterField("clientNoticeEventType", "事件类型", notice.eventType, "eventType")}
+        <label class="modal-field">
+          <span>开始时间</span>
+          <input id="clientNoticeStart" type="datetime-local" value="${escapeAttr(notice.startTime)}" />
+        </label>
+        <label class="modal-field">
+          <span>结束时间</span>
+          <input id="clientNoticeEnd" type="datetime-local" value="${escapeAttr(notice.endTime)}" />
+        </label>
+        <button type="button" class="send-button" data-client-modal-action="notice-search">查询</button>
+      </div>
+      <div class="client-table-headline">
+        <strong>通知列表</strong>
+        <span>${escapeHtml(totalText)}</span>
+      </div>
+      ${notice.error ? `<div class="client-modal-error compact"><strong>通知读取失败</strong><p>${escapeHtml(notice.error)}</p></div>` : ""}
+      <div class="notice-list">
+        ${notice.records.length ? notice.records.map(renderNoticeRow).join("") : `<p class="empty-state">${notice.loading ? "正在读取真实通知..." : "暂无通知数据。"}</p>`}
+      </div>
+      <div class="pager-row">
+        <button class="mini-action" type="button" data-client-modal-action="notice-prev" ${notice.page <= 1 || notice.loading ? "disabled" : ""}>上一页</button>
+        <span>第 ${notice.page} 页</span>
+        <button class="mini-action" type="button" data-client-modal-action="notice-next" ${!hasNextNoticePage() || notice.loading ? "disabled" : ""}>下一页</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderNoticeRow(item) {
+  return `
+    <article class="notice-row ${item.consumed ? "is-read" : ""}">
+      <span class="notice-dot" aria-hidden="true"></span>
+      <div class="notice-main">
+        <strong>${escapeHtml(item.title || item.eventName || "通知")}</strong>
+        <p>${escapeHtml(item.content || "-")}</p>
+        <small>${escapeHtml([item.warnTypeName, item.robotName, item.time].filter(Boolean).join(" / "))}</small>
+      </div>
+      <div class="notice-actions">
+        <button class="mini-action" type="button" data-copy="${escapeAttr(item.content)}">复制</button>
+        <button class="mini-action" type="button" data-client-modal-action="notice-consume" data-notice-id="${escapeAttr(item.id)}" ${item.consumed ? "disabled" : ""}>已读</button>
+      </div>
+    </article>
+  `;
+}
+
+function normalizeNoticeRecord(item, index = 0) {
+  const consumedValue = firstValue(item.isRead, item.consumed, item.isConsumed, item.status === 1 ? true : "");
+  return {
+    ...item,
+    id: firstValue(item.noticeId, item.id, item.warnId, `notice-${index}`),
+    title: firstValue(item.title, item.eventName, item.warnName, item.msgTypeName, "通知"),
+    content: firstValue(item.content, item.msg, item.message, item.remark, item.description, ""),
+    warnTypeName: firstValue(item.warnTypeName, item.warnType, item.eventTypeName, item.eventType, ""),
+    eventName: firstValue(item.eventName, item.eventTypeName, ""),
+    robotName: firstValue(item.robotName, item.robotRemark, ""),
+    time: formatFullTime(firstValue(item.createTime, item.createdAt, item.time, item.noticeTime, item.noticeDate, "")),
+    consumed: consumedValue === true || consumedValue === 1 || consumedValue === "1" || consumedValue === "true"
+  };
+}
+
+function hasNextNoticePage() {
+  const notice = state.clientNotice;
+  return notice.records.length >= CLIENT_NOTICE_PAGE_SIZE && (!notice.total || notice.page * CLIENT_NOTICE_PAGE_SIZE < notice.total);
+}
+
+function syncClientNoticeFields() {
+  state.clientNotice.msgType = $("clientNoticeMsgType")?.value.trim() || state.clientNotice.msgType || "";
+  state.clientNotice.warnType = $("clientNoticeWarnType")?.value.trim() || state.clientNotice.warnType || "";
+  state.clientNotice.eventType = $("clientNoticeEventType")?.value.trim() || state.clientNotice.eventType || "";
+  state.clientNotice.startTime = $("clientNoticeStart")?.value || state.clientNotice.startTime || "";
+  state.clientNotice.endTime = $("clientNoticeEnd")?.value || state.clientNotice.endTime || "";
+}
+
+async function consumeClientNotice(id) {
+  if (!id) return;
+  try {
+    await api("/Notice/ConsumeNotice", { noticeId: id });
+    state.clientNotice.records = state.clientNotice.records.map((item) => (
+      String(item.id) === String(id) ? { ...item, consumed: true } : item
+    ));
+    state.clientNotice.unread = Math.max(0, Number(state.clientNotice.unread || 0) - 1);
+    renderClientNoticeBadge();
+    renderActiveModalBody();
+    toast("通知已标记已读。");
+  } catch (error) {
+    toast(`通知已读失败：${error.message}`, true);
+  }
+}
+
+function renderClientNoticeBadge() {
+  if (!el.clientNoticeBadge) return;
+  const count = Number(state.clientNotice.unread || 0);
+  el.clientNoticeBadge.textContent = count > 99 ? "99+" : String(count);
+  el.clientNoticeBadge.dataset.empty = count ? "false" : "true";
 }
 
 function saveAiSettings(event) {
@@ -629,7 +1566,7 @@ async function connect(event) {
     state.accountIdResolved = false;
     await ensureContactListAccountId();
     showWorkbench();
-    await Promise.all([loadContacts(), loadFaq(), loadFriendRequestBadgeTotals()]);
+    await Promise.all([loadContacts(), loadFaq(), loadFriendRequestBadgeTotals(), loadClientNoticeBadge()]);
     await Promise.all([loadMessages(1, "replace", { forceBottom: true }), loadContactInfo(), loadToolDataForActiveTab()]);
     startAutoRefresh();
     toast("已连接真实接口，当前页面不再使用假数据。");
@@ -690,6 +1627,7 @@ function showWorkbench() {
   el.workbenchView.classList.remove("is-hidden");
   el.operatorName.textContent = `客服 ${state.account || "未登录"}`;
   updateConnectionState(false);
+  updateClientChromeState();
 }
 
 function showLogin() {
@@ -699,8 +1637,10 @@ function showLogin() {
 }
 
 function updateConnectionState(failed) {
-  el.connectionState.textContent = state.apiStatus;
+  el.connectionState.textContent = state.clientPaused && state.apiStatus === "已连接" ? "已挂起" : state.apiStatus;
   el.connectionState.classList.toggle("offline", Boolean(failed));
+  el.connectionState.classList.toggle("paused", Boolean(state.clientPaused && !failed));
+  updateClientChromeState();
 }
 
 function togglePassword() {
@@ -3968,6 +4908,11 @@ function openToolModal(config) {
   el.toolModalTitle.textContent = config.title || "";
   el.toolModalBody.innerHTML = config.body || "";
   el.toolModalConfirm.textContent = config.confirmText || "确定";
+  el.toolModalConfirm.classList.toggle("is-hidden", config.hideConfirm === true);
+  el.toolModalPanel.classList.remove("tool-modal-wide", "tool-modal-large", "tool-modal-xl");
+  if (config.size === "wide") el.toolModalPanel.classList.add("tool-modal-wide");
+  if (config.size === "large") el.toolModalPanel.classList.add("tool-modal-large");
+  if (config.size === "xl") el.toolModalPanel.classList.add("tool-modal-xl");
   el.toolModalOverlay.classList.remove("is-hidden");
 }
 
@@ -3985,6 +4930,89 @@ async function confirmToolModal() {
     await modal.onConfirm();
   } finally {
     el.toolModalConfirm.disabled = false;
+  }
+}
+
+function renderActiveModalBody() {
+  const modal = state.activeModal;
+  if (!modal) return;
+  if (modal.type === "global-search") {
+    el.toolModalBody.innerHTML = renderGlobalSearchModal();
+  } else if (modal.type === "client-stats") {
+    el.toolModalBody.innerHTML = renderClientStatsModal();
+  } else if (modal.type === "client-notice") {
+    el.toolModalBody.innerHTML = renderClientNoticeModal();
+  } else if (modal.type === "client-options") {
+    el.toolModalBody.innerHTML = renderClientOptionsModal();
+  } else if (modal.type === "database") {
+    el.toolModalBody.innerHTML = renderDatabaseModal();
+  }
+}
+
+function handleToolModalBodyClick(event) {
+  const previewTarget = event.target.closest("[data-link-preview]");
+  if (previewTarget) {
+    event.preventDefault();
+    showLinkPreview(previewTarget.dataset.linkPreview || "");
+    return;
+  }
+
+  const openTarget = event.target.closest("[data-open-link]");
+  if (openTarget) {
+    event.preventDefault();
+    openExternalLink(openTarget.dataset.openLink || "");
+    return;
+  }
+
+  const copyTarget = event.target.closest("[data-copy]");
+  if (copyTarget) {
+    copyToClipboard(copyTarget.dataset.copy || "");
+    return;
+  }
+
+  const target = event.target.closest("[data-client-modal-action]");
+  if (!target) return;
+
+  const action = target.dataset.clientModalAction;
+  if (action === "global-search") {
+    runGlobalSearch(1);
+  } else if (action === "global-reset") {
+    resetGlobalSearchFilters();
+  } else if (action === "global-prev") {
+    runGlobalSearch(Math.max(1, state.globalSearch.page - 1));
+  } else if (action === "global-next") {
+    if (hasNextGlobalSearchPage()) runGlobalSearch(state.globalSearch.page + 1);
+  } else if (action === "stats-refresh") {
+    refreshClientStats();
+  } else if (action === "notice-search") {
+    loadClientNotices(1);
+  } else if (action === "notice-prev") {
+    loadClientNotices(Math.max(1, state.clientNotice.page - 1));
+  } else if (action === "notice-next") {
+    if (hasNextNoticePage()) loadClientNotices(state.clientNotice.page + 1);
+  } else if (action === "notice-consume") {
+    consumeClientNotice(target.dataset.noticeId || "");
+  }
+}
+
+function handleToolModalBodyChange(event) {
+  if (state.activeModal?.type === "client-notice" && event.target.matches("#clientNoticeWarnType")) {
+    syncClientNoticeFields();
+    loadClientNoticeEvents();
+  }
+}
+
+function handleToolModalBodyKeydown(event) {
+  if (event.key !== "Enter" || event.target.matches("textarea")) return;
+  if (state.activeModal?.type === "global-search") {
+    event.preventDefault();
+    runGlobalSearch(1);
+  } else if (state.activeModal?.type === "client-stats") {
+    event.preventDefault();
+    refreshClientStats();
+  } else if (state.activeModal?.type === "client-notice") {
+    event.preventDefault();
+    loadClientNotices(1);
   }
 }
 
@@ -5619,6 +6647,218 @@ function firstValue(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "");
 }
 
+function unwrapPayloadData(payload) {
+  let value = payload;
+  const seen = new Set();
+  while (value && typeof value === "object" && !Array.isArray(value) && !seen.has(value)) {
+    seen.add(value);
+    if (value.data !== undefined && Object.keys(value).some((key) => ["success", "message", "msg", "code", "status"].includes(key))) {
+      value = value.data;
+      continue;
+    }
+    break;
+  }
+  return value;
+}
+
+function findFirstArray(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== "object") return null;
+  const direct = [value.records, value.rows, value.list, value.items, value.data, value.result].find(Array.isArray);
+  if (direct) return direct;
+  for (const nested of Object.values(value)) {
+    if (Array.isArray(nested)) return nested;
+    if (nested && typeof nested === "object") {
+      const found = findFirstArray(nested);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function getRecordsDeep(payload) {
+  return findFirstArray(unwrapPayloadData(payload)) || [];
+}
+
+function toNumber(value, fallback = 0) {
+  if (value && typeof value === "object" && "value" in value) return toNumber(value.value, fallback);
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function getTotalDeep(payload) {
+  const candidates = [];
+  let cursor = payload;
+  const seen = new Set();
+  while (cursor && typeof cursor === "object" && !Array.isArray(cursor) && !seen.has(cursor)) {
+    seen.add(cursor);
+    candidates.push(cursor.total, cursor.count, cursor.totalCount, cursor.totalNum, cursor.allCount);
+    cursor = cursor.data !== undefined ? cursor.data : cursor.result;
+  }
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate !== null && candidate !== "") return toNumber(candidate);
+  }
+  return getRecordsDeep(payload).length;
+}
+
+function normalizeDbType(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "0";
+  const lower = text.toLowerCase();
+  const named = DB_TYPE_OPTIONS.find((item) => item.label.toLowerCase() === lower);
+  if (named) return named.value;
+  return text;
+}
+
+function renderNoticeFilterField(id, label, value, placeholder) {
+  return `
+    <label class="modal-field">
+      <span>${escapeHtml(label)}</span>
+      <input id="${escapeAttr(id)}" value="${escapeAttr(value)}" placeholder="${escapeAttr(placeholder)}" />
+    </label>
+  `;
+}
+
+function normalizeNoticeEvents(events = []) {
+  return (events || []).map((item, index) => {
+    if (item === null || item === undefined || item === "") return null;
+    if (typeof item !== "object") {
+      return { value: String(item), label: String(item) };
+    }
+    const value = firstValue(item.value, item.key, item.id, item.eventType, item.warnEvent, item.code, index);
+    const label = firstValue(item.label, item.name, item.title, item.eventName, item.warnEventStr, item.text, value);
+    return { value: String(value), label: String(label) };
+  }).filter(Boolean);
+}
+
+function uniqueNumbers(values = []) {
+  return [...new Set(values.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value >= 0))];
+}
+
+function estimateNoticeUnread(payload, records = []) {
+  const unread = firstValue(
+    payload?.unread,
+    payload?.unreadCount,
+    payload?.data?.unread,
+    payload?.data?.unreadCount,
+    payload?.data?.totalUnread,
+    payload?.data?.total?.unread
+  );
+  if (unread !== undefined) return toNumber(unread);
+  const currentUnread = records.filter((item) => !item.consumed).length;
+  if (currentUnread) return currentUnread;
+  return getTotalDeep(payload);
+}
+
+function clonePlainObject(value) {
+  try {
+    return JSON.parse(JSON.stringify(value || {}));
+  } catch {
+    return {};
+  }
+}
+
+function toPascalCase(value) {
+  const text = String(value || "");
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+function castLike(value, reference) {
+  if (typeof reference === "boolean") return value === true || value === "true";
+  if (typeof reference === "number") {
+    const number = Number(value);
+    return Number.isNaN(number) ? reference : number;
+  }
+  if (reference === null && value === "") return null;
+  return value;
+}
+
+function splitListValue(value) {
+  return String(value || "")
+    .split(/[\s,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toDateTimeLocal(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function fromDateTimeLocal(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toISOString();
+}
+
+function formatFullTime(value) {
+  if (!value) return "";
+  let date;
+  if (typeof value === "number") {
+    date = new Date(value < 100000000000 ? value * 1000 : value);
+  } else {
+    date = new Date(value);
+  }
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+function humanizeKey(key) {
+  const text = String(key || "");
+  const zh = {
+    userCount: "用户总数",
+    messageCount: "消息数",
+    robotCount: "机器人数",
+    replyCount: "回复数"
+  };
+  if (zh[text]) return zh[text];
+  return text
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/_/g, " ")
+    .replace(/^./, (char) => char.toUpperCase());
+}
+
+function formatStatValue(value) {
+  const number = Number(value);
+  if (!Number.isNaN(number)) return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, "");
+  return String(value ?? "-");
+}
+
+function contentTypeName(value) {
+  const map = {
+    0: "文本",
+    1: "图片",
+    2: "语音",
+    3: "视频",
+    4: "动图",
+    5: "链接",
+    6: "小程序",
+    7: "文件"
+  };
+  return value === undefined || value === null || value === "" ? "" : (map[value] || String(value));
+}
+
+function messageDirectionName(item = {}) {
+  const outgoing = Boolean(item.isSend || item.isSelf || item.isCustomerService || item.direction === "outgoing");
+  return outgoing ? "客服回复" : "用户消息";
+}
+
+function renderSearchContent(text) {
+  const value = String(text || "");
+  if (!value) return "-";
+  return linkifyMessageText(value);
+}
+
 function mergeUserInfo(contact, info) {
   return {
     ...(contact || {}),
@@ -6471,6 +7711,10 @@ function removeContactLocally(contactId) {
 
 function startAutoRefresh() {
   stopAutoRefresh();
+  if (state.clientPaused) {
+    updateConnectionState(false);
+    return;
+  }
   refreshTimer = window.setInterval(async () => {
     if (document.hidden) return;
     try {
@@ -6481,6 +7725,7 @@ function startAutoRefresh() {
       if (state.activeTool === "detail") await loadAccountDetails(state.accountDetailPage);
       if (state.activeTool === "history") await loadHistoryMessages(1, "merge");
       await loadFriendRequestBadgeTotals();
+      await loadClientNoticeBadge();
     } catch (error) {
       log("auto refresh error", { error: error.message });
     }

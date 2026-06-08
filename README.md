@@ -107,9 +107,56 @@ Remove-Item -LiteralPath C:\youchat-dev-web\logs\api-capture.ndjson -ErrorAction
 .\watch-api-capture.ps1
 ```
 
+## 右上角客户端功能区
+
+右上角分成两组：
+
+- 原生客户端功能组：统计后台、聊天记录全局搜索、消息统计、通知、客户端设置菜单。
+- Web AI 设置：单独的 `AI` 按钮，持久化到浏览器 `localStorage`。
+
+客户端设置菜单包含：
+
+- `设置`：读取 `/System/GetOptions`，保存 `/System/SetOptions`。
+- `数据库管理`：读取 `/System/GetConnectionString`，保存 `/System/SetConnectionString`。
+- `挂起/恢复`：Web 本地暂停或恢复自动刷新。
+- `退出登录`：回到登录页。
+- `关闭程序`：网页端会尝试关闭当前标签页。
+
+聊天记录全局搜索调用：
+
+```text
+POST /ChatContent/SearchList
+```
+
+消息统计面板调用：
+
+```text
+POST /Summary/RealTimeSummary
+```
+
+当前真实返回是嵌套结构，分段字段包括 `it/count/fromUser/fromUserRedpointCount/fromRobot/fromKefu/contactCount`，Web 会按这些字段汇总和绘制趋势。
+
+通知面板调用：
+
+```text
+POST /Notice/GetList
+POST /Notice/GetEvents
+POST /Notice/ConsumeNotice
+```
+
+当前通知列表总数来自 `data.total.value`，列表来自 `data.data`。如果后续抓包发现有未读专用字段或接口，再优先替换通知角标来源。
+
+数据库管理会按 `/System/GetConnectionString` 返回的 `databaseType` 数字枚举保存，不把显示名称当作类型值提交。
+
+统计后台按钮会按当前服务端地址打开 `/abnormal`，例如：
+
+```text
+http://192.168.9.83:18080/abnormal
+```
+
 ## AI 和 skill 回复
 
-AI 设置在右上角齿轮里持久化到浏览器 `localStorage`，当前默认使用 OpenAI 兼容中转：
+AI 设置在右上角单独的 `AI` 按钮里，持久化到浏览器 `localStorage`，当前默认使用 OpenAI 兼容中转：
 
 ```text
 https://sub2.sn55.cn/
@@ -123,7 +170,7 @@ AI 请求统一走本地中转：
 POST /ai/chat/completions
 ```
 
-`server.js` 会再转发到右上角设置的 OpenAI 兼容端点。内置预设：
+`server.js` 会再转发到右上角 AI 设置的 OpenAI 兼容端点。内置预设：
 
 - `sub2 中转`：`https://sub2.sn55.cn/`，默认模型 `gpt-5.4-mini`。
 - `DeepSeek`：`https://api.deepseek.com`，默认模型 `deepseek-v4-flash`。DeepSeek 使用自己的 API Key，点击预设不会覆盖当前密钥。
@@ -224,6 +271,8 @@ http://服务器IP:端口/api
 ## 当前注意点
 
 - 当前不会使用假数据，接口失败会显示真实失败信息并写入抓包日志。
+- 右上角客户端设置和 Web AI 设置已经分离；不要把原生 `System/GetOptions` 里的 `aiOptions` 当成 Web AI 推荐配置。
+- `挂起` 当前是 Web 本地自动刷新暂停，后续如果抓到原生服务端挂起接口，再替换这一层逻辑。
 - “当前”会话必须使用 `/Contact/GetContactList` + 短客服 `accountId`。当前飞牛数据里 `Boom666` 对应短 id 是 `2`；不带 `accountId` 的同接口会返回全量联系人，不能当作当前列表数量。
 - 聊天消息卡片已按真实类型区分：`contentType=5` 网页卡片、`contentType=6` 小程序、`contentType=8` 文件卡片。
 - 知名网站链接卡片无真实缩略图时会用平台 logo 兜底，当前覆盖小红书、快手、1688、得物、淘宝、天猫、京东、拼多多、抖音、B站、微博、知乎、美团、饿了么；真实 `cardImg` 或 `og:image` 仍然优先。
