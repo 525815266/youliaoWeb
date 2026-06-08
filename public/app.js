@@ -217,7 +217,6 @@ const el = {};
 let refreshTimer = null;
 let scrollRequestId = 0;
 const scrollRequestIds = new WeakMap();
-let composerResizeObserver = null;
 
 function $(id) {
   return document.getElementById(id);
@@ -314,7 +313,6 @@ function boot() {
   hydrateLoginFields();
   hydrateAiSettingsFields();
   bindEvents();
-  observeComposerLayout();
   renderAll();
   loadReplySkills();
 }
@@ -436,32 +434,6 @@ function showAiSettings() {
 
 function hideAiSettings() {
   el.aiSettingsOverlay.classList.add("is-hidden");
-}
-
-function observeComposerLayout() {
-  if (!el.aiSuggestionCard || !el.replyText) return;
-  const composer = el.replyText.closest(".composer");
-  if (!composer) return;
-  updateComposerLayoutMetrics();
-  if (window.ResizeObserver) {
-    composerResizeObserver?.disconnect();
-    composerResizeObserver = new ResizeObserver(() => updateComposerLayoutMetrics());
-    composerResizeObserver.observe(composer);
-    composerResizeObserver.observe(el.aiSuggestionCard);
-  } else {
-    window.addEventListener("resize", updateComposerLayoutMetrics);
-  }
-}
-
-function updateComposerLayoutMetrics() {
-  const composer = el.replyText?.closest(".composer");
-  if (!composer || !el.aiSuggestionCard) return;
-  const composerHeight = Math.ceil(composer.getBoundingClientRect().height || 0);
-  document.documentElement.style.setProperty("--composer-height", `${composerHeight}px`);
-  const suggestionHeight = el.aiSuggestionCard.classList.contains("is-hidden")
-    ? 0
-    : Math.ceil(el.aiSuggestionCard.getBoundingClientRect().height || 0);
-  document.documentElement.style.setProperty("--ai-suggestion-height", `${suggestionHeight}px`);
 }
 
 function saveAiSettings(event) {
@@ -698,7 +670,6 @@ function showWorkbench() {
   el.workbenchView.classList.remove("is-hidden");
   el.operatorName.textContent = `客服 ${state.account || "未登录"}`;
   updateConnectionState(false);
-  requestAnimationFrame(updateComposerLayoutMetrics);
 }
 
 function showLogin() {
@@ -3334,7 +3305,6 @@ function renderDraftImages() {
       <button type="button" data-remove-draft-image="${escapeAttr(image.id)}" aria-label="移除图片"><i class="native-icon bfi-close" aria-hidden="true"></i></button>
     </figure>
   `).join("");
-  requestAnimationFrame(updateComposerLayoutMetrics);
 }
 
 function handleDraftImageClick(event) {
@@ -4676,7 +4646,6 @@ function renderAiSuggestionCard() {
       </article>
     `).join("");
   }
-  requestAnimationFrame(updateComposerLayoutMetrics);
   if (shouldKeepMessageBottom) {
     requestAnimationFrame(() => scheduleMessageListBottom());
   }

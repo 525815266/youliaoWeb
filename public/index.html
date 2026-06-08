@@ -180,7 +180,7 @@
 
           <section id="messageList" class="message-list" aria-label="聊天记录"></section>
 
-          <div id="aiSuggestionCard" class="ai-suggestion-card is-hidden">
+          <section id="aiSuggestionCard" class="ai-suggestion-card is-hidden" aria-label="AI 推荐回复">
             <div class="ai-suggestion-head">
               <strong id="aiSuggestionTitle">AI 推荐</strong>
               <button id="refreshAiSuggestion" class="mini-action ghost suggestion-refresh" type="button">换一换</button>
@@ -191,10 +191,10 @@
               <button id="applyAiSuggestion" class="mini-action" type="button">采用</button>
               <button id="sendAiSuggestion" class="mini-action" type="button">发送</button>
             </div>
-          </div>
+          </section>
 
-          <footer class="composer">
-            <div class="composer-tools">
+          <footer class="composer" aria-label="消息输入区">
+            <div class="composer-module composer-tools">
               <div class="composer-icon-group" aria-label="发送工具">
                 <button id="emojiTool" class="tool-icon-button" type="button" title="表情" aria-label="表情"><i class="native-icon bfi-emoji" aria-hidden="true"></i></button>
                 <button id="superCommandTool" class="tool-icon-button" type="button" title="发送指令" aria-label="发送指令"><i class="native-icon bfi-code" aria-hidden="true"></i></button>
@@ -216,12 +216,19 @@
               </label>
               <input id="imageFileInput" class="file-input" type="file" accept="image/*" multiple />
             </div>
-            <div id="emojiPopover" class="emoji-popover is-hidden" role="dialog" aria-label="表情选择"></div>
-            <div id="draftImageTray" class="draft-image-tray is-hidden" aria-label="待发送图片"></div>
-            <textarea id="replyText" placeholder="请输入客服回复内容"></textarea>
-            <div class="send-row">
-              <button id="useAi" class="light-button" type="button">采用推荐</button>
-              <button id="sendText" class="send-button" type="button">发送</button>
+            <div class="composer-module composer-attachments" aria-label="输入附件">
+              <div id="emojiPopover" class="emoji-popover is-hidden" role="dialog" aria-label="表情选择"></div>
+              <div id="draftImageTray" class="draft-image-tray is-hidden" aria-label="待发送图片"></div>
+            </div>
+            <div class="composer-module composer-editor">
+              <textarea id="replyText" placeholder="请输入客服回复内容"></textarea>
+            </div>
+            <div class="composer-module composer-actions">
+              <span class="composer-status">文字和图片会按接口能力分开发送</span>
+              <div class="send-row">
+                <button id="useAi" class="light-button" type="button">采用推荐</button>
+                <button id="sendText" class="send-button" type="button">发送</button>
+              </div>
             </div>
           </footer>
         </main>

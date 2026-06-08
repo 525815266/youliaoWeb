@@ -337,23 +337,25 @@ Recent AI behavior:
 
 Recent AI UI:
 
-- Recommendation panel is a compact floating strip above the composer, not big cards and not part of the normal document flow.
+- Recommendation panel is now its own `#aiSuggestionCard` grid row between `#messageList` and `footer.composer`.
+- It is not inside the composer and is not absolutely positioned.
 - Left label: `AI 推荐`, `文字优化`, or `skill 回复`.
 - Right list: 1 to 3 candidates, each with `采用` and `发送`.
 - Left rail includes `换一换`, which regenerates a different tone/style.
 - Global apply/send buttons are hidden in the strip. Bottom `采用推荐` remains as backup.
-- Keep this compact. It may cover/consume a little message-list space, but it must never push the composer downward or hide the textarea.
+- The panel may consume message-list space, but must never move the composer down or hide the textarea.
 
 Composer/AI layout details:
 
-- `observeComposerLayout()` and `updateComposerLayoutMetrics()` maintain:
-  - `--composer-height`
-  - `--ai-suggestion-height`
-- `.ai-suggestion-card` is `position: absolute` in `.chat-pane`, with `bottom: calc(var(--composer-height) + 8px)`.
-- `.message-list` uses bottom padding based on `--ai-suggestion-height` so latest messages are not hidden by the floating strip.
-- `.chat-pane` rows should stay `58px minmax(0, 1fr) auto`.
-- `.composer` default height is compact; image drafts expand it upward only.
-- Do not move `#aiSuggestionCard` back inside `footer.composer` or into normal layout flow.
+- `.chat-pane` rows are `58px minmax(0, 1fr) auto auto`: header, message list, recommendation row, composer row.
+- `footer.composer` is split into independent modules:
+  - `.composer-tools`
+  - `.composer-attachments`
+  - `.composer-editor`
+  - `.composer-actions`
+- `.composer-tools` must remain a single horizontal strip with overflow-x scrolling. Do not allow it to wrap and steal textarea height.
+- Do not reintroduce `observeComposerLayout()`, `updateComposerLayoutMetrics()`, `--composer-height`, or `--ai-suggestion-height`.
+- Do not make `.ai-suggestion-card` `position:absolute` again. It caused repeated overlap and input-box jumping.
 
 Skill optimize:
 

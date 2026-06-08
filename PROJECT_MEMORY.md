@@ -1121,7 +1121,9 @@ UI 修复：
   - `loadContacts()` 的历史 tab 现在只显示服务端历史会话。
   - `archiveAndClearCurrentList()` 清空后只做短时防回弹过滤，不写本地历史。
 
-输入区和 AI 推荐浮层修复：
+输入区和 AI 推荐浮层修复（已废弃，见第 32 节）：
+
+> 下面这套 `ResizeObserver + 绝对定位浮层` 方案后来又导致输入框、工具条、图片托盘和 AI 推荐互相挤压。2026-06-08 第 32 节已改成独立 grid 行和输入区模块隔离。后续不要按本小节恢复旧实现。
 
 - `public/app.js`
   - 新增 `observeComposerLayout()` 和 `updateComposerLayoutMetrics()`。
@@ -1158,7 +1160,7 @@ UI 修复：
 后续注意：
 
 - 如果后续抓包证明原客户端底部“历史” tab 使用了另一个接口或不同参数，应优先把 Web 历史 tab 改成真实接口口径，不要依赖本地归档。
-- 不要把 `.ai-suggestion-card` 放回文档流里，否则输入框会再次被挤压。
+- 旧结论“不要把 `.ai-suggestion-card` 放回文档流”已被第 32 节替代。当前正确做法是：`#aiSuggestionCard` 作为 `.chat-pane` 独立 grid 行存在，且不能进入 `.composer` 内部。
 - 不要在业务界面显示历史 tab 的 `本地` 来源标签；调试来源只写日志或文档。
 
 ## 29. 2026-06-08 当前会话账号过滤回退与数量修复
@@ -1334,3 +1336,65 @@ UI 修复：
 提交注意：
 
 - `logs/api-capture.ndjson` 是运行抓包日志，包含旧目标请求记录，本次不提交。
+
+## 32. 2026-06-08 输入区模块化隔离修复
+
+用户反馈：
+
+- 聊天输入框、工具栏、图片托盘和 AI 推荐又挤在一起。
+- 不能继续靠一个框架里互相影响的高度计算修补，应该分模块写，避免谁影响谁。
+
+问题原因：
+
+- 旧版本把 `#aiSuggestionCard` 做成 `.chat-pane` 内的绝对定位浮层。
+- 旧版本再用 `ResizeObserver` 计算 `.composer` 和推荐条高度，写入：
+  - `--composer-height`
+  - `--ai-suggestion-height`
+- `.message-list`、`.ai-suggestion-card` 和 `.composer` 互相依赖这些动态高度，图片托盘、AI 推荐、工具栏一变就容易重排、跳动或压扁输入框。
+- `.composer-tools` 在宽度不足时会换行，把编辑区高度挤掉。
+
+本次实现：
+
+- `public/index.html`
+  - `#aiSuggestionCard` 改为独立 `section`，位于 `#messageList` 和 `footer.composer` 之间。
+  - `footer.composer` 拆成四个独立模块：
+    - `.composer-tools`
+    - `.composer-attachments`
+    - `.composer-editor`
+    - `.composer-actions`
+- `public/styles.css`
+  - `.chat-pane` 改为 `58px minmax(0, 1fr) auto auto`，即头部、消息区、AI 推荐区、输入区四行。
+  - `.message-list` 不再使用基于 `--ai-suggestion-height` 的底部 padding。
+  - `.ai-suggestion-card` 不再 `position:absolute`，改为正常 grid 行。
+  - `.composer` 使用固定模块行：工具条、附件、编辑器、发送区。
+  - `.composer-tools` 改成单行横向滚动工具带，带独立边框，不允许换行压缩输入区。
+  - `.composer-editor` 单独承载 textarea，保持自己的高度和滚动。
+- `public/app.js`
+  - 删除 `composerResizeObserver`。
+  - 删除 `observeComposerLayout()`。
+  - 删除 `updateComposerLayoutMetrics()`。
+  - 删除工作台显示、草稿图片渲染、AI 推荐渲染时的动态高度测量调用。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless 真实布局验证通过，测试场景包含：
+  - 12 条聊天消息。
+  - 3 条 AI 推荐。
+  - 1 张草稿图片。
+  - 宽度 1224，高度 768。
+- 关键测量：
+  - `.composer-tools`：38px。
+  - `.composer-attachments`：74px。
+  - `.composer-editor` / textarea：82px。
+  - `.composer-actions`：30px。
+  - 模块间距均为 6px。
+  - `overlap=false`。
+- 截图输出：`composer-layout-check.png`，仅作本地验证截图，不提交。
+
+后续禁止回退：
+
+- 不要把 `#aiSuggestionCard` 放回 `.composer` 内部。
+- 不要把 `#aiSuggestionCard` 改回绝对定位浮层。
+- 不要恢复 `--composer-height`、`--ai-suggestion-height` 或 `ResizeObserver` 动态高度方案。
+- 不要让 `.composer-tools` 换行；按钮不够宽时横向滚动，不能压缩输入框。

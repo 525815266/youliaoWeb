@@ -15,8 +15,6 @@
   --danger: #be2d2d;
   --shadow-soft: 0 18px 50px rgba(32, 83, 143, 0.12);
   --radius: 6px;
-  --composer-height: 136px;
-  --ai-suggestion-height: 0px;
 }
 
 @font-face {
@@ -1065,7 +1063,7 @@ textarea:focus-visible {
 .chat-pane {
   position: relative;
   display: grid;
-  grid-template-rows: 58px minmax(0, 1fr) auto;
+  grid-template-rows: 58px minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
   background: #eef3f8;
@@ -1136,12 +1134,21 @@ textarea:focus-visible {
 .composer-tools {
   position: relative;
   flex: 0 0 auto;
+  flex-wrap: nowrap;
   gap: 10px;
-  min-height: 34px;
+  min-height: 38px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 3px 6px;
+  border: 1px solid #e1ebf6;
+  border-radius: var(--radius);
+  background: #fbfdff;
+  scrollbar-width: thin;
 }
 
 .composer-icon-group,
 .composer-link-group {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1211,7 +1218,7 @@ textarea:focus-visible {
   gap: 12px;
   min-height: 0;
   overflow: auto;
-  padding: 18px 20px calc(18px + var(--ai-suggestion-height));
+  padding: 18px 20px;
 }
 
 .day-divider {
@@ -1521,12 +1528,11 @@ textarea:focus-visible {
 
 .composer {
   display: grid;
-  grid-template-rows: auto auto auto minmax(46px, 1fr) auto;
-  gap: 4px;
-  min-height: 128px;
-  height: clamp(128px, 17dvh, 158px);
-  max-height: 158px;
-  padding: 7px 12px 8px;
+  grid-template-rows: auto auto minmax(76px, 1fr) auto;
+  gap: 6px;
+  min-height: 176px;
+  max-height: min(292px, 36dvh);
+  padding: 8px 12px 9px;
   border-top: 1px solid var(--line);
   background: #fff;
   overflow: hidden;
@@ -1534,8 +1540,13 @@ textarea:focus-visible {
 
 .composer.has-draft-images,
 .composer:has(.draft-image-tray:not(.is-hidden)) {
-  height: clamp(204px, 29dvh, 238px);
-  max-height: 238px;
+  grid-template-rows: auto auto minmax(82px, 1fr) auto;
+  min-height: 236px;
+  max-height: min(334px, 43dvh);
+}
+
+.composer-module {
+  min-width: 0;
 }
 
 .tool-button.strong {
@@ -1545,6 +1556,7 @@ textarea:focus-visible {
 }
 
 .red-dot-filter {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -1557,6 +1569,12 @@ textarea:focus-visible {
   width: 14px;
   height: 14px;
   accent-color: var(--you-blue);
+}
+
+.composer-attachments {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
 }
 
 .emoji-popover {
@@ -1589,24 +1607,18 @@ textarea:focus-visible {
 }
 
 .ai-suggestion-card {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: calc(var(--composer-height) + 8px);
-  z-index: 6;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
-  min-height: 0;
-  max-height: min(118px, 18dvh);
+  gap: 8px;
+  min-height: 46px;
+  max-height: min(122px, 18dvh);
   margin: 0;
-  padding: 7px;
-  overflow: visible;
-  border: 1px solid #c9dff5;
-  border-radius: 18px;
-  background: rgba(248, 252, 255, 0.97);
-  box-shadow: 0 10px 28px rgba(28, 73, 124, 0.14);
+  padding: 7px 12px;
+  overflow: hidden;
+  border-top: 1px solid #c9dff5;
+  background: #f8fcff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .ai-suggestion-card.is-hidden {
@@ -1625,13 +1637,13 @@ textarea:focus-visible {
   flex-direction: row;
   align-items: center;
   justify-content: flex-start;
-  gap: 4px;
-  min-height: 28px;
-  padding: 2px 3px;
+  gap: 5px;
+  min-height: 30px;
+  padding: 2px 4px 2px 8px;
   border: 1px solid #c8dff8;
   border-radius: 999px;
   background: #fff;
-  box-shadow: 0 4px 12px rgba(32, 83, 143, 0.08);
+  box-shadow: 0 3px 10px rgba(32, 83, 143, 0.07);
 }
 
 .ai-suggestion-head .mini-action {
@@ -1677,7 +1689,7 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: 1fr;
   min-width: 0;
-  max-height: calc(min(118px, 18dvh) - 14px);
+  max-height: calc(min(122px, 18dvh) - 14px);
   align-content: start;
   gap: 5px;
   overflow: auto;
@@ -1719,7 +1731,7 @@ textarea:focus-visible {
 
 .ai-suggestion-option p {
   min-width: 0;
-  max-height: 40px;
+  max-height: 46px;
   margin: 0;
   overflow: auto;
   color: #1f2937;
@@ -1823,6 +1835,11 @@ textarea:focus-visible {
   font-size: 10px;
 }
 
+.composer-editor {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .composer textarea {
   width: 100%;
   min-height: 0;
@@ -1833,6 +1850,23 @@ textarea:focus-visible {
   padding: 8px 10px;
   color: #172033;
   background: #fff;
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.composer-status {
+  min-width: 0;
+  overflow: hidden;
+  color: #7a8798;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .send-row {
@@ -3267,16 +3301,14 @@ textarea:focus-visible {
   }
 
   .composer-tools {
-    flex-wrap: wrap;
-    align-items: flex-start;
+    align-items: center;
   }
 
   .ai-suggestion-card {
     grid-template-columns: 1fr;
-    left: 10px;
-    right: 10px;
-    bottom: calc(var(--composer-height) + 6px);
+    gap: 7px;
     max-height: 146px;
+    padding: 8px 10px;
   }
 
   .ai-suggestion-head {
@@ -3298,13 +3330,11 @@ textarea:focus-visible {
 
   .ai-suggestion-option p {
     white-space: normal;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+    max-height: 54px;
   }
 
   .red-dot-filter {
-    margin-left: 0;
+    margin-left: auto;
   }
 }
 
