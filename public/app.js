@@ -73,6 +73,7 @@ const READ_STATE_STORAGE_KEY = "youchat.readContactState";
 const CLEARED_CONTACTS_STORAGE_KEY = "youchat.clearedContactState";
 const CONTACT_LIST_ACCOUNT_IDS_STORAGE_KEY = "youchat.contactListAccountIds";
 const CLEAR_LIST_GRACE_MS = 30000;
+const CONTACT_LIST_ACCOUNT_ID_PATTERN = /^[1-9]\d{0,9}$/;
 const EMOJI_SHORTCUTS = [
   "[微笑]",
   "[撇嘴]",
@@ -932,7 +933,7 @@ function getContactListAccountCandidates() {
     state.accountIdResolved ? state.accountId : "",
     ...verified,
     verified.includes(String(state.accountId || "")) ? state.accountId : ""
-  ], state.account);
+  ], state.account, { strictShortId: true });
 }
 
 function buildContactListParams(tab = state.listTab, options = {}) {
@@ -985,26 +986,28 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
       ...options,
       omitAccountId: tab === "current" ? true : options.omitAccountId
     }, {
-      source: tab === "current" ? "global" : "server"
+      source: tab === "current" ? "global-filtered" : "server"
     });
   }
 
   let globalResult = null;
-  try {
-    globalResult = await fetchContactListPayload(tab, {
-      ...options,
-      omitAccountId: true
-    }, {
-      source: "global"
-    });
-    if (isUsefulContactListResult(globalResult) || isExplicitEmptyContactListResult(globalResult)) {
-      return globalResult;
+  const candidates = getContactListAccountCandidates();
+  if (!candidates.length) {
+    try {
+      globalResult = await fetchContactListPayload(tab, {
+        ...options,
+        omitAccountId: true
+      }, {
+        source: "global-filtered"
+      });
+      if (isUsefulContactListResult(globalResult)) {
+        return globalResult;
+      }
+    } catch (error) {
+      log("contact list client-compatible request failed", { error: error.message });
     }
-  } catch (error) {
-    log("contact list client-compatible request failed", { error: error.message });
   }
 
-  const candidates = getContactListAccountCandidates();
   const emptyAccountResults = [];
   for (const accountId of candidates) {
     try {
@@ -1015,7 +1018,7 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
         source: "account",
         accountIdUsed: accountId
       });
-      if (isUsefulContactListResult(result) || isExplicitEmptyContactListResult(result)) return result;
+      if (isUsefulContactListResult(result) || isExplicitEmptyContactListResult(result) || result.isZeroData) return result;
       emptyAccountResults.push(result);
     } catch (error) {
       log("contact list account filter failed", { accountId, error: error.message });
@@ -1042,14 +1045,17 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
 async function fetchContactListPayload(tab, options = {}, metadata = {}) {
   const params = buildContactListParams(tab, options);
   const payload = await api("/Contact/GetContactList", params);
-  const contacts = sortContacts(getRecords(payload).map(normalizeContact).map(applyReadStateToContact));
-  const explicitTotal = getExplicitTotal(payload);
+  const rawContacts = getRecords(payload).map(normalizeContact).map(applyReadStateToContact);
+  const isGlobalCurrent = tab === "current" && String(metadata.source || "").startsWith("global");
+  const contacts = sortContacts(isGlobalCurrent ? filterCurrentConversationContacts(rawContacts) : rawContacts);
+  const explicitTotal = isGlobalCurrent ? contacts.length : getExplicitTotal(payload);
   return {
     payload,
     params,
     contacts,
+    rawContacts,
     explicitTotal,
-    total: getContactListPayloadTotal(payload, contacts),
+    total: isGlobalCurrent ? contacts.length : getContactListPayloadTotal(payload, contacts),
     isZeroData: hasZeroDataPayload(payload),
     source: metadata.source || "server",
     accountIdUsed: metadata.accountIdUsed || params.accountId || ""
@@ -1070,12 +1076,24 @@ function isExplicitEmptyContactListResult(result) {
   return result?.explicitTotal === 0 && !result?.isZeroData;
 }
 
+function isCurrentConversationContact(contact) {
+  if (!contact) return false;
+  const conversationId = Number(contact.conversationId || contact.conversation?.id || 0);
+  const accountId = Number(contact.accountId || contact.accId || contact.csAccountId || contact.conversation?.accountId || 0);
+  return conversationId > 0 && accountId > 0;
+}
+
+function filterCurrentConversationContacts(contacts) {
+  return (contacts || []).filter(isCurrentConversationContact);
+}
+
 function shouldPreserveEmptyContactResult(result, contacts, options = {}) {
   const hasSearch = Boolean(el.search?.value?.trim());
+  const existingLooksCurrent = state.contacts.length > 0 && state.contacts.every(isCurrentConversationContact);
   return state.listTab === "current"
     && !hasSearch
     && !options.allowEmpty
-    && state.contacts.length > 0
+    && existingLooksCurrent
     && contacts.length === 0
     && (result?.isZeroData || result?.source === "account-empty");
 }
@@ -1104,7 +1122,8 @@ async function loadContactCounts() {
       state.listCountSources[tab] = "local-cleared";
       return;
     }
-    if (tab === "current" && state.contacts.length && (data.source === "account-empty" || data.isZeroData)) {
+    const existingLooksCurrent = state.contacts.length > 0 && state.contacts.every(isCurrentConversationContact);
+    if (tab === "current" && existingLooksCurrent && (data.source === "account-empty" || data.isZeroData)) {
       state.listCounts.current = Math.max(Number(state.listCounts.current || 0), state.contacts.length);
       state.listServerCounts.current = Math.max(Number(state.listServerCounts.current || 0), state.contacts.length);
       state.listCountSources.current = "stale";
@@ -1592,14 +1611,14 @@ function persistClearedContactState() {
 function loadContactListAccountIds() {
   try {
     const parsed = JSON.parse(localStorage.getItem(CONTACT_LIST_ACCOUNT_IDS_STORAGE_KEY) || "[]");
-    return Array.isArray(parsed) ? uniqueContactListAccountIds(parsed) : [];
+    return Array.isArray(parsed) ? uniqueContactListAccountIds(parsed, "", { strictShortId: true }) : [];
   } catch {
     return [];
   }
 }
 
 function persistContactListAccountIds() {
-  state.contactListAccountIds = uniqueContactListAccountIds(state.contactListAccountIds || [], state.account);
+  state.contactListAccountIds = uniqueContactListAccountIds(state.contactListAccountIds || [], state.account, { strictShortId: true });
   localStorage.setItem(CONTACT_LIST_ACCOUNT_IDS_STORAGE_KEY, JSON.stringify(state.contactListAccountIds));
 }
 
@@ -1625,15 +1644,17 @@ function extractContactListAccountIds(account) {
   return uniqueContactListAccountIds([
     account?.id,
     account?.accId,
-    /^\d{1,10}$/.test(shortAccountId) ? shortAccountId : ""
-  ]);
+    CONTACT_LIST_ACCOUNT_ID_PATTERN.test(shortAccountId) ? shortAccountId : ""
+  ], state.account, { strictShortId: true });
 }
 
-function uniqueContactListAccountIds(values, currentAccount = "") {
+function uniqueContactListAccountIds(values, currentAccount = "", options = {}) {
+  const strictShortId = Boolean(options.strictShortId);
   const seen = new Set();
   return (values || [])
     .map((value) => String(value ?? "").trim())
     .filter((value) => value && value !== "0" && value !== String(currentAccount || ""))
+    .filter((value) => !strictShortId || CONTACT_LIST_ACCOUNT_ID_PATTERN.test(value))
     .filter((value) => {
       if (seen.has(value)) return false;
       seen.add(value);

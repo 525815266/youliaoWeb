@@ -710,6 +710,29 @@ ALTER TABLE `ChatContent_2026_06_08`
 - Verified `POST /api/Contact/GetContactList` and `POST /api/ChatContent/GetList` return real records again.
 - `System/CheckLoginStatus` can still time out or throw when called without params; do not confuse that residual endpoint behavior with the restored contact/chat path.
 
+2026-06-08 current conversation refresh/count fix:
+
+- User reported Web refresh produced strange extra conversations and wrong counts; official Windows client did not.
+- Root cause was frontend data shaping, not the FnOS MySQL collation issue.
+- API truth:
+  - `GET /Senstive/GetAccountList` returns `Boom666` with short id `id=2` and long backend account id `accountId=1556504756803862529`.
+  - `/Contact/GetContactList` must receive the short `accountId=2` for current customer-service conversations.
+  - Bare `/Contact/GetContactList` returns mixed/all contacts. Current probe returned `total=8034` with many `conversationId=0/accountId=0` ended/history contacts.
+  - `isHistory=true` returned `total=5707`; `isGuestbook=true` returned `total=0`.
+- `public/app.js` now:
+  - Resolves account candidates from `/Senstive/GetAccountList` before current list loading.
+  - Stores/uses only short numeric account ids via `CONTACT_LIST_ACCOUNT_ID_PATTERN`.
+  - Does not prefer the bare global request for current when a candidate account id exists.
+  - Filters global current fallback to `conversationId>0 && accountId>0`.
+  - Uses filtered count instead of bare `total=8034` for any `global-filtered` current fallback.
+  - Preserves ambiguous empty current responses only when existing contacts already all look like valid current conversations.
+- Browser verification after connecting to `http://localhost:5177`:
+  - Header: `2 个客户`.
+  - Tabs: `当前(2)`, `留言(0)`, `历史(5707)`.
+  - Current cards: `contactId=412`, `contactId=2303`.
+- Latest capture log after auto refresh showed current list requests include `accountId=2`.
+- Do not commit `logs/api-capture.ndjson`; it is runtime capture noise.
+
 ## Non-Negotiables
 
 - Do not fake searchable user IDs.

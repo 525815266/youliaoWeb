@@ -1587,3 +1587,61 @@ WHERE TABLE_SCHEMA = DATABASE()
 GROUP BY COLLATION_NAME
 ORDER BY COUNT(*) DESC;
 ```
+
+## 35. 2026-06-08 Web 刷新后当前会话混入历史修复
+
+用户反馈：
+
+- Web 客户端刷新后会出现一些莫名其妙的对话。
+- 会话数量也不对，曾出现类似 `当前(8034)` 的异常数量。
+- 官方 Windows 客户端没有这个情况。
+
+根因确认：
+
+- 这次不是服务端故障，而是 Web 前端的当前会话兜底逻辑不严谨。
+- 官方接口文档 `C:\Program Files\youchat-desktop\bin\YouChatService.xml` 明确写着：
+  - `/Contact/GetContactList` 传入 `accountId` 表示获取客服当前会话列表。
+  - `isGuestbook` 表示留言列表。
+  - `isHistory` 表示历史聊天列表。
+- 真实接口探针结果：
+  - `GET /Senstive/GetAccountList` 返回当前客服 `Boom666 / 客服-王`，短客服 id 是 `id=2`，后台长账号号是 `accountId=1556504756803862529`。
+  - `POST /Contact/GetContactList` 带 `accountId=2` 返回当前会话：`total=2`，记录均为 `conversationId>0/accountId>0`。
+  - `POST /Contact/GetContactList` 不带 `accountId` 返回全量联系人：`total=8034`，其中大量记录是 `conversationId=0/accountId=0` 的历史或已结束会话。
+  - `POST /Contact/GetContactList` 带 `isHistory=true` 返回历史：`total=5707`。
+  - `POST /Contact/GetContactList` 带 `isGuestbook=true` 当前返回 `total=0`。
+
+已修改：
+
+- `public/app.js`
+  - `fetchContactListWithFallback()` 当前 tab 不再优先使用无 `accountId` 的全量列表。
+  - 当前 tab 会先使用 `/Senstive/GetAccountList` 解析出的短客服 id，再带 `accountId=2` 查询。
+  - 无候选客服 id 时才允许走全量兜底，且全量兜底必须经过 `conversationId>0 && accountId>0` 过滤。
+  - `fetchContactListPayload()` 对 `global-filtered` 当前会话源强制使用过滤后的 `contacts.length` 作为数量，避免把接口 `total=8034` 带到 UI。
+  - 新增 `isCurrentConversationContact()` 和 `filterCurrentConversationContacts()`。
+  - `shouldPreserveEmptyContactResult()` 和 `loadContactCounts()` 只在现有列表本身都是真实当前会话时才保留旧列表，避免把已污染的全量列表继续保留下来。
+  - `CONTACT_LIST_ACCOUNT_ID_PATTERN` 限定当前会话用的客服 id 必须是短数字 id，防止把 `1556504756803862529` 这种后台长账号号当成 `GetContactList.accountId`。
+  - `loadContactListAccountIds()`、`persistContactListAccountIds()`、`getContactListAccountCandidates()`、`extractContactListAccountIds()` 都使用短 id 过滤。
+
+验证结果：
+
+- `npm run check` 通过。
+- 真实 API 探针通过：
+  - `accountId=2` 当前列表：`total=2 / current_like=2`。
+  - 无 `accountId` 全量列表：`total=8034`，只作为诊断，不再作为当前列表数量。
+  - `isHistory=true`：`total=5707`。
+  - `isGuestbook=true`：`total=0`。
+- 浏览器连接 `http://localhost:5177` 后验证：
+  - 会话头显示 `2 个客户`。
+  - 底部 tab 显示 `当前(2)`、`留言(0)`、`历史(5707)`。
+  - 当前列表只显示真实当前会话 `contactId=412` 和 `contactId=2303`。
+- `logs/api-capture.ndjson` 最新自动刷新请求显示：
+  - 当前列表请求均带 `accountId=2`。
+  - 自动刷新不再持续请求无 `accountId` 的 `8034` 全量当前列表。
+
+未来维护规则：
+
+- 当前会话列表必须带短客服 `accountId`，目前真实值是 `2`。
+- 不要把 `/Senstive/GetAccountList.accountId` 的长后台账号号当作 `/Contact/GetContactList.accountId`。
+- 不带 `accountId` 的 `/Contact/GetContactList` 是全量联系人/混合口径，不能直接显示在“当前”。
+- 如果将来服务端返回当前为空，只有现有列表已经全部满足 `conversationId>0/accountId>0` 时才允许保留旧列表。
+- 如果又出现 `当前(几千)`，第一步检查 `logs/api-capture.ndjson` 中当前 tab 的 `/Contact/GetContactList` 请求体是否丢了 `accountId=2`。
