@@ -58,18 +58,33 @@ Frontend uses:
 
 `server.js` captures every `/api/*` request/response into `logs/api-capture.ndjson`.
 
-## AccountId Gotcha
+Default API target:
 
-Current conversation list count must use the customer-service account `id` from:
+- `public/app.js` and `server.js` default to the Windows client's `ChatServiceUrl`: `https://im.52youzai.com/api`.
+- The login server field accepts a full API URL, for example `https://im.52youzai.com/api`.
+- If the user enters host + port, Web builds `http://host:port/api`.
+- Old saved browser defaults `http://192.168.9.83:18080/api` and `http://localhost:8080/api` are automatically migrated back to `https://im.52youzai.com/api` by `loadStoredApiBase()`.
+- If data does not match the Windows client, inspect `localStorage.youchat.apiBase` and recent `logs/api-capture.ndjson` targets first. A stale target means Web is not querying the same service/database as the client.
 
-`GET /Senstive/GetAccountList`
+## Contact List Data Gotchas
 
-Known real example:
+Business UI must match the Windows client. Do not show debug/source labels such as `本地`, `保留`, `全局回退`, `已清空`, `客服空`, or `接口空` in tabs or list headers.
+
+Current conversation list should start with the Electron-compatible request:
+
+- `POST /Contact/GetContactList`
+- `pageIndex = 1`
+- `pageSize = 20`
+- use `keyWord` for search
+- do not default-send `id=0`, `isGuestbook=false`, or `isHistory=false`
+
+Known account-id facts:
 
 - userName: `Boom666`
 - nickName: `客服-王`
-- correct contact-list accountId: `id = 2`
+- `accountId=2` can return bare `{"success":true,"message":null,"data":0}` and is not stable enough as the default current-list filter.
 - long `accountId = 1556504756803862529` is not the current-list filter id.
+- Short ids from `/Senstive/GetAccountList` (`id`, `accId`) are fallback/diagnostic candidates only unless future client captures prove they are the default.
 
 Important functions:
 
@@ -81,9 +96,9 @@ Important functions:
 
 Recent fix:
 
-- Added `state.accountIdResolved`.
-- Current tab now prefers verified `/Senstive/GetAccountList` `id`.
-- Avoid using stale `localStorage.youchat.accountId`, login name, or long merchant accountId for current list counts.
+- `buildContactListParams()` now follows Electron-style params.
+- `fetchContactListWithFallback()` tries no-account current list first, then account candidates only as fallback.
+- `state.listCountSources` may be kept for logs/debugging, but must not be rendered in business UI.
 
 2026-06-08 current-list fallback fix:
 
@@ -92,13 +107,8 @@ Recent fix:
 - Explicit empty means a structured payload with `records/list` and `total: 0`, not bare `data:0`.
 - `state.contactListAccountIds` persists candidates from `/Senstive/GetAccountList`.
 - `extractContactListAccountIds()` should prefer short local customer-service ids (`id`, `accId`). Do not use the long merchant `accountId` unless future captures prove it is valid.
-- `fetchContactListWithFallback()` tries account-filtered current list first, then no-account global fallback only when account-filtered data is ambiguous/empty.
-- `state.listCountSources.current` labels the current count source:
-  - `account`: real current-agent filtered count.
-  - `global-fallback`: account filter returned `data:0`, real no-account fallback is shown.
-  - `stale`: keep previous real list because refresh/count returned unreliable empty data or failed.
-  - `local-cleared`: user cleared current list and local filter is active.
-- Never show a fallback/global count as if it were the precise current-agent count.
+- `fetchContactListWithFallback()` treats bare `data:0` as ambiguous and must not clear an existing real list on that response alone.
+- Never show fallback/source words to the客服 user. They belong in logs only.
 
 ## Contact List
 
@@ -118,39 +128,32 @@ Behavior rules:
 
 - Tabs: `current`, `guestbook`, `history`.
 - Current tab must not clear `state.contacts` or `state.listCounts.current` just because `/Contact/GetContactList` with `accountId` returns bare `data:0`.
-- If current account-filtered data is ambiguous, fall back to no-account real data and label it `全局回退`; if fallback also fails, preserve the existing real list and label it `保留`.
+- If current data is ambiguous and there is an existing real list, preserve it and log the source internally.
 - Preserve active right toolbar tab when switching contacts.
 - Selected unread conversation should clear local badge and call consume API.
 - Keyboard up/down switches conversations when focus is in list.
 - Auto refresh should preserve scroll.
-- History tab count is split by source:
-  - `state.listServerCounts.history`: real `/Contact/GetContactList` `isHistory=true` count.
-  - `state.listLocalCounts.history`: local clear-list archive count from `state.localHistoryContacts`.
-  - Recent real captures show `isHistory=true` returning `data:0`, so a displayed `本地23` is local archive, not backend history total.
-  - Do not remove the `本地`/`接口` source label unless a verified real history endpoint/count replaces it.
+- History tab visible count must use the backend history count only, like the client `历史(5700)`.
+- History list contents must also come from the backend history endpoint only. Do not merge Web local clear-list caches into the visible history list.
+- Recent real captures showed `isHistory=true&pageSize=1` returning `data:0`; use `pageSize=20` for count probes and keep investigating with real client captures.
 
 Clear-list behavior:
 
 - `archiveAndClearCurrentList`
 - `filterLocallyClearedContacts`
-- `loadLocalHistoryContacts`
-- `persistLocalHistoryContacts`
 - `loadClearedContactState`
 - `persistClearedContactState`
 
-This local archive/filter is intentional. It prevents refresh from immediately repopulating a list after user chose “清空列表”.
+Clear-list is only a short local anti-repopulate filter after the real clear-list API succeeds. It must not create local history records or inflate `历史(...)`.
 
-Recent history-count functions:
+Recent contact-count functions:
 
-- `getConversationTabCountMeta`
-- `getListCountSourceLabel`
-- `getListCountSourceTitle`
+- `getConversationTabCount`
 - `formatTabCount`
 - `hasZeroDataPayload`
 - `fetchContactListWithFallback`
 - `fetchContactListPayload`
 - `state.listServerCounts`
-- `state.listLocalCounts`
 - `state.listCountSources`
 
 ## Chat

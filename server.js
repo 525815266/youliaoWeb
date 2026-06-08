@@ -4,7 +4,7 @@ const path = require("path");
 const { URL } = require("url");
 
 const PORT = Number(process.env.PORT || 5177);
-const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "http://localhost:8080/api";
+const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "https://im.52youzai.com/api";
 const DEFAULT_AI_BASE = process.env.YOUCHAT_AI_BASE || "https://sub2.sn55.cn/";
 const DEFAULT_AI_MODEL = process.env.YOUCHAT_AI_MODEL || "gpt-5.4-mini";
 const PUBLIC_DIR = path.join(__dirname, "public");

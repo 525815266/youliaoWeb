@@ -1,4 +1,8 @@
-const DEFAULT_API_BASE = "http://192.168.9.83:18080/api";
+const DEFAULT_API_BASE = "https://im.52youzai.com/api";
+const LEGACY_DEFAULT_API_BASES = new Set([
+  "http://192.168.9.83:18080/api",
+  "http://localhost:8080/api"
+]);
 const DEFAULT_AI_BASE_URL = "https://sub2.sn55.cn/";
 const DEFAULT_AI_API_KEY = "sk-b9d9c696d71c86d875a0379dcbc0eca8e5863884022405bb031d95341951485b";
 const DEFAULT_AI_MODEL = "gpt-5.4-mini";
@@ -65,7 +69,6 @@ const MESSAGE_PAGE_SIZE = 30;
 const HISTORY_PAGE_SIZE = 20;
 const DETAIL_PAGE_SIZE = 20;
 const READ_STATE_STORAGE_KEY = "youchat.readContactState";
-const LOCAL_HISTORY_STORAGE_KEY = "youchat.localHistoryContacts";
 const CLEARED_CONTACTS_STORAGE_KEY = "youchat.clearedContactState";
 const CONTACT_LIST_ACCOUNT_IDS_STORAGE_KEY = "youchat.contactListAccountIds";
 const CLEAR_LIST_GRACE_MS = 30000;
@@ -111,7 +114,7 @@ const EMOJI_SHORTCUTS = [
 ];
 
 const state = {
-  apiBase: localStorage.getItem("youchat.apiBase") || DEFAULT_API_BASE,
+  apiBase: loadStoredApiBase(),
   token: localStorage.getItem("youchat.token") || sessionStorage.getItem("u-token") || "",
   account: localStorage.getItem("youchat.account") || "Boom666",
   accountId: localStorage.getItem("youchat.accountId") || "",
@@ -150,7 +153,6 @@ const state = {
   listTab: "current",
   activeTool: "user",
   contacts: [],
-  localHistoryContacts: loadLocalHistoryContacts(),
   clearedListUntil: {},
   clearedContactState: loadClearedContactState(),
   messages: [],
@@ -192,7 +194,6 @@ const state = {
   totalContacts: 0,
   listCounts: { current: 0, guestbook: 0, history: 0 },
   listServerCounts: { current: 0, guestbook: 0, history: 0 },
-  listLocalCounts: { current: 0, guestbook: 0, history: 0 },
   listCountSources: { current: "", guestbook: "", history: "" },
   listUnreadCounts: { current: 0, guestbook: 0, history: 0 },
   friendRequests: [],
@@ -410,8 +411,8 @@ function bindEvents() {
 
 function hydrateLoginFields() {
   const parsed = parseApiBase(state.apiBase);
-  el.serverAddress.value = parsed.host || "192.168.9.83";
-  el.serverPort.value = parsed.port || "18080";
+  el.serverAddress.value = parsed.isFull ? parsed.address : (parsed.host || "im.52youzai.com");
+  el.serverPort.value = parsed.isFull ? "" : (parsed.port || "18080");
   el.username.value = state.account || "Boom666";
   el.rememberAccount.checked = state.remember;
 }
@@ -544,22 +545,54 @@ function updateAiButtonState() {
   renderAiSuggestionCard();
 }
 
+function loadStoredApiBase() {
+  const stored = localStorage.getItem("youchat.apiBase");
+  if (!stored) return DEFAULT_API_BASE;
+  const normalized = normalizeApiBase(stored);
+  if (LEGACY_DEFAULT_API_BASES.has(normalized)) {
+    localStorage.setItem("youchat.apiBase", DEFAULT_API_BASE);
+    return DEFAULT_API_BASE;
+  }
+  return normalized;
+}
+
 function parseApiBase(value) {
+  const normalized = normalizeApiBase(value || DEFAULT_API_BASE);
   try {
-    const url = new URL(value);
+    const url = new URL(normalized);
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    const isFull = url.protocol === "https:" || path !== "/api";
     return {
+      address: normalized,
       host: url.hostname,
-      port: url.port || (url.protocol === "https:" ? "443" : "80")
+      port: url.port || (url.protocol === "https:" ? "443" : "80"),
+      isFull
     };
   } catch {
-    return { host: "192.168.9.83", port: "18080" };
+    return { address: DEFAULT_API_BASE, host: "im.52youzai.com", port: "443", isFull: true };
   }
 }
 
 function buildApiBase() {
-  const host = el.serverAddress.value.trim() || "192.168.9.83";
-  const port = el.serverPort.value.trim() || "18080";
-  return `http://${host}:${port}/api`;
+  const address = el.serverAddress.value.trim() || DEFAULT_API_BASE;
+  const port = el.serverPort.value.trim();
+  return normalizeApiBaseFromFields(address, port);
+}
+
+function normalizeApiBaseFromFields(address, port) {
+  const raw = String(address || DEFAULT_API_BASE).trim();
+  if (/^https?:\/\//i.test(raw)) return normalizeApiBase(raw);
+  if (raw.includes("/")) return normalizeApiBase(`http://${raw}`);
+  const hostMatch = raw.match(/^([^:]+):(\d+)$/);
+  const host = hostMatch ? hostMatch[1] : raw;
+  const resolvedPort = port || (hostMatch ? hostMatch[2] : "18080");
+  return normalizeApiBase(`http://${host}:${resolvedPort}/api`);
+}
+
+function normalizeApiBase(value) {
+  const raw = String(value || DEFAULT_API_BASE).trim().replace(/\/+$/, "");
+  if (!raw) return DEFAULT_API_BASE;
+  return (/^https?:\/\//i.test(raw) ? raw : `http://${raw}`).replace(/\/+$/, "");
 }
 
 function persistLoginConfig() {
@@ -707,87 +740,26 @@ function renderConversationTabs() {
   document.querySelectorAll("[data-list-tab]").forEach((button) => {
     const tab = button.dataset.listTab;
     const labels = { current: "当前", guestbook: "留言", history: "历史" };
-    const countMeta = getConversationTabCountMeta(tab);
+    const count = getConversationTabCount(tab);
     const unread = Number(state.listUnreadCounts[tab] || 0);
     button.classList.toggle("is-active", tab === state.listTab);
     button.classList.toggle("has-unread", unread > 0);
-    button.title = countMeta.title;
+    button.title = "";
     button.innerHTML = `
       <span>${labels[tab] || tab}</span>
-      <em>${countMeta.label}</em>
-      ${countMeta.source ? `<small>${countMeta.source}</small>` : ""}
+      <em>(${formatTabCount(count)})</em>
       ${unread ? `<i>${unread > 99 ? "99+" : unread}</i>` : ""}
     `;
   });
 }
 
-function getConversationTabCountMeta(tab) {
+function getConversationTabCount(tab) {
   const total = Number(state.listCounts[tab] || 0);
-  if (tab === "current") {
-    const source = getListCountSourceLabel(tab);
-    return {
-      label: formatTabCount(total),
-      source,
-      title: getListCountSourceTitle(tab)
-    };
+  if (tab === "history") {
+    const serverCount = Number(state.listServerCounts.history || 0);
+    if (serverCount || state.listCountSources.history === "server") return serverCount;
   }
-
-  if (tab !== "history") {
-    return {
-      label: formatTabCount(total),
-      title: ""
-    };
-  }
-
-  const serverCount = Number(state.listServerCounts.history || 0);
-  const localCount = Number(state.listLocalCounts.history || state.localHistoryContacts.length || 0);
-  if (localCount && serverCount) {
-    return {
-      label: `${formatTabCount(serverCount)}+${formatTabCount(localCount)}`,
-      source: "接口+本地",
-      title: `历史接口 ${serverCount}，本地清空归档 ${localCount}`
-    };
-  }
-  if (localCount) {
-    return {
-      label: formatTabCount(localCount),
-      source: "本地",
-      title: `历史接口暂无数据，本地清空归档 ${localCount}`
-    };
-  }
-  return {
-    label: formatTabCount(serverCount || total),
-    source: "接口",
-    title: "历史接口返回数量"
-  };
-}
-
-function getListCountSourceLabel(tab) {
-  const source = state.listCountSources[tab];
-  if (tab === "current") {
-    if (source === "account") return "客服";
-    if (source === "global-fallback") return "全局回退";
-    if (source === "global") return "全局";
-    if (source === "stale") return "保留";
-    if (source === "local-cleared") return "已清空";
-    if (source === "account-empty") return "客服空";
-    if (source === "global-empty") return "接口空";
-  }
-  return "";
-}
-
-function getListCountSourceTitle(tab) {
-  const source = state.listCountSources[tab];
-  if (tab === "current") {
-    if (source === "account") return "当前会话数量来自客服账号过滤接口";
-    if (source === "global-fallback") return "客服账号过滤返回 data:0，已回退到全局真实会话接口";
-    if (source === "global") return "未拿到客服账号过滤 ID，当前显示全局真实会话接口";
-    if (source === "stale") return "接口本次返回不可靠空数据，暂时保留上一批真实会话";
-    if (source === "local-cleared") return "当前列表已按清空操作做本地过滤，等待新回复后再回到当前列表";
-    if (source === "account-empty") return "客服账号过滤接口返回空数据，且全局回退失败";
-    if (source === "global-empty") return "客服账号过滤与全局接口都返回空数据";
-  }
-  return "";
+  return total;
 }
 
 function formatTabCount(value) {
@@ -992,14 +964,15 @@ function getContactListAccountCandidates() {
 }
 
 function buildContactListParams(tab = state.listTab, options = {}) {
+  const keyword = options.keyWord ?? options.searchStr ?? el.search?.value?.trim() ?? "";
   const params = {
     pageIndex: options.pageIndex || 1,
-    pageSize: options.pageSize || 80,
-    id: 0,
-    searchStr: options.searchStr ?? el.search?.value?.trim() ?? "",
-    isGuestbook: tab === "guestbook",
-    isHistory: tab === "history"
+    pageSize: options.pageSize || 20
   };
+  if (options.id !== undefined) params.id = options.id;
+  if (keyword) params.keyWord = keyword;
+  if (tab === "guestbook") params.isGuestbook = true;
+  if (tab === "history") params.isHistory = true;
   if (tab === "current" && !options.omitAccountId) {
     const accountId = options.accountIdOverride !== undefined
       ? options.accountIdOverride
@@ -1044,6 +1017,21 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
     });
   }
 
+  let globalResult = null;
+  try {
+    globalResult = await fetchContactListPayload(tab, {
+      ...options,
+      omitAccountId: true
+    }, {
+      source: "global"
+    });
+    if (isUsefulContactListResult(globalResult) || isExplicitEmptyContactListResult(globalResult)) {
+      return globalResult;
+    }
+  } catch (error) {
+    log("contact list client-compatible request failed", { error: error.message });
+  }
+
   const candidates = getContactListAccountCandidates();
   const emptyAccountResults = [];
   for (const accountId of candidates) {
@@ -1062,35 +1050,21 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
     }
   }
 
-  try {
-    const fallback = await fetchContactListPayload(tab, {
-      ...options,
-      omitAccountId: true
-    }, {
-      source: candidates.length ? "global-fallback" : "global"
-    });
-    if (isUsefulContactListResult(fallback) || !emptyAccountResults.length) {
-      return {
-        ...fallback,
-        emptyAccountResults
-      };
-    }
+  if (globalResult) {
     return {
-      ...fallback,
-      source: "global-empty",
+      ...globalResult,
+      source: candidates.length ? "global-empty" : "global",
       emptyAccountResults
     };
-  } catch (error) {
-    if (emptyAccountResults.length) {
-      log("contact list global fallback failed", { error: error.message });
-      return {
-        ...emptyAccountResults[0],
-        source: "account-empty",
-        fallbackError: error.message
-      };
-    }
-    throw error;
   }
+
+  if (emptyAccountResults.length) {
+    return {
+      ...emptyAccountResults[0],
+      source: "account-empty"
+    };
+  }
+  throw new Error("当前会话列表接口未返回可用数据");
 }
 
 async function fetchContactListPayload(tab, options = {}, metadata = {}) {
@@ -1137,9 +1111,8 @@ function shouldPreserveEmptyContactResult(result, contacts, options = {}) {
 async function loadContactCounts() {
   await ensureContactListAccountId();
   const tabs = ["current", "guestbook", "history"];
-  state.listLocalCounts.history = state.localHistoryContacts.length;
   const results = await Promise.allSettled(tabs.map((tab) => (
-    fetchContactListWithFallback(tab, { pageSize: 1, searchStr: "" })
+    fetchContactListWithFallback(tab, { pageSize: 20, keyWord: "" })
   )));
 
   results.forEach((result, index) => {
@@ -1168,9 +1141,7 @@ async function loadContactCounts() {
     const normalizedTotal = Math.max(0, Number(data.total || 0));
     state.listServerCounts[tab] = normalizedTotal;
     state.listCountSources[tab] = data.source || "server";
-    state.listCounts[tab] = tab === "history"
-      ? normalizedTotal + Number(state.listLocalCounts.history || 0)
-      : normalizedTotal;
+    state.listCounts[tab] = normalizedTotal;
   });
   renderConversationTabs();
 }
@@ -1190,11 +1161,8 @@ async function loadContacts(options = {}) {
     const serverTotal = Math.max(0, Number(result.total || 0));
     state.listServerCounts[state.listTab] = serverTotal;
     state.listCountSources[state.listTab] = result.source || "server";
-    state.listLocalCounts.history = state.localHistoryContacts.length;
     let locallyFiltered = false;
-    if (state.listTab === "history") {
-      contacts = sortContacts(mergeContactsById(contacts, state.localHistoryContacts.map(applyReadStateToContact)));
-    } else {
+    if (state.listTab !== "history") {
       const beforeFilterCount = contacts.length;
       contacts = filterLocallyClearedContacts(state.listTab, contacts);
       locallyFiltered = contacts.length !== beforeFilterCount || shouldKeepListLocallyCleared(state.listTab);
@@ -1216,7 +1184,7 @@ async function loadContacts(options = {}) {
 
     state.contacts = contacts;
     state.totalContacts = state.listTab === "history"
-      ? Math.max(contacts.length, serverTotal + Number(state.listLocalCounts.history || 0))
+      ? Math.max(contacts.length, serverTotal)
       : locallyFiltered
       ? contacts.length
       : Math.max(contacts.length, serverTotal);
@@ -1631,15 +1599,6 @@ function sumContactUnread(contacts) {
   return contacts.reduce((sum, contact) => sum + Number(contact.unread || contact.unRead || contact.redDot || contact.unReadCount || 0), 0);
 }
 
-function loadLocalHistoryContacts() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(LOCAL_HISTORY_STORAGE_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
 function loadClearedContactState() {
   try {
     const parsed = JSON.parse(localStorage.getItem(CLEARED_CONTACTS_STORAGE_KEY) || "{}");
@@ -1656,14 +1615,6 @@ function persistClearedContactState() {
     .slice(-600);
   state.clearedContactState = Object.fromEntries(entries);
   localStorage.setItem(CLEARED_CONTACTS_STORAGE_KEY, JSON.stringify(state.clearedContactState));
-}
-
-function persistLocalHistoryContacts() {
-  const records = sortContacts(mergeContactsById(state.localHistoryContacts || []))
-    .slice(0, 300)
-    .map((contact) => ({ ...contact, records: Array.isArray(contact.records) ? contact.records.slice(-20) : [] }));
-  state.localHistoryContacts = records;
-  localStorage.setItem(LOCAL_HISTORY_STORAGE_KEY, JSON.stringify(records));
 }
 
 function loadContactListAccountIds() {
@@ -1775,18 +1726,7 @@ function archiveAndClearCurrentList() {
   const tab = state.listTab;
   const now = Date.now();
   if (state.contacts.length) {
-    const archived = state.contacts.map((contact) => ({
-      ...contact,
-      isTodo: false,
-      isLocalArchived: true,
-      archivedFrom: tab,
-      archivedAt: now,
-      sortTime: Math.max(Number(contact.sortTime || 0), now),
-      time: formatTime(Math.max(Number(contact.sortTime || 0), now))
-    }));
-    state.localHistoryContacts = sortContacts(mergeContactsById(archived, state.localHistoryContacts));
-    persistLocalHistoryContacts();
-    archived.forEach((contact) => {
+    state.contacts.forEach((contact) => {
       const key = getClearedContactKey(tab, contact);
       if (!key) return;
       state.clearedContactState[key] = {
@@ -1804,8 +1744,7 @@ function archiveAndClearCurrentList() {
   state.totalContacts = 0;
   state.listCounts[tab] = 0;
   state.listUnreadCounts[tab] = 0;
-  state.listLocalCounts.history = state.localHistoryContacts.length;
-  state.listCounts.history = Number(state.listServerCounts.history || 0) + Number(state.listLocalCounts.history || 0);
+  state.listCounts.history = Number(state.listServerCounts.history || 0);
   resetContactScopedState();
   state.messages = [];
   renderAll();
@@ -1885,8 +1824,7 @@ function sortContacts(contacts) {
 
 function renderContacts() {
   const count = state.totalContacts || state.contacts.length;
-  const sourceLabel = state.listTab === "current" ? getListCountSourceLabel("current") : "";
-  el.conversationCount.textContent = sourceLabel ? `${count} 个客户 · ${sourceLabel}` : `${count} 个客户`;
+  el.conversationCount.textContent = `${count} 个客户`;
   el.contactList.tabIndex = 0;
 
   if (!state.contacts.length) {
@@ -3458,7 +3396,7 @@ async function uploadImageViaLocalProxy({ config, objectKey, file }) {
   const result = await response.json();
   log("local oss upload", summarize(result));
   if (!response.ok || result.success === false || !result.url) {
-    throw new Error(getMessage(result) || "本地 OSS 上传代理未返回图片地址");
+    throw new Error(getMessage(result) || "图片上传代理未返回图片地址");
   }
   return result.url;
 }
@@ -3714,7 +3652,7 @@ function showSaveSkillModal() {
         <span>回复内容</span>
         <textarea id="saveSkillContent" rows="6" placeholder="请输入要沉淀的回复话术">${escapeHtml(sourceText.reply)}</textarea>
       </label>
-      <p class="modal-hint">这里会写入本地 data/reply-skills.json，后续 AI/skill 推荐会自动使用。</p>
+      <p class="modal-hint">保存后会进入 skill 回复库，后续 AI/skill 推荐会自动使用。</p>
     `,
     onConfirm: saveSkillFromModal
   });
@@ -5883,7 +5821,6 @@ async function accessHistoryContact(contact) {
       accountId: getAccountId(contact)
     });
     toast("已接入历史会话，正在切换到当前。");
-    removeLocalHistoryContact(contactId);
     state.listTab = "current";
     state.activeContact = { ...contact, isHistory: false, isGuestbook: false };
     resetContactScopedState();
@@ -5908,11 +5845,6 @@ async function accessHistoryContact(contact) {
   } catch (error) {
     toast(`历史会话接入失败：${error.message}`, true);
   }
-}
-
-function removeLocalHistoryContact(contactId) {
-  state.localHistoryContacts = (state.localHistoryContacts || []).filter((item) => String(getContactId(item)) !== String(contactId));
-  persistLocalHistoryContacts();
 }
 
 async function transferAi() {
@@ -6026,7 +5958,7 @@ function handleContactAction(action, contact) {
       .then(() => toast("已同步全部已读。"))
       .catch((error) => {
         log("consume all sync failed", { error: error.message });
-        toast(`本地已清除角标，后端全部已读同步失败：${error.message}`, true);
+        toast(`角标已清除，全部已读同步失败：${error.message}`, true);
       });
     return;
   }

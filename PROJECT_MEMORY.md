@@ -157,32 +157,18 @@ Invoke-WebRequest http://localhost:5177/styles.css
 
 重要口径：
 
-当前会话列表不能用全局商户号、登录名或旧 localStorage 里的错误 accountId。当前列表必须先通过 `GET /Senstive/GetAccountList` 找到当前客服账号，并使用该账号对象的 `id` 作为 `/Contact/GetContactList` 的 `accountId`。
-
-已知真实返回示例：
-
-- 登录账号：`Boom666`
-- 客服昵称：`客服-王`
-- 当前会话列表应使用：`id: 2`
-- 返回里的长 `accountId: 1556504756803862529` 不是当前会话列表的筛选 ID。
-
-如果当前页签显示类似 `8018` 这种全局数量，通常说明 accountId 口径错了。已在 `public/app.js` 中增加 `accountIdResolved`，强制优先用 `/Senstive/GetAccountList` 校验后的 `id`，并避免旧缓存污染当前列表。
-
-2026-06-08 补充：`/Contact/GetContactList` 在传 `accountId=2` 时会偶发返回 `{"success":true,"message":null,"data":0}`。这个结构不是带 `total: 0` 的明确空列表，不能直接拿来清空当前会话。现在 Web 端会先试客服账号过滤；若只拿到 `data:0` 这种不完整空响应，则再试不带 `accountId` 的真实全局接口，并在 tab 上标记 `全局回退`。如果全局也失败，保留上一批真实列表并标记 `保留`，不再把消息数量刷坏。
-
-当前会话数量来源标签：
-
-- `客服`：来自 `/Senstive/GetAccountList` 的客服账号 `id` 过滤结果。
-- `全局回退`：客服账号过滤返回 `data:0`，已回退到不带 `accountId` 的真实全局列表。
-- `全局`：没有拿到可用客服账号筛选 ID，只能显示全局真实接口。
-- `保留`：本次接口返回不可靠空数据或刷新失败，暂时保留上一批真实会话。
-- `已清空`：用户刚执行过清空列表，本地过滤仍在生效，等待新回复后再进入当前列表。
+- 业务 UI 必须贴近原客户端，底部只显示 `当前(25)`、`留言(2)`、`历史(5700)` 这种业务数字，不显示 `本地`、`保留`、`全局回退`、`客服空`、`接口空` 等内部来源标签。
+- 原客户端当前会话列表默认请求 `/Contact/GetContactList`，初始化参数接近 `pageIndex=1&pageSize=20`；搜索字段是 `keyWord`。不要默认塞 `id=0`、`isGuestbook=false`、`isHistory=false` 这类空条件。
+- 当前 tab 默认先走不带 `accountId` 的客户端兼容请求。`/Senstive/GetAccountList` 拿到的短 `id/accId` 只作为非破坏性兜底或诊断，不再作为默认强制过滤。
+- 已知 `accountId=2` 会返回 `{"success":true,"message":null,"data":0}`，所以 `id=2` 不是稳定的默认当前列表口径。长 `accountId: 1556504756803862529` 也不是当前会话筛选 ID。
+- `state.listCountSources` 只允许用于日志、调试和后续抓包分析，不能渲染到业务界面。
+- 历史 tab 的可见数字和列表内容都只使用后端历史接口返回的数据。不要把 Web 本地缓存或清空列表缓存合并进业务历史列表。
 
 会话排序：
 
 - 普通会话按最后回复/最后消息时间排序。
 - 待办/置顶会话需要特殊显示，并允许排在上面。
-- 清空列表后，Web 端会本地归档到历史缓存，并临时过滤刚清空的联系人，避免自动刷新马上把列表弹回来。
+- 清空列表后，Web 端只做短时间本地过滤，避免自动刷新马上把刚清空的联系人弹回来；不再生成本地历史记录。
 
 ## 6. 聊天区与历史消息
 
@@ -320,8 +306,8 @@ AI 推荐逻辑：
 
 清空列表：
 
-- 原客户端清空后当前列表会真的空掉，并进入历史。
-- Web 端已实现本地归档和刷新过滤，避免接口刷新后马上重新出现。
+- 原客户端清空后当前列表会真的空掉，历史归属以服务端接口为准。
+- Web 端只实现短时间刷新过滤，避免接口刷新后马上重新出现；不要再把清空列表结果写成本地历史。
 
 ## 11. UI 设计规则
 
@@ -470,7 +456,6 @@ UI 同步修复：
 - `handleContactAction` 识别 `access-history` 后调用 `accessHistoryContact(contact)`。
 - `accessHistoryContact` 调用真实接口 `/Conversation/AccessIn`，参数为 `contactId` 和 `accountId`。
 - 接入成功后：
-  - 从本地历史缓存移除该联系人。
   - `state.listTab` 切到 `current`。
   - 刷新当前会话列表。
   - 如果后端已同步到当前列表，则选中新会话。
@@ -1118,27 +1103,23 @@ UI 修复：
 
 - `logs/api-capture.ndjson` 里最近多次真实请求 `/Contact/GetContactList`，其中 `isHistory=true`、`pageSize=1` 的响应是：
   - `{"success":true,"message":null,"data":0}`
-- 因此当前看到的 `23` 不能解释为悠聊后端历史会话总数。
-- 这个 `23` 来自 Web 本地清空列表归档：
+- 因此当时看到的 `23` 不能解释为悠聊后端历史会话总数。
+- 这个 `23` 来自旧版 Web 本地清空列表归档：
   - `state.localHistoryContacts`
   - `localStorage` key：`youchat.localHistoryContacts`
   - 入口：`archiveAndClearCurrentList()`
-- 这是为了让“清空列表”真的在 Web 端清空当前列表，并把被清空的会话暂存到历史列表，避免定时刷新马上把当前列表刷回来。
+- 这个旧方案已在第 31 节废弃。Web 不再把本地归档混入历史列表。
 
 本次实现：
 
 - `public/app.js`
-  - 新增 `state.listServerCounts` 和 `state.listLocalCounts`，分别记录接口数量和本地归档数量。
-  - 新增 `getConversationTabCountMeta()` 和 `formatTabCount()`。
-  - `renderConversationTabs()` 不再把历史数量只显示成一个裸数字。
-  - 历史 tab 现在会显示来源：
-    - 只有接口数：显示接口数量，来源为 `接口`。
-    - 只有本地归档：显示本地数量，来源为 `本地`。
-    - 两者都有：显示 `接口数+本地数`，来源为 `接口+本地`。
-  - `title` 会说明完整口径，例如“历史接口暂无数据，本地清空归档 23”。
+  - 新增 `state.listServerCounts` 记录接口数量；旧版曾有 `state.listLocalCounts`，已在第 31 节删除。
+  - `renderConversationTabs()` 后续已修正为客户端式 `当前(25)`、`留言(2)`、`历史(5700)`。
+  - 历史 tab 可见计数只取服务端历史接口总数，不再显示 `本地`、`接口+本地` 这类内部来源。
+  - 旧版曾把本地清空归档合并进历史列表供临时翻阅；该行为已在第 31 节删除。
   - `loadContactCounts()` 对 `data:0` 做显式 0 处理，不再误用旧 fallback。
-  - `loadContacts()` 在历史 tab 合并服务端历史会话和本地归档，但单独保留两类计数。
-  - `archiveAndClearCurrentList()` 清空后同步刷新本地历史计数。
+  - `loadContacts()` 的历史 tab 现在只显示服务端历史会话。
+  - `archiveAndClearCurrentList()` 清空后只做短时防回弹过滤，不写本地历史。
 
 输入区和 AI 推荐浮层修复：
 
@@ -1165,7 +1146,7 @@ UI 修复：
 
 - 这里是客服工作台，不是卡片化后台；输入框必须稳定贴底，客服不能因为 AI 推荐条出现而找不到输入区。
 - AI 推荐可以压缩聊天记录可视区域，但不能挤压或遮挡输入区。
-- 历史 tab 必须说明真实来源，不能把本地归档数包装成接口历史数。
+- 历史 tab 的业务数字必须像客户端一样只显示真实服务端历史数量，不能把本地归档数包装成接口历史数，也不能在业务 UI 暴露来源标签。
 
 验证：
 
@@ -1176,9 +1157,9 @@ UI 修复：
 
 后续注意：
 
-- 如果后续抓包证明原客户端底部“历史” tab 使用了另一个接口或不同参数，应优先把 Web 历史 tab 改成真实接口口径，而不是继续依赖本地归档。
+- 如果后续抓包证明原客户端底部“历史” tab 使用了另一个接口或不同参数，应优先把 Web 历史 tab 改成真实接口口径，不要依赖本地归档。
 - 不要把 `.ai-suggestion-card` 放回文档流里，否则输入框会再次被挤压。
-- 不要把历史 tab 的 `本地` 来源标签删掉，除非已经能用接口拿到真实历史总数。
+- 不要在业务界面显示历史 tab 的 `本地` 来源标签；调试来源只写日志或文档。
 
 ## 29. 2026-06-08 当前会话账号过滤回退与数量修复
 
@@ -1223,28 +1204,23 @@ UI 修复：
 请求策略：
 
 - 当前 tab：
-  - 先用客服账号候选 ID 请求 `/Contact/GetContactList`。
+  - 先请求不带 `accountId` 的客户端兼容 `/Contact/GetContactList`。
+  - 初始化参数贴近原客户端：`pageIndex=1`、`pageSize=20`，有搜索时传 `keyWord`。
+  - 默认不传 `id=0`、`isGuestbook=false`、`isHistory=false`。
+  - 只有客户端兼容请求返回 `data:0` 或失败时，才用客服账号候选 ID 做兜底探测。
   - 如果返回带 `total: 0` 且不是 `data:0`，认为是真实明确空列表。
-  - 如果返回 `data:0`，认为是不可靠空响应，继续请求不带 `accountId` 的真实全局列表。
-  - 如果全局回退有数据，展示真实全局数据并标记 `全局回退`，不伪装成客服账号数量。
-  - 如果全局回退失败或仍是空响应，并且页面已有真实会话，则保留已有会话，标记 `保留`。
+  - 如果返回 `data:0`，认为是不可靠空响应，不能直接清空已有会话。
+  - 如果兜底也失败或仍是空响应，并且页面已有真实会话，则保留已有会话，只在日志里标记来源。
 - 留言、历史 tab：
   - 继续按各自参数请求，不强行加当前客服 `accountId`。
 - 清空列表后：
-  - `loadContactCounts()` 检测 `shouldKeepListLocallyCleared(tab)`，保持 `已清空` 来源，不再被全局回退数量覆盖。
+  - `loadContactCounts()` 检测 `shouldKeepListLocallyCleared(tab)`，避免刚清空后又被自动刷新弹回。
 
 界面变化：
 
-- 当前 tab 数字下面会显示来源：
-  - `客服`
-  - `全局回退`
-  - `全局`
-  - `保留`
-  - `已清空`
-  - `客服空`
-  - `接口空`
-- 左侧顶部客户总数也追加当前来源，例如 `8018 个客户 · 全局回退`。
-- 这些标签是为了真实说明口径，不是美化假数据。
+- 当前、留言、历史 tab 只显示客户端式业务数量：`当前(25)`、`留言(2)`、`历史(5700)`。
+- 左侧顶部只显示 `N 个客户`。
+- 禁止在业务 UI 暴露 `本地`、`保留`、`全局回退`、`已清空`、`客服空`、`接口空` 等内部调试标签。
 
 验证：
 
@@ -1260,4 +1236,101 @@ UI 修复：
 - 不要再把 `data:0` 直接当作“当前会话明确为 0”。
 - 明确空列表应以 `data.records/list` 加 `total: 0` 这种结构为准。
 - 如果后续抓包发现原客户端当前列表还带其他参数，例如时间窗口、机器人 ID 或状态字段，应扩展 `buildContactListParams()`，不要删除现有 fallback 保护。
-- 如果要显示当前客服精准数量，必须看到 `source === "account"`；`全局回退` 只能说明真实接口有全局数据。
+- 如果要核对当前客服精准数量，必须用抓包确认真实客户端实际参数；不要把内部 `source` 标签显示给客服。
+
+## 30. 2026-06-08 会话列表真实口径二次纠偏
+
+用户反馈：
+
+- Web 数据仍和 Windows 客户端对不起来。
+- 客户端并没有显示 `本地`、`保留` 等字样。
+- 希望 Web 按真实数据和客户端业务 UI 来，不要把内部调试口径露出来。
+
+本次修正：
+
+- `public/app.js`
+  - `renderConversationTabs()` 改为单行客户端式：`当前(25)`、`留言(2)`、`历史(5700)`。
+  - 删除业务 UI 中的来源小字渲染。
+  - `renderContacts()` 左侧顶部只显示 `N 个客户`。
+  - `getConversationTabCount()` 对历史 tab 只取 `state.listServerCounts.history` 或服务端列表计数。
+  - `loadContactCounts()` 改用 `pageSize=20`，贴近原客户端初始化请求。
+  - `buildContactListParams()` 改用 `keyWord`，不再默认传 `id=0`、`isGuestbook=false`、`isHistory=false`。
+  - `fetchContactListWithFallback()` 先走不带 `accountId` 的客户端兼容请求，再把客服账号过滤作为兜底。
+  - `archiveAndClearCurrentList()` 不再把本地归档数加到历史 tab 可见计数里。
+- `public/styles.css`
+  - 底部 tab 去掉三行布局和 `<small>` 来源样式，收紧为一行按钮。
+
+客户端源码依据：
+
+- `C:\Program Files\youchat-desktop\wwwroot\p__chatHistory__index.*.async.js`
+  - `/Contact/GetContactList`
+  - 初始化分页约 `pageIndex=1`、`pageSize=20`
+  - 搜索字段 `keyWord`
+  - 15 秒增量刷新使用 `startTime`、`endTime`、`pageSize=100`
+- `C:\Program Files\youchat-desktop\bin\YouChatService.xml`
+  - `accountId` 仅说明“传入则表示获取客服的当前会话列表”，但近期真实返回证明 `accountId=2` 不稳定，不能作为默认强制参数。
+
+运行状态注意：
+
+- 本次检查时电脑重启后未发现 `18080/8080` 悠聊服务监听，只有 Web dev server 在 `5177`。
+- 如果 Windows 客户端看到 `当前(25)`，而 Web 代理请求仍返回 `data:0`，优先确认两边是否连到同一个悠聊服务地址、端口、数据库和登录态。
+- 需要进一步精确对齐时，使用 `start-client-capture-proxy.ps1` 抓原客户端请求，不要靠猜参数。
+
+## 31. 2026-06-08 真实数据源、历史列表和默认 API 地址修复
+
+用户反馈：
+
+- Web 数据仍对不上 Windows 客户端。
+- 客户端界面没有 `本地`、`保留` 等字样。
+- 希望按照真实数据来，不要本地拼出来的业务数据。
+
+本次新增发现：
+
+- 原客户端配置文件：
+  - `C:\Program Files\youchat-desktop\appsettings.json`
+  - `C:\Program Files\youchat-desktop\bin\appsettings.json`
+- 其中 `DefaultOptions.ChatServiceUrl` 是：
+  - `https://im.52youzai.com/api`
+- 本机当前只监听到 Web dev server `5177`，未监听 `18080/8080` 悠聊本地服务端口。
+- 因此如果 Web 仍指向 `192.168.9.83:18080` 或 `localhost:8080`，就很可能和 Windows 客户端不是同一个服务或数据库，数据必然对不上。
+- 最近 `logs/api-capture.ndjson` 仍有旧目标 `http://192.168.9.83:18080/api` 的请求记录，说明浏览器曾保存过早期 Web 默认地址。代码默认值变更不会自动覆盖旧 `localStorage`，必须做迁移。
+
+本次实现：
+
+- `public/app.js`
+  - 默认 `DEFAULT_API_BASE` 改为 `https://im.52youzai.com/api`，对齐 Windows 客户端正式 `ChatServiceUrl`。
+  - 新增 `LEGACY_DEFAULT_API_BASES` 和 `loadStoredApiBase()`，启动时会把旧默认地址 `http://192.168.9.83:18080/api`、`http://localhost:8080/api` 自动迁移为 `https://im.52youzai.com/api`。
+  - 登录页服务器地址支持直接填写完整 API 地址，例如 `https://im.52youzai.com/api`。
+  - 如果只填 host + port，则仍兼容构造成 `http://host:port/api`，用于本地或 Docker 服务。
+  - 删除 `LOCAL_HISTORY_STORAGE_KEY`、`state.localHistoryContacts`、`state.listLocalCounts`、`loadLocalHistoryContacts()`、`persistLocalHistoryContacts()`、`removeLocalHistoryContact()`。
+  - `loadContacts()` 在 `history` tab 不再合并本地历史缓存，只展示 `/Contact/GetContactList` 的 `isHistory=true` 真实接口结果。
+  - `archiveAndClearCurrentList()` 清空后只写 `state.clearedContactState` 做短时防回弹过滤，不再生成本地历史记录。
+  - `accessHistoryContact()` 接入历史会话后不再操作本地历史缓存。
+- `server.js`
+  - 默认 `YOUCHAT_API_BASE` fallback 改为 `https://im.52youzai.com/api`。
+- `README.md`
+  - 更新启动说明，明确默认后端对齐原客户端。
+  - 更新清空列表说明，明确历史列表只展示接口历史，不混入 Web 本地缓存。
+- `AI_HANDOFF.md`
+  - 更新默认 API 地址和历史列表规则。
+
+重要新规则：
+
+- 业务历史列表只能来自后端历史接口。接口没有返回，就显示真实空状态或失败原因。
+- 清空列表只能短时过滤当前列表，避免刷新回弹；不能把被清空的联系人写成本地历史。
+- `state.listCountSources` 仍可用于内部日志，但不能渲染给客服。
+- 如果后续要恢复“清空后进入历史”，必须通过真实客户端抓包确认服务端如何迁移历史，而不是在 Web 端伪造。
+- 如果用户再次反馈“数据对不上客户端”，第一步检查浏览器 `localStorage.youchat.apiBase` 和 `logs/api-capture.ndjson` 里的 `target`，确认 Web 是否已经打到 `https://im.52youzai.com/api`。
+
+验证：
+
+- `npm run check` 通过。
+- `git diff --check` 通过。
+- `GET http://localhost:5177/health` 返回 200。
+- `GET http://localhost:5177/app.js` 返回 200，长度 215829。
+- `GET http://localhost:5177/styles.css` 返回 200，长度 56097。
+- 已导出 patch：见 `patches/youchat-dev-web-patch-*.zip`，以本次提交新增的最新 zip 为准。
+
+提交注意：
+
+- `logs/api-capture.ndjson` 是运行抓包日志，包含旧目标请求记录，本次不提交。
