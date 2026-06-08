@@ -66,6 +66,24 @@ const FRIEND_SOURCE_OPTIONS = [
 const FRIEND_ALL_SOURCE_VALUES = FRIEND_SOURCE_OPTIONS.map((item) => item.value).filter(Boolean);
 const FRIEND_AGGREGATE_SOURCE_PAGE_SIZE = 50;
 
+const KNOWN_SITE_LOGOS = [
+  { name: "小红书", label: "小红书", domains: ["xiaohongshu.com", "xhslink.com"], logoUrl: "https://www.xiaohongshu.com/favicon.ico", bg: "#ff2442", fg: "#ffffff" },
+  { name: "快手", label: "快手", domains: ["kuaishou.com", "gifshow.com", "ksurl.cn", "kwai.com"], logoUrl: "https://www.kuaishou.com/favicon.ico", bg: "#ff5c00", fg: "#ffffff" },
+  { name: "1688", label: "1688", domains: ["1688.com"], logoUrl: "https://www.1688.com/favicon.ico", bg: "#ff6a00", fg: "#ffffff" },
+  { name: "得物", label: "得物", domains: ["dewu.com", "poizon.com"], logoUrl: "https://www.dewu.com/favicon.ico", bg: "#111827", fg: "#ffffff" },
+  { name: "淘宝", label: "淘宝", domains: ["taobao.com"], logoUrl: "https://www.taobao.com/favicon.ico", bg: "#ff5000", fg: "#ffffff" },
+  { name: "天猫", label: "天猫", domains: ["tmall.com"], logoUrl: "https://www.tmall.com/favicon.ico", bg: "#dd2727", fg: "#ffffff" },
+  { name: "京东", label: "京东", domains: ["jd.com", "jd.hk"], logoUrl: "https://www.jd.com/favicon.ico", bg: "#e1251b", fg: "#ffffff" },
+  { name: "拼多多", label: "拼多多", domains: ["pinduoduo.com", "yangkeduo.com"], logoUrl: "https://www.pinduoduo.com/favicon.ico", bg: "#e02e24", fg: "#ffffff" },
+  { name: "抖音", label: "抖音", domains: ["douyin.com", "iesdouyin.com"], logoUrl: "https://www.douyin.com/favicon.ico", bg: "#111111", fg: "#ffffff" },
+  { name: "Bilibili", label: "B站", domains: ["bilibili.com", "b23.tv"], logoUrl: "https://www.bilibili.com/favicon.ico", bg: "#00a1d6", fg: "#ffffff" },
+  { name: "微博", label: "微博", domains: ["weibo.com", "weibo.cn"], logoUrl: "https://weibo.com/favicon.ico", bg: "#ff8200", fg: "#ffffff" },
+  { name: "知乎", label: "知乎", domains: ["zhihu.com"], logoUrl: "https://www.zhihu.com/favicon.ico", bg: "#0066ff", fg: "#ffffff" },
+  { name: "美团", label: "美团", domains: ["meituan.com", "dianping.com"], logoUrl: "https://www.meituan.com/favicon.ico", bg: "#ffd100", fg: "#222222" },
+  { name: "饿了么", label: "饿了么", domains: ["ele.me", "eleme.cn"], logoUrl: "https://www.ele.me/favicon.ico", bg: "#0089dc", fg: "#ffffff" }
+];
+const knownSiteLogoCache = {};
+
 const MESSAGE_PAGE_SIZE = 30;
 const HISTORY_PAGE_SIZE = 20;
 const DETAIL_PAGE_SIZE = 20;
@@ -2806,14 +2824,20 @@ function buildMessageLinkCard(message) {
   if (directUrl && !url) return null;
   const cached = state.linkPreviewCache[url] || {};
   const previewUrl = firstValue(cached.video, cached.player, cached.videoSecureUrl, "");
+  const knownSite = getKnownSiteMeta(url);
+  const knownSiteLogo = knownSite ? firstValue(knownSite.logoUrl, getKnownSiteLogoDataUrl(knownSite), "") : "";
+  const generatedKnownSiteLogo = knownSite ? getKnownSiteLogoDataUrl(knownSite) : "";
   return {
     url,
     title: firstValue(message.cardTitle, cached.title, getUrlHost(url), "链接卡片"),
     desc: firstValue(message.cardDesc, cached.description, ""),
-    image: firstValue(message.cardImg, cached.image, ""),
+    image: firstValue(message.cardImg, cached.image, knownSiteLogo, ""),
+    imageKind: firstValue(message.cardImg, cached.image, "") ? "image" : knownSiteLogo ? "site-logo" : "",
+    imageFallback: generatedKnownSiteLogo,
     video: previewUrl,
     videoType: firstValue(cached.videoType, cached.contentType, ""),
-    siteName: firstValue(message.displayName, cached.siteName, getUrlHost(url), ""),
+    siteName: firstValue(message.displayName, cached.siteName, knownSite?.name, getUrlHost(url), ""),
+    siteBrand: knownSite?.name || "",
     contentType: message.contentType
   };
 }
@@ -2835,8 +2859,8 @@ function renderMessageLinkCard(card, message) {
           ${card.desc ? `<p>${escapeHtml(card.desc)}</p>` : card.url ? `<p>${escapeHtml(card.url)}</p>` : ""}
           <span>${escapeHtml(card.siteName || host || status)}</span>
         </div>
-        <div class="link-card-thumb ${hasImage ? "" : "is-empty"}">
-          ${hasImage ? `<img src="${escapeAttr(normalizeImageUrl(card.image))}" alt="">` : `<span>${escapeHtml(fallbackText)}</span>`}
+        <div class="link-card-thumb ${hasImage ? "" : "is-empty"} ${card.imageKind === "site-logo" ? "is-site-logo" : ""}">
+          ${hasImage ? `<img src="${escapeAttr(normalizeImageUrl(card.image))}" alt="${escapeAttr(card.siteBrand || card.siteName || "网站")}"${card.imageFallback ? ` onerror="this.onerror=null;this.src='${escapeAttr(card.imageFallback)}';"` : ""}>` : `<span>${escapeHtml(fallbackText)}</span>`}
         </div>
       </div>
       <div class="link-card-actions">
@@ -3034,6 +3058,40 @@ function getFileIconMeta(extension) {
   if (ext === "pdf") return { label: "PDF", className: "is-pdf" };
   if (["zip", "rar", "7z"].includes(ext)) return { label: "ZIP", className: "is-archive" };
   return { label: (ext || "FILE").slice(0, 4).toUpperCase(), className: "is-generic" };
+}
+
+function getKnownSiteMeta(url) {
+  let hostname = "";
+  try {
+    hostname = new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return null;
+  }
+  return KNOWN_SITE_LOGOS.find((site) => site.domains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`))) || null;
+}
+
+function getKnownSiteLogoDataUrl(site) {
+  if (!site?.name) return "";
+  if (knownSiteLogoCache[site.name]) return knownSiteLogoCache[site.name];
+  const fontSize = site.label.length >= 4 ? 18 : site.label.length >= 3 ? 22 : 24;
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+      <rect width="144" height="144" rx="22" fill="${site.bg}"/>
+      <text x="72" y="78" text-anchor="middle" dominant-baseline="middle"
+        font-family="Microsoft YaHei, PingFang SC, Arial, sans-serif"
+        font-size="${fontSize}" font-weight="700" fill="${site.fg}">${escapeSvgText(site.label)}</text>
+    </svg>
+  `.trim();
+  const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  knownSiteLogoCache[site.name] = dataUrl;
+  return dataUrl;
+}
+
+function escapeSvgText(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function extractFirstUrl(text) {

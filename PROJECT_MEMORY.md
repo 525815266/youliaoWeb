@@ -41,6 +41,7 @@
 35. [2026-06-08 Web 刷新后当前会话混入历史修复](#35-2026-06-08-web-刷新后当前会话混入历史修复)
 36. [2026-06-08 聊天消息卡片分类渲染](#36-2026-06-08-聊天消息卡片分类渲染)
 37. [2026-06-08 Skill 优化回写与命中态排序](#37-2026-06-08-skill-优化回写与命中态排序)
+38. [2026-06-08 知名网站链接卡片 Logo 兜底](#38-2026-06-08-知名网站链接卡片-logo-兜底)
 
 ## 1. 项目目标
 
@@ -1076,8 +1077,8 @@ UI 修复：
 真实数据原则：
 
 - 不伪造网页标题、缩略图或视频地址。
-- 目标网页没有 meta 时，只显示真实 URL、域名和可打开入口。
-- 小红书等平台如果只返回标题、不给缩略图或视频，就只显示真实标题/域名，不补假图。
+- 目标网页没有 meta 时，未知站点只显示真实 URL、域名和可打开入口。
+- 小红书、快手、1688、得物等知名平台如果没有真实缩略图，可以使用平台 logo 作为识别兜底；不要伪造商品图或视频。
 - 如果 iframe 被站点 `X-Frame-Options` 或 CSP 禁止，浮层仍保留真实打开按钮。
 
 已验证：
@@ -1752,3 +1753,36 @@ ORDER BY COUNT(*) DESC;
 - 3 次自动回写是保守阈值，避免一次误回复污染内置话术。若用户后续要求更激进，可把阈值抽成配置。
 - 命中 skill 回写时要保留原图片步骤，除非用户明确要求替换图片。
 - 右侧 skill 列表的置灰只是视觉状态，不是禁用状态；客服仍可手动选择其他 skill。
+
+## 38. 2026-06-08 知名网站链接卡片 Logo 兜底
+
+用户反馈：
+
+- 小红书、快手、1688、得物这类知名网站链接，如果接口没有返回商品/网页缩略图，右侧缩略块不应该只显示域名缩写或空白。
+- 知名网站可以直接用 logo 当作卡片图片，让客服一眼识别平台。
+
+已修改：
+
+- `public/app.js`
+  - 新增 `KNOWN_SITE_LOGOS`，覆盖：
+    - 小红书：`xiaohongshu.com`、`xhslink.com`
+    - 快手：`kuaishou.com`、`gifshow.com`、`ksurl.cn`、`kwai.com`
+    - 1688：`1688.com`
+    - 得物：`dewu.com`、`poizon.com`
+    - 淘宝、天猫、京东、拼多多、抖音、Bilibili、微博、知乎、美团、饿了么
+  - 新增 `getKnownSiteMeta()`，按链接 hostname 匹配主域和子域。
+  - 新增 `getKnownSiteLogoDataUrl()`，生成本地 SVG 品牌兜底图，避免外链 logo 加载失败后卡片空白。
+  - `buildMessageLinkCard()` 现在仍优先使用真实消息字段和真实预览图：
+    - `message.cardImg`
+    - `state.linkPreviewCache[url].image`
+    - 知名站点 logo fallback
+  - `renderMessageLinkCard()` 对知名站点 logo 加 `imageKind="site-logo"`，并给 favicon 设置 `onerror` 回退到本地 SVG。
+- `public/styles.css`
+  - 新增 `.link-card-thumb.is-site-logo`，让 logo 居中显示为 48x48 的品牌块，真实缩略图仍按原逻辑铺满裁切。
+
+维护规则：
+
+- 真实缩略图永远优先，不要用 logo 覆盖接口返回的 `cardImg` 或预览接口抓到的 `og:image`。
+- 知名网站没有真实缩略图时，允许使用站点 logo 作为平台识别 fallback，这不属于假商品图。
+- 如果新增更多平台，只扩展 `KNOWN_SITE_LOGOS`，不要在 `renderMessageLinkCard()` 里写特殊分支。
+- 外链 favicon 可能被拦截，所以必须保留本地 SVG `imageFallback`。

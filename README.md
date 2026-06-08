@@ -226,6 +226,7 @@ http://服务器IP:端口/api
 - 当前不会使用假数据，接口失败会显示真实失败信息并写入抓包日志。
 - “当前”会话必须使用 `/Contact/GetContactList` + 短客服 `accountId`。当前飞牛数据里 `Boom666` 对应短 id 是 `2`；不带 `accountId` 的同接口会返回全量联系人，不能当作当前列表数量。
 - 聊天消息卡片已按真实类型区分：`contentType=5` 网页卡片、`contentType=6` 小程序、`contentType=8` 文件卡片。
+- 知名网站链接卡片无真实缩略图时会用平台 logo 兜底，当前覆盖小红书、快手、1688、得物、淘宝、天猫、京东、拼多多、抖音、B站、微博、知乎、美团、饿了么；真实 `cardImg` 或 `og:image` 仍然优先。
 - 原客户端主窗口源码显示点开会话会调用 `ConsumeMessage(contactId, 0)`，全部已读会调用 `ConsumeMessage(0, 0)`；Web 版已按这个逻辑同步。
 - SignalR 的 WebSocket 帧如果是二进制格式，简易代理只能记录 upgrade；HTTP 接口请求会完整记录请求体和响应摘要。
 - 快捷回复、聊天记录游标、订单和流水的字段如果仍有不一致，以真实客户端抓包和 `logs/api-capture.ndjson` 为准继续补齐。

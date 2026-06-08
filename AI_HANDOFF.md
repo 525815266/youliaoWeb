@@ -231,7 +231,11 @@ Rules:
 - Render images before link cards so image URLs still show as images.
 - Promote a plain URL into a card only when the message is a native card/link type or the whole message is just a URL.
 - If text contains a URL plus other words, keep the text and render the URL as a clickable inline blue button.
-- No thumbnail means show a domain abbreviation fallback, not a fake image.
+- Real thumbnails are always preferred: `cardImg`, then preview metadata image.
+- For known major platforms with no real thumbnail, use platform logo fallback. This is intentional platform identification, not fake product imagery.
+- Known platform fallback is configured in `KNOWN_SITE_LOGOS`; update that table instead of adding ad hoc render branches.
+- Logo fallback supports external favicon first and local generated SVG via `imageFallback` on error.
+- Unknown sites with no thumbnail still show a domain abbreviation fallback.
 - Direct `video/*` or video file URLs use `<video>`.
 - Player URLs such as `twitter:player` or `og:video:iframe` use iframe.
 - Ordinary webpages use iframe, but some sites block embedding. Keep the `打开网页` button.
@@ -244,7 +248,7 @@ Recent verification:
 - `/local/link-preview` with:
   - `https://example.com/` -> real `Example Domain`.
   - `https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4` -> real `video/mp4`.
-  - `https://www.xiaohongshu.com/goods-detail/69eb394dae65c90001108dbd` -> real `小红书`, no fake image/video.
+  - `https://www.xiaohongshu.com/goods-detail/69eb394dae65c90001108dbd` -> real `小红书`; if no real thumbnail, use known-site logo fallback, not fake product media.
 - In-app browser loaded `http://localhost:5177/`; overlay DOM exists, hidden by default, no console errors.
 
 ## Right Toolbar

@@ -1472,6 +1472,19 @@ textarea:focus-visible {
   object-fit: cover;
 }
 
+.link-card-thumb.is-site-logo {
+  border: 1px solid #edf2f7;
+  background: #f8fbff;
+}
+
+.link-card-thumb.is-site-logo img {
+  width: 48px;
+  height: 48px;
+  border-radius: 13px;
+  object-fit: contain;
+  box-shadow: 0 5px 12px rgba(17, 24, 39, 0.12);
+}
+
 .link-card-thumb.is-empty {
   color: #168df2;
   background: #f3f8ff;
