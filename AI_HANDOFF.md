@@ -381,7 +381,8 @@ Skill optimize:
 - Optimized skill suggestions carry `type="optimize"` and `skillId`.
 - `renderAiSuggestionCard()` must show `更新skill` for optimized skill suggestions. This is the explicit path to overwrite the current skill.
 - `updateSkillFromSuggestion()` writes optimized text back to that skill's `replySteps/fallback` using `replaceReplySkill()`.
-- `mergeTextWithExistingSkillImages()` preserves existing image steps when text is updated.
+- If draft images are staged when saving/updating a skill, `uploadDraftImagesForSkill()` uploads them through the real OSS chain and stores returned URLs as `replySteps` image steps.
+- `mergeTextWithExistingSkillImages()` preserves existing image steps and dedupes image URLs when text is updated.
 
 Skill manual learning:
 
@@ -414,19 +415,26 @@ DeepSeek:
 Functions:
 
 - `handleReplyPaste`
+- `getClipboardImageFiles`
 - `handleReplyDrop`
 - `sendText`
 - `sendImageFile`
 - `sendChatContent`
-- `uploadImage`
+- `uploadChatImage`
 - `uploadImageViaLocalProxy`
+- `uploadDraftImagesForSkill`
+- `withSendingLock`
 
 Rules:
 
 - Pasted images are staged in composer.
+- Clipboard text + images must work in one paste: do not prevent default paste when text/html or text/plain exists; still stage image files from `clipboardData.files` and `clipboardData.items`.
 - Text and images can be prepared together, but are sent through separate API steps.
+- Draft images render inside `.composer-editor` as a left attachment rail (`#draftImageTray`), not as a separate row.
 - Draft AI optimization changes text only and keeps original images.
 - Manual replies, including image URLs, should be learned when `skillAutoLearn` is true.
+- Skill save/update must not store `blob:` object URLs. Upload drafts first, then persist real image URLs in `replySteps`.
+- `sendText()` and `sendSuggestionSteps()` are wrapped by `withSendingLock()` to stop duplicate submissions while the server queues/flushes messages.
 
 ## Friend Requests
 

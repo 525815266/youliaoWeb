@@ -177,6 +177,7 @@ const state = {
   skillAutoReply: localStorage.getItem("youchat.skill.autoReply") === "true",
   skillAutoLearn: localStorage.getItem("youchat.skill.autoLearn") !== "false",
   skillAutoSending: false,
+  sendingMessage: false,
   lastSkillAutoReplyKey: "",
   emojiOpen: false,
   draftImages: [],
@@ -515,6 +516,33 @@ function hydrateAiSettingsFields() {
   el.aiModel.value = state.aiModel;
   el.aiTemperature.value = state.aiTemperature;
   updateAiButtonState();
+}
+
+function updateSendControls() {
+  const sending = Boolean(state.sendingMessage);
+  if (el.sendText) {
+    el.sendText.disabled = sending;
+    el.sendText.textContent = sending ? "发送中..." : "发送";
+  }
+  if (el.sendAiSuggestion) el.sendAiSuggestion.disabled = sending || !state.aiSuggestion || Boolean(state.aiSuggestion.noReply);
+  if (el.applyAiSuggestion) el.applyAiSuggestion.disabled = sending || !state.aiSuggestion || Boolean(state.aiSuggestion.noReply);
+}
+
+async function withSendingLock(task) {
+  if (state.sendingMessage) {
+    toast("消息正在提交，请不要重复点击。", true);
+    return null;
+  }
+  state.sendingMessage = true;
+  updateSendControls();
+  try {
+    return await task();
+  } finally {
+    state.sendingMessage = false;
+    updateSendControls();
+    renderAiSuggestionCard();
+    if (state.activeTool === "skill") renderToolContent();
+  }
 }
 
 function showAiSettings() {
@@ -4273,10 +4301,39 @@ function handleReplyInput() {
 }
 
 function handleReplyPaste(event) {
-  const files = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith("image/"));
+  const files = getClipboardImageFiles(event.clipboardData);
   if (!files.length) return;
-  event.preventDefault();
+  const hasTextPayload = Boolean(
+    event.clipboardData?.getData("text/plain")?.trim() ||
+    event.clipboardData?.getData("text/html")?.trim()
+  );
+  if (!hasTextPayload) event.preventDefault();
   addDraftImages(files, "粘贴图片");
+}
+
+function getClipboardImageFiles(clipboardData) {
+  const seen = new Set();
+  const files = [];
+  const addFile = (file) => {
+    if (!file?.type?.startsWith("image/")) return;
+    const key = [file.name, file.type, file.size, file.lastModified].join(":");
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(file);
+  };
+
+  [...(clipboardData?.files || [])].forEach(addFile);
+  [...(clipboardData?.items || [])].forEach((item, index) => {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) return;
+    const file = item.getAsFile();
+    if (!file) return;
+    const namedFile = file.name ? file : new File([file], `pasted-image-${index + 1}.png`, {
+      type: file.type || "image/png",
+      lastModified: Date.now()
+    });
+    addFile(namedFile);
+  });
+  return files;
 }
 
 function handleReplyDragOver(event) {
@@ -4300,35 +4357,37 @@ function triggerHistoryAutoLoad() {
 }
 
 async function sendText() {
-  const content = el.replyText.value.trim();
-  const contactId = getContactId(state.activeContact);
-  const images = [...state.draftImages];
-  const matchedSkillBeforeSend = !state.lastSuggestionUsed ? buildSkillSuggestion() : null;
-  if (!contactId || (!content && !images.length)) {
-    toast("请先选择会话，并输入回复内容或粘贴图片。", true);
-    return;
-  }
+  return withSendingLock(async () => {
+    const content = el.replyText.value.trim();
+    const contactId = getContactId(state.activeContact);
+    const images = [...state.draftImages];
+    const matchedSkillBeforeSend = !state.lastSuggestionUsed ? buildSkillSuggestion() : null;
+    if (!contactId || (!content && !images.length)) {
+      toast("请先选择会话，并输入回复内容或粘贴图片。", true);
+      return;
+    }
 
-  try {
-    const sentImageUrls = [];
-    if (content) {
-      await sendChatContent({ content, contentType: 0 });
+    try {
+      const sentImageUrls = [];
+      if (content) {
+        await sendChatContent({ content, contentType: 0 });
+      }
+      for (const image of images) {
+        const imageUrl = await sendImageFile(image.file, { silent: true });
+        sentImageUrls.push(imageUrl);
+        await delay(180);
+      }
+      await learnFromManualReply(content, sentImageUrls, { matchedSkill: matchedSkillBeforeSend });
+      el.replyText.value = "";
+      clearDraftImages();
+      clearAiSuggestion();
+      touchActiveContact(content || (sentImageUrls.length ? "[image]" : ""));
+      await loadMessages(1, "replace", { forceBottom: true });
+      toast(images.length ? "文字和图片已提交到悠聊服务。" : "消息已提交到悠聊服务。");
+    } catch (error) {
+      toast(`发送失败：${error.message}`, true);
     }
-    for (const image of images) {
-      const imageUrl = await sendImageFile(image.file, { silent: true });
-      sentImageUrls.push(imageUrl);
-      await delay(180);
-    }
-    await learnFromManualReply(content, sentImageUrls, { matchedSkill: matchedSkillBeforeSend });
-    el.replyText.value = "";
-    clearDraftImages();
-    clearAiSuggestion();
-    touchActiveContact(content || (sentImageUrls.length ? "[image]" : ""));
-    await loadMessages(1, "replace", { forceBottom: true });
-    toast(images.length ? "文字和图片已提交到悠聊服务。" : "消息已提交到悠聊服务。");
-  } catch (error) {
-    toast(`发送失败：${error.message}`, true);
-  }
+  });
 }
 
 async function sendChatContent({ content, contentType = 0 }) {
@@ -4513,18 +4572,39 @@ function renderDraftImages() {
   const hasDraftImages = Boolean(state.draftImages.length);
   el.draftImageTray.classList.toggle("is-hidden", !hasDraftImages);
   el.draftImageTray.closest(".composer")?.classList.toggle("has-draft-images", hasDraftImages);
-  el.draftImageTray.innerHTML = state.draftImages.map((image, index) => `
+  el.draftImageTray.innerHTML = [
+    ...state.draftImages.map((image, index) => `
     <figure class="draft-image" title="${escapeAttr(image.name)}">
       <img src="${escapeAttr(image.url)}" alt="待发送图片 ${index + 1}">
       <button type="button" data-remove-draft-image="${escapeAttr(image.id)}" aria-label="移除图片"><i class="native-icon bfi-close" aria-hidden="true"></i></button>
     </figure>
-  `).join("");
+  `),
+    hasDraftImages ? `<span class="draft-image-count">共 ${state.draftImages.length} 个图片</span>` : ""
+  ].join("");
 }
 
 function handleDraftImageClick(event) {
   const target = event.target.closest("[data-remove-draft-image]");
   if (!target) return;
   removeDraftImage(target.dataset.removeDraftImage);
+}
+
+async function uploadDraftImagesForSkill() {
+  const images = [...state.draftImages];
+  if (!images.length) return [];
+  assertActiveContact();
+  const steps = [];
+  for (const [index, image] of images.entries()) {
+    const imageUrl = image.skillUrl || await uploadChatImage(image.file);
+    image.skillUrl = imageUrl;
+    steps.push({
+      type: "image",
+      url: imageUrl,
+      label: image.name || `skill 图片 ${index + 1}`
+    });
+    await delay(120);
+  }
+  return steps;
 }
 
 async function uploadChatImage(file) {
@@ -4823,6 +4903,7 @@ function captureFrameFromStream(stream) {
 
 function showSaveSkillModal() {
   const sourceText = getComposerSkillSourceText();
+  const draftImageCount = state.draftImages.length;
   openToolModal({
     type: "save-skill",
     title: "保存 skill 回复",
@@ -4836,7 +4917,7 @@ function showSaveSkillModal() {
         <span>回复内容</span>
         <textarea id="saveSkillContent" rows="6" placeholder="请输入要沉淀的回复话术">${escapeHtml(sourceText.reply)}</textarea>
       </label>
-      <p class="modal-hint">保存后会进入 skill 回复库，后续 AI/skill 推荐会自动使用。</p>
+      <p class="modal-hint">保存后会进入 skill 回复库，后续 AI/skill 推荐会自动使用。${draftImageCount ? `当前草稿里的 ${draftImageCount} 张图片也会上传并保存到这条 skill。` : ""}</p>
     `,
     onConfirm: saveSkillFromModal
   });
@@ -4865,20 +4946,23 @@ async function saveSkillFromModal() {
     return false;
   }
 
-  const skill = {
-    title: `手动沉淀：${keywords[0].slice(0, 18)}`,
-    source: "manual",
-    enabled: true,
-    allowAutoReply: false,
-    noReply: false,
-    priority: 60,
-    keywords,
-    samples: keywords,
-    replySteps: [{ type: "text", content }],
-    fallback: content
-  };
-
   try {
+    const imageSteps = await uploadDraftImagesForSkill();
+    const skill = {
+      title: `手动沉淀：${keywords[0].slice(0, 18)}`,
+      source: "manual",
+      enabled: true,
+      allowAutoReply: false,
+      noReply: false,
+      priority: 60,
+      keywords,
+      samples: keywords,
+      replySteps: [
+        { type: "text", content },
+        ...imageSteps
+      ],
+      fallback: content
+    };
     const response = await fetch("/local/reply-skills/learn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4889,7 +4973,7 @@ async function saveSkillFromModal() {
     if (Array.isArray(payload.skills)) state.replySkills = payload.skills;
     closeToolModal();
     if (state.activeTool === "skill") renderToolContent();
-    toast("已保存到 skill 回复库。");
+    toast(imageSteps.length ? `已保存到 skill 回复库，并写入 ${imageSteps.length} 张图片。` : "已保存到 skill 回复库。");
     return true;
   } catch (error) {
     toast(`保存 skill 失败：${error.message}`, true);
@@ -5017,28 +5101,30 @@ function handleToolModalBodyKeydown(event) {
 }
 
 async function sendSuggestionSteps(suggestion) {
-  const steps = getSuggestionSteps(suggestion).filter((step) => step.content || step.url);
-  if (!steps.length) {
-    toast("推荐内容为空。", true);
-    return;
-  }
-
-  try {
-    for (const step of steps) {
-      if (step.type === "image") {
-        await sendChatContent({ content: absolutizeLocalUrl(step.url), contentType: 1 });
-      } else {
-        await sendChatContent({ content: step.content, contentType: 0 });
-      }
-      await delay(250);
+  return withSendingLock(async () => {
+    const steps = getSuggestionSteps(suggestion).filter((step) => step.content || step.url);
+    if (!steps.length) {
+      toast("推荐内容为空。", true);
+      return;
     }
-    state.lastSuggestionUsed = true;
-    touchActiveContact(getSuggestionTextForComposer(suggestion).slice(0, 80) || "[suggestion]");
-    await loadMessages(1, "replace", { forceBottom: true });
-    toast("skill 推荐已发送。");
-  } catch (error) {
-    toast(`推荐发送失败：${error.message}`, true);
-  }
+
+    try {
+      for (const step of steps) {
+        if (step.type === "image") {
+          await sendChatContent({ content: absolutizeLocalUrl(step.url || step.content), contentType: 1 });
+        } else {
+          await sendChatContent({ content: step.content, contentType: 0 });
+        }
+        await delay(250);
+      }
+      state.lastSuggestionUsed = true;
+      touchActiveContact(getSuggestionTextForComposer(suggestion).slice(0, 80) || "[suggestion]");
+      await loadMessages(1, "replace", { forceBottom: true });
+      toast("skill 推荐已发送。");
+    } catch (error) {
+      toast(`推荐发送失败：${error.message}`, true);
+    }
+  });
 }
 
 function absolutizeLocalUrl(url) {
@@ -5259,6 +5345,7 @@ async function refreshAiSuggestion() {
       type: baseSuggestion.type === "optimize" ? "optimize" : "ai",
       title: `${tone.name}${index ? ` ${index + 1}` : ""}`,
       label: tone.name,
+      skillId: baseSuggestion.skillId || "",
       content: reply,
       steps: [{ type: "text", content: reply }],
       keepDraftImages: Boolean(baseSuggestion.keepDraftImages)
@@ -5991,17 +6078,18 @@ function renderAiSuggestionCard() {
   const shouldKeepMessageBottom = isNearBottom(el.messageList);
   const suggestions = state.aiSuggestions.length ? state.aiSuggestions : state.aiSuggestion ? [state.aiSuggestion] : [];
   const hasSuggestion = Boolean(suggestions.length);
+  const sendDisabled = state.sendingMessage || !hasSuggestion || Boolean(state.aiSuggestion?.noReply);
   el.aiSuggestionCard.classList.toggle("is-hidden", !hasSuggestion);
   el.aiSuggestionCard.classList.toggle("is-no-reply", Boolean(state.aiSuggestion?.noReply));
   el.useAi.disabled = !hasSuggestion;
-  el.sendAiSuggestion.disabled = !hasSuggestion;
-  el.applyAiSuggestion.disabled = !hasSuggestion;
+  el.sendAiSuggestion.disabled = sendDisabled;
+  el.applyAiSuggestion.disabled = sendDisabled;
   if (el.refreshAiSuggestion) {
     el.refreshAiSuggestion.disabled = state.aiGenerating || !state.aiEnabled || !hasSuggestion;
     el.refreshAiSuggestion.textContent = state.aiGenerating ? "生成中" : "换一换";
   }
   if (hasSuggestion) {
-    const disabled = Boolean(state.aiSuggestion.noReply);
+    const disabled = state.sendingMessage || Boolean(state.aiSuggestion.noReply);
     el.useAi.disabled = disabled;
     el.sendAiSuggestion.disabled = disabled;
     el.applyAiSuggestion.disabled = disabled;
@@ -6576,6 +6664,7 @@ function renderSkillRow(skill, index, suggestion = null) {
   const status = skill.noReply ? "无需回复" : skill.allowAutoReply ? "可自动" : "推荐";
   const keywords = (skill.keywords || []).slice(0, 8).join("、") || "-";
   const content = skill.noReply ? (skill.fallback || "无需回复") : getSkillText(skill);
+  const imageCount = getSkillSteps(skill).filter((step) => step.type === "image").length;
   const isMatched = suggestion?.skillId && String(skill.id) === String(suggestion.skillId);
   const isDimmed = suggestion?.skillId && !isMatched;
   const overrideCount = Array.isArray(skill.manualOverrides)
@@ -6588,12 +6677,12 @@ function renderSkillRow(skill, index, suggestion = null) {
       <div class="quick-main">
         <strong>${escapeHtml(skill.title || "未命名 skill")} <em>${escapeHtml(status)}</em></strong>
         <p>${escapeHtml(content || "暂无话术")}</p>
-        <small>关键词：${escapeHtml(keywords)}${overrideCount ? ` / 人工纠正 ${overrideCount} 次` : ""}</small>
+        <small>关键词：${escapeHtml(keywords)}${imageCount ? ` / 含 ${imageCount} 张图` : ""}${overrideCount ? ` / 人工纠正 ${overrideCount} 次` : ""}</small>
       </div>
       <div class="quick-actions">
-        <button class="mini-action" type="button" data-skill-apply="${escapeAttr(skill.id)}" ${skill.noReply ? "disabled" : ""}>采用</button>
-        <button class="mini-action" type="button" data-skill-send="${escapeAttr(skill.id)}" ${skill.noReply ? "disabled" : ""}>发送</button>
-        <button class="mini-action" type="button" data-skill-optimize="${escapeAttr(skill.id)}" ${skill.noReply ? "disabled" : ""}>优化</button>
+        <button class="mini-action" type="button" data-skill-apply="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>采用</button>
+        <button class="mini-action" type="button" data-skill-send="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>发送</button>
+        <button class="mini-action" type="button" data-skill-optimize="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>优化</button>
       </div>
     </article>
   `;
@@ -7266,7 +7355,14 @@ function mergeTextWithExistingSkillImages(textSteps, skill) {
       url: step.url || step.content || "",
       label: step.label || "人工回复图片"
     }));
-  return [...nextTextSteps, ...nextImageSteps, ...existingImageSteps].slice(0, 8);
+  const seenImages = new Set();
+  const imageSteps = [...nextImageSteps, ...existingImageSteps].filter((step) => {
+    const url = String(step.url || step.content || "").trim();
+    if (!url || seenImages.has(url)) return false;
+    seenImages.add(url);
+    return true;
+  });
+  return [...nextTextSteps, ...imageSteps].slice(0, 8);
 }
 
 async function updateSkillFromSuggestion(suggestion) {
@@ -7286,16 +7382,20 @@ async function updateSkillFromSuggestion(suggestion) {
   }
 
   try {
+    const imageSteps = await uploadDraftImagesForSkill();
     await replaceReplySkill({
       ...skill,
-      replySteps: mergeTextWithExistingSkillImages([{ type: "text", content: text }], skill),
+      replySteps: mergeTextWithExistingSkillImages([
+        { type: "text", content: text },
+        ...imageSteps
+      ], skill),
       fallback: text,
       revisionCount: Number(skill.revisionCount || 0) + 1,
       lastOptimizedAt: new Date().toISOString()
     });
     state.lastSuggestionUsed = true;
     if (state.activeTool === "skill") renderToolContent();
-    toast("已把优化后的话术更新到当前 skill。");
+    toast(imageSteps.length ? `已把优化后的话术和 ${imageSteps.length} 张图片更新到当前 skill。` : "已把优化后的话术更新到当前 skill。");
   } catch (error) {
     toast(`更新 skill 失败：${error.message}`, true);
   }

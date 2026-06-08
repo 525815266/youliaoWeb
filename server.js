@@ -287,7 +287,7 @@ function writeReplySkills(payload) {
 function normalizeLearnedSkill(skill) {
   const now = Date.now();
   const title = String(skill.title || "自动学习回复").trim();
-  return {
+  const normalized = {
     id: String(skill.id || `learned-${now}`),
     title,
     source: skill.source || "learned",
@@ -308,6 +308,13 @@ function normalizeLearnedSkill(skill) {
     fallback: String(skill.fallback || ""),
     contactUrl: String(skill.contactUrl || "")
   };
+
+  if (Array.isArray(skill.manualOverrides)) normalized.manualOverrides = skill.manualOverrides.slice(0, 12);
+  if (Number.isFinite(Number(skill.revisionCount))) normalized.revisionCount = Number(skill.revisionCount);
+  if (skill.lastManualOverrideAt) normalized.lastManualOverrideAt = String(skill.lastManualOverrideAt);
+  if (skill.lastAutoRevisedAt) normalized.lastAutoRevisedAt = String(skill.lastAutoRevisedAt);
+  if (skill.lastOptimizedAt) normalized.lastOptimizedAt = String(skill.lastOptimizedAt);
+  return normalized;
 }
 
 async function handleReplySkills(req, res) {

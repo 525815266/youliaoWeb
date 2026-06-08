@@ -39,9 +39,9 @@
 - 选择图片：调用 `/ChatContent/GetOssConfig` 获取 OSS 参数，优先浏览器直传，失败时走 `/local/oss-upload` 本地代理，再用 `/ChatContent/SendMsg(contentType=1/4)` 发出。
 - 红包：调用 `/ChatContent/GetRedPacks` 读取模板，再调用 `/ChatContent/SendRedPacks`。
 - 截图：使用浏览器屏幕捕获生成图片，再走图片发送链路。
-- 星标：把当前输入/推荐话术写入 `data/reply-skills.json`，后续 skill 回复和 AI 推荐会使用。
+- 星标：把当前输入/推荐话术写入 `data/reply-skills.json`；如果输入框里已有草稿图片，会先走真实 OSS 上传拿到图片 URL，再把图片步骤一起写入 skill。
 - 转 AI：调用 `/Conversation/TransferToAI`。
-- 粘贴图片：输入框支持直接粘贴/拖入图片，先进入待发送草稿；点击发送时文字走 `/ChatContent/SendMsg(contentType=0)`，图片逐张走上传 + `/ChatContent/SendMsg(contentType=1/4)`。
+- 粘贴图片：输入框支持直接粘贴/拖入图片；剪贴板里同时有文字和图片时，文字会正常进入输入框，图片会进入输入框左侧草稿栏。点击发送时文字走 `/ChatContent/SendMsg(contentType=0)`，图片逐张走上传 + `/ChatContent/SendMsg(contentType=1/4)`。发送过程中按钮会锁定为“发送中...”，避免服务端排队未回显时重复点击造成多次发送。
 - 文字优化：输入文字后会用 AI 生成 1-3 条“您输入的可优化为”候选，只优化文字，不改图片；采纳/发送时可保留原图一起发送。
 - 好友请求：左侧会话顶部按钮调用 `/Contact/GetNewFirend`，通过/忽略分别调用 `/Contact/NewFirendAccept`、`/Contact/NewFirendIgnor`。
 - 会话 tab：当前、留言、历史显示数量和红点；选中会话后按键盘上下箭头可切换会话。
@@ -183,7 +183,7 @@ C:\youchat-dev-web\data\reply-skills.json
 
 这里可以维护关键词、回复步骤、图片步骤、是否允许自动回复、是否仅标记无需回复。开启“自动学习人工回复”后，如果已经命中某个 skill 但客服没有采用推荐，而是自己回复，页面会先把人工回复记录到这个 skill 的 `manualOverrides`；同一 skill 被人工纠正累计 3 次后，会自动把人工话术回写到该 skill 的 `replySteps/fallback`。没有命中 skill 时，才会按“最新客户问题 + 人工回复”沉淀为新的 learned skill。开启“skill 自动回复”后，只有命中 `allowAutoReply: true` 且不是系统提示/提现成功/无需回复类消息时才会自动发送。
 
-skill 命中卡片和 skill 列表都提供“优化”按钮。优化时会参考当前 skill 话术、客服输入框里的补充文字、草稿图片数量、最新客户消息和最近聊天记录，只优化文字，不处理或改写图片。优化候选里会出现“更新skill”按钮，点击后会直接把当前候选写回命中的 skill。
+skill 命中卡片和 skill 列表都提供“优化”按钮。优化时会参考当前 skill 话术、客服输入框里的补充文字、草稿图片数量、最新客户消息和最近聊天记录，只优化文字，不处理或改写图片。优化候选里会出现“更新skill”按钮，点击后会把当前候选写回命中的 skill；如果输入框里有草稿图片，会先上传图片并把真实图片 URL 追加为 skill 图片步骤，旧图片步骤会保留并按 URL 去重。
 
 ## 好友请求和会话列表
 

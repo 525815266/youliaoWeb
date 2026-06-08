@@ -42,6 +42,7 @@
 36. [2026-06-08 聊天消息卡片分类渲染](#36-2026-06-08-聊天消息卡片分类渲染)
 37. [2026-06-08 Skill 优化回写与命中态排序](#37-2026-06-08-skill-优化回写与命中态排序)
 38. [2026-06-08 知名网站链接卡片 Logo 兜底](#38-2026-06-08-知名网站链接卡片-logo-兜底)
+39. [2026-06-08 Skill 图片回写、混合粘贴与发送防重复](#39-2026-06-08-skill-图片回写混合粘贴与发送防重复)
 
 ## 1. 项目目标
 
@@ -1941,3 +1942,49 @@ ORDER BY COUNT(*) DESC;
 - `getData()` 是全局老函数，不要为了统计/通知粗暴改它；深层嵌套取数统一用 `unwrapPayloadData()`、`getRecordsDeep()`、`getTotalDeep()`，避免影响联系人、订单、快捷回复等旧链路。
 - 本地 `/api` 代理偶发 `fetch failed` 时，先用直连 `http://192.168.9.83:18080/api/...` 分辨是代理请求格式/连接复用问题，还是飞牛服务端真实失败。
 - 客户端设置保存有风险，后续改字段时必须保留原始 JSON 查看区，方便确认真实服务端返回结构。
+
+## 39. 2026-06-08 Skill 图片回写、混合粘贴与发送防重复
+
+用户反馈：
+
+- 文字优化后点击“更新skill”可以改文字，但当前草稿里的图片不会进入 skill，后续 skill 发送仍然只有文字。
+- 剪贴板里同时有文字和图片时，浏览器只把文字粘进输入框，图片需要再粘贴一次。
+- 图片希望像原客户端一样出现在输入框内部左侧，而不是单独占一整行挤压输入区。
+- 点击发送后服务端会排队，消息不会马上回流到消息列表，客服连续点击会造成重复发送。
+
+已修改：
+
+- `public/app.js`
+  - 新增 `getClipboardImageFiles()`，同时读取 `clipboardData.files` 和 `clipboardData.items`，解决部分来源图片只在 items 里的问题。
+  - `handleReplyPaste()` 改为混合粘贴：剪贴板同时有文字和图片时不阻止默认文字粘贴，同时把图片加入 `state.draftImages`；纯图片粘贴才阻止默认行为。
+  - 新增 `uploadDraftImagesForSkill()`，复用现有 `uploadChatImage()`，只上传草稿图片拿真实 URL，不提前发送给客户。
+  - `showSaveSkillModal()` 会提示当前草稿图片数量。
+  - `saveSkillFromModal()` 保存 skill 时写入文字步骤和当前草稿图片步骤。
+  - `updateSkillFromSuggestion()` 点击“更新skill”时，会先上传当前草稿图片，再把优化文字和图片 URL 回写到该 skill。
+  - `mergeTextWithExistingSkillImages()` 对图片 URL 去重，并继续保留原 skill 里的旧图片步骤。
+  - `refreshAiSuggestion()` 保留原优化候选的 `skillId`，避免“换一换”后无法继续更新原 skill。
+  - 新增 `state.sendingMessage`、`updateSendControls()`、`withSendingLock()`。
+  - `sendText()` 和 `sendSuggestionSteps()` 入口套发送锁，提交过程中主发送、AI 推荐发送、skill 行发送都会禁用，按钮显示“发送中...”。
+  - `renderSkillRow()` 显示 `含 N 张图`，并在发送中禁用采用/发送/优化按钮。
+- `public/index.html`
+  - `#draftImageTray` 从 `.composer-attachments` 移到 `.composer-editor` 内部，图片托盘成为输入框左侧区域。
+- `public/styles.css`
+  - `.composer-editor` 改成 grid 容器，有草稿图片时为 `82px + 文本框` 两列。
+  - `.draft-image-tray` 改成输入框左侧附件栏，图片固定缩略图并显示 `共 N 个图片`。
+  - 有图片时 composer 高度降低到 `min-height: 206px`、`max-height: min(306px, 38dvh)`，避免图片托盘过度挤压聊天区。
+  - 补齐禁用按钮视觉态。
+- `server.js`
+  - `normalizeLearnedSkill()` 保留 `manualOverrides`、`revisionCount`、`lastManualOverrideAt`、`lastAutoRevisedAt`、`lastOptimizedAt`，避免 skill 学习/保存时把人工纠正和优化历史洗掉。
+
+验证结果：
+
+- `npm run check` 通过。
+- 本轮浏览器控制工具未暴露可用的本地截图/操作接口，因此没有声明截图 QA。
+
+维护规则：
+
+- skill 图片必须存真实可发送 URL。不要把 `blob:`、`File`、本地 object URL 或 base64 临时预览写入 `data/reply-skills.json`。
+- `uploadDraftImagesForSkill()` 只负责上传并返回步骤，不调用 `/ChatContent/SendMsg`。
+- 如果用户点击“更新skill”时草稿里有新图片，应把新图片加到 skill，同时保留旧图片并按 URL 去重。
+- 不要把 `#draftImageTray` 再移回独立附件行；当前设计是输入框内部左侧附件栏。
+- 发送锁是前端防重复提交层，不替代服务端幂等。后续若服务端提供消息 requestId/idempotency key，再加服务端级防重。

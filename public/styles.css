@@ -593,6 +593,13 @@ textarea:focus-visible {
   opacity: 0.68;
 }
 
+.send-button[disabled],
+.mini-action[disabled],
+.light-button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .back-button {
   display: block;
   min-width: 102px;
@@ -1913,9 +1920,9 @@ textarea:focus-visible {
 
 .composer.has-draft-images,
 .composer:has(.draft-image-tray:not(.is-hidden)) {
-  grid-template-rows: auto auto minmax(82px, 1fr) auto;
-  min-height: 236px;
-  max-height: min(334px, 43dvh);
+  grid-template-rows: auto auto minmax(92px, 1fr) auto;
+  min-height: 206px;
+  max-height: min(306px, 38dvh);
 }
 
 .composer-module {
@@ -2160,16 +2167,20 @@ textarea:focus-visible {
 
 .draft-image-tray {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  overflow-x: auto;
+  align-items: flex-start;
+  align-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow: auto;
   margin: 0;
   padding: 6px;
-  min-height: 74px;
-  height: 74px;
-  max-height: 74px;
-  border: 1px dashed #b9cde5;
-  border-radius: var(--radius);
+  width: 82px;
+  min-height: 0;
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-right: 1px solid #e1ebf6;
+  border-radius: 0;
   background: #f8fbff;
 }
 
@@ -2219,9 +2230,27 @@ textarea:focus-visible {
   font-size: 10px;
 }
 
+.draft-image-count {
+  flex: 0 0 100%;
+  color: #59677a;
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+
 .composer-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
+  border: 1px solid #d8e1ec;
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.composer.has-draft-images .composer-editor,
+.composer:has(.draft-image-tray:not(.is-hidden)) .composer-editor {
+  grid-template-columns: 82px minmax(0, 1fr);
 }
 
 .composer textarea {
@@ -2229,8 +2258,8 @@ textarea:focus-visible {
   min-height: 0;
   height: 100%;
   resize: none;
-  border: 1px solid #d8e1ec;
-  border-radius: var(--radius);
+  border: 0;
+  border-radius: 0;
   padding: 8px 10px;
   color: #172033;
   background: #fff;
@@ -4114,6 +4143,21 @@ textarea:focus-visible {
   .ai-suggestion-option p {
     white-space: normal;
     max-height: 54px;
+  }
+
+  .composer.has-draft-images .composer-editor,
+  .composer:has(.draft-image-tray:not(.is-hidden)) .composer-editor {
+    grid-template-columns: 74px minmax(0, 1fr);
+  }
+
+  .draft-image-tray {
+    width: 74px;
+  }
+
+  .draft-image {
+    flex-basis: 54px;
+    width: 54px;
+    height: 54px;
   }
 
   .red-dot-filter {
