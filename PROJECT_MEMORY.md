@@ -1645,3 +1645,58 @@ ORDER BY COUNT(*) DESC;
 - 不带 `accountId` 的 `/Contact/GetContactList` 是全量联系人/混合口径，不能直接显示在“当前”。
 - 如果将来服务端返回当前为空，只有现有列表已经全部满足 `conversationId>0/accountId>0` 时才允许保留旧列表。
 - 如果又出现 `当前(几千)`，第一步检查 `logs/api-capture.ndjson` 中当前 tab 的 `/Contact/GetContactList` 请求体是否丢了 `accountId=2`。
+
+## 36. 2026-06-08 聊天消息卡片分类渲染
+
+用户反馈：
+
+- 链接类、小程序类、文件类消息不能都按普通文本或同一种链接卡片显示。
+- 小程序应参考微信卡片：标题、描述、绿色小程序标识。
+- 文件应参考微信电脑版文件卡：文件名、大小、右侧文件类型图标、底部来源。
+
+真实接口和枚举：
+
+- `C:\Program Files\youchat-desktop\bin\YouChatService.xml` 中 `EnumContentType`：
+  - `CtCard`：URL 卡片。
+  - `CtWeapp`：小程序。
+  - `CtFile`：文件。
+- 真实抓包统计里常见类型：
+  - `contentType=5`：URL/网页卡片，字段通常是 `cardTitle/cardDesc/cardImg/cardUrl`。
+  - `contentType=6`：小程序，字段通常是 `miniProTitle/miniProName/miniProDesc/miniProImg/miniProUrl`。
+  - `contentType=8`：文件，当前真实样本的 `content` 是 JSON，例如：
+    - `{"Title":"中交（长沙）建设有限公司2453343（机械租赁费）.pdf","Type":74,"TypeStr":"[应用消息]","disForward":0,"version":0}`
+- 真实文件样本：
+  - `contactId=491`
+  - `contentType=8`
+  - 文件名：`中交（长沙）建设有限公司2453343（机械租赁费）.pdf`
+
+已修改：
+
+- `public/app.js`
+  - `renderMessageContent()` 分流顺序改为：图片 -> 文件卡 -> 小程序卡 -> 网页/链接卡 -> 文本。
+  - 新增 `shouldRenderRichMessageCard()`，统一让富卡片气泡去掉普通文本 padding/background。
+  - 新增 `buildMessageMiniProgramCard()` / `renderMessageMiniProgramCard()`。
+  - 新增 `buildMessageFileCard()` / `renderMessageFileCard()`。
+  - 新增 `parseMessagePayload()`，兼容 JSON 和基础 XML payload，用于解析文件名、文件大小、小程序标题等字段。
+  - 新增 `formatFileSize()`、`getFileExtension()`、`getFileIconMeta()` 等文件显示辅助。
+  - `buildMessageLinkCard()` 不再把小程序字段混进网页卡片，避免 `contentType=6` 被错误渲染成普通链接预览。
+- `public/styles.css`
+  - 新增 `.message-mini-card`，两段式白色小程序卡片，绿色圆形小程序标识。
+  - 新增 `.message-file-card`，灰底文件卡片，支持 Word/Excel/PPT/PDF/压缩包等文件图标色。
+  - `.message-content.has-rich-card` 去除普通气泡样式。
+  - 右侧聊天记录 `.history-chat-list .message-content.has-rich-card` 单独覆盖，防止历史面板把富卡片重新加 padding 挤坏。
+
+验证结果：
+
+- `npm run check` 通过。
+- `git diff --check` 只有 Windows 换行提示。
+- 本地临时预览页验证后删除，卡片尺寸：
+  - 小程序：约 `260x118`。
+  - 文件：约 `340x126`。
+  - 网页卡片：约 `320x135`。
+
+维护规则：
+
+- 不要再把 `contentType=6` 小程序交给 `buildMessageLinkCard()`。
+- 不要删除 `.history-chat-list .message-content.has-rich-card` 覆盖，否则右侧工具栏聊天记录会把卡片挤回普通气泡。
+- 如果后续抓到更多文件字段，例如 `FileSize/fileUrl/cdnattachurl`，优先扩展 `parseMessagePayload()` 和 `buildMessageFileCard()`，不要写一次性字符串拆分。

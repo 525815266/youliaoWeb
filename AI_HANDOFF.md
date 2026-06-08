@@ -733,6 +733,31 @@ ALTER TABLE `ChatContent_2026_06_08`
 - Latest capture log after auto refresh showed current list requests include `accountId=2`.
 - Do not commit `logs/api-capture.ndjson`; it is runtime capture noise.
 
+2026-06-08 message card rendering split:
+
+- User asked to optimize link, mini-program, and file message display to mimic WeChat cards.
+- Real enum source: `C:\Program Files\youchat-desktop\bin\YouChatService.xml` `EnumContentType`.
+- Treat message content types as:
+  - `5`: URL/web card, use `cardTitle/cardDesc/cardImg/cardUrl`.
+  - `6`: mini-program card, use `miniProTitle/miniProName/miniProDesc/miniProImg/miniProUrl`.
+  - `8`: file card. Current real sample stores JSON in `content`, e.g. `{"Title":"...pdf","Type":74,"TypeStr":"[应用消息]"}`.
+- `public/app.js` now renders in this order:
+  - image -> file card -> mini-program card -> link/web card -> text.
+- Important helpers:
+  - `shouldRenderRichMessageCard`
+  - `buildMessageMiniProgramCard`
+  - `buildMessageFileCard`
+  - `parseMessagePayload`
+  - `formatFileSize`
+  - `getFileIconMeta`
+- `public/styles.css` now has:
+  - `.message-mini-card`
+  - `.message-file-card`
+  - `.message-content.has-rich-card`
+  - `.history-chat-list .message-content.has-rich-card`
+- Keep the history override. Without it, right-side history adds normal message padding back to rich cards.
+- Temporary visual QA page `public/card-preview.html` was created and deleted; do not expect it in the repo.
+
 ## Non-Negotiables
 
 - Do not fake searchable user IDs.

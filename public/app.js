@@ -2729,14 +2729,14 @@ function renderMessageBubble(message, options = {}) {
   const isOutgoing = message.direction === "outgoing" || message.direction === "ai";
   const avatar = renderMessageAvatar(message, isOutgoing);
   const classes = ["message", message.direction || "incoming", options.compact ? "is-compact" : ""].filter(Boolean).join(" ");
-  const isLinkCard = shouldRenderMessageLinkCard(message);
+  const isRichCard = shouldRenderRichMessageCard(message);
   const body = `
     <div class="message-body">
       <div class="message-meta">
         <span class="message-sender">${escapeHtml(message.sender || "")}</span>
         <time>${escapeHtml(message.time || "")}</time>
       </div>
-      <div class="message-content${isLinkCard ? " has-link-card" : ""}">${renderMessageContent(message)}</div>
+      <div class="message-content${isRichCard ? " has-rich-card" : ""}">${renderMessageContent(message)}</div>
     </div>
   `;
   return `
@@ -2768,19 +2768,21 @@ function renderMessageContent(message) {
   if (message.contentType === 1 || isImageUrl(content)) {
     return `<img class="message-image" src="${escapeAttr(normalizeImageUrl(content))}" alt="聊天图片">`;
   }
+  const fileCard = buildMessageFileCard(message);
+  if (fileCard) return renderMessageFileCard(fileCard);
+  const miniCard = buildMessageMiniProgramCard(message);
+  if (miniCard) return renderMessageMiniProgramCard(miniCard);
   const linkCard = buildMessageLinkCard(message);
   if (linkCard) return renderMessageLinkCard(linkCard, message);
-  if (message.contentType === 49 || message.cardTitle || message.cardDesc || message.cardImg || message.cardUrl) {
-    return `
-      <div class="message-card-content">
-        ${message.cardImg ? `<img src="${escapeAttr(normalizeImageUrl(message.cardImg))}" alt="">` : ""}
-        <strong>${escapeHtml(message.cardTitle || "卡片消息")}</strong>
-        ${message.cardDesc ? `<span>${escapeHtml(message.cardDesc)}</span>` : ""}
-        ${message.cardUrl ? copyButton(message.cardUrl, "order-link") : ""}
-      </div>
-    `;
-  }
   return linkifyMessageText(content);
+}
+
+function shouldRenderRichMessageCard(message) {
+  return Boolean(
+    buildMessageFileCard(message) ||
+    buildMessageMiniProgramCard(message) ||
+    buildMessageLinkCard(message)
+  );
 }
 
 function shouldRenderMessageLinkCard(message) {
@@ -2790,44 +2792,47 @@ function shouldRenderMessageLinkCard(message) {
 }
 
 function buildMessageLinkCard(message) {
+  if (buildMessageFileCard(message) || buildMessageMiniProgramCard(message)) return null;
   const nativeUrl = firstValue(
     message.cardUrl,
-    message.miniProUrl,
     message.url
   );
   const contentUrl = extractFirstUrl(message.content);
-  const canPromoteContentUrl = message.contentType === 49 || message.contentType === 6 || isStandaloneUrlMessage(message.content, contentUrl);
+  const canPromoteContentUrl = [5, 49].includes(Number(message.contentType)) || isStandaloneUrlMessage(message.content, contentUrl);
   const directUrl = nativeUrl || (canPromoteContentUrl ? contentUrl : "");
-  const hasCardFields = Boolean(message.cardTitle || message.cardDesc || message.cardImg || directUrl || message.contentType === 49 || message.contentType === 6);
-  if (!hasCardFields || !directUrl) return null;
-  const url = normalizeLinkUrl(directUrl);
-  if (!url) return null;
+  const hasCardFields = Boolean(message.cardTitle || message.cardDesc || message.cardImg || directUrl || [5, 7, 49].includes(Number(message.contentType)));
+  if (!hasCardFields) return null;
+  const url = directUrl ? normalizeLinkUrl(directUrl) : "";
+  if (directUrl && !url) return null;
   const cached = state.linkPreviewCache[url] || {};
   const previewUrl = firstValue(cached.video, cached.player, cached.videoSecureUrl, "");
   return {
     url,
-    title: firstValue(message.cardTitle, message.miniProTitle, cached.title, getUrlHost(url), "链接卡片"),
-    desc: firstValue(message.cardDesc, message.miniProDesc, cached.description, ""),
-    image: firstValue(message.cardImg, message.miniProImg, cached.image, ""),
+    title: firstValue(message.cardTitle, cached.title, getUrlHost(url), "链接卡片"),
+    desc: firstValue(message.cardDesc, cached.description, ""),
+    image: firstValue(message.cardImg, cached.image, ""),
     video: previewUrl,
     videoType: firstValue(cached.videoType, cached.contentType, ""),
-    siteName: firstValue(message.miniProName, cached.siteName, getUrlHost(url), ""),
+    siteName: firstValue(message.displayName, cached.siteName, getUrlHost(url), ""),
     contentType: message.contentType
   };
 }
 
 function renderMessageLinkCard(card, message) {
   const hasImage = Boolean(card.image);
-  const status = state.linkPreviewCache[card.url]?.loading ? "正在获取预览" : card.video ? "可预览视频" : "网页预览";
+  const status = card.url && state.linkPreviewCache[card.url]?.loading ? "正在获取预览" : card.video ? "可预览视频" : "网页预览";
   const host = getUrlHost(card.url);
   const fallbackText = (host || "LINK").slice(0, 4).toUpperCase();
+  const cardAttrs = card.url
+    ? ` data-link-card="${escapeAttr(card.url)}" data-message-id="${escapeAttr(message.id || "")}"`
+    : ` data-message-id="${escapeAttr(message.id || "")}"`;
   return `
-    <article class="message-link-card" data-link-card="${escapeAttr(card.url)}" data-message-id="${escapeAttr(message.id || "")}">
-      <button class="link-card-detail" type="button" data-link-preview="${escapeAttr(card.url)}">详情</button>
+    <article class="message-link-card is-web-card"${cardAttrs}>
+      ${card.url ? `<button class="link-card-detail" type="button" data-link-preview="${escapeAttr(card.url)}">详情</button>` : ""}
       <div class="link-card-main">
         <div class="link-card-copy">
           <strong>${escapeHtml(card.title || getUrlHost(card.url) || "链接卡片")}</strong>
-          ${card.desc ? `<p>${escapeHtml(card.desc)}</p>` : `<p>${escapeHtml(card.url)}</p>`}
+          ${card.desc ? `<p>${escapeHtml(card.desc)}</p>` : card.url ? `<p>${escapeHtml(card.url)}</p>` : ""}
           <span>${escapeHtml(card.siteName || host || status)}</span>
         </div>
         <div class="link-card-thumb ${hasImage ? "" : "is-empty"}">
@@ -2836,11 +2841,199 @@ function renderMessageLinkCard(card, message) {
       </div>
       <div class="link-card-actions">
         <span>${escapeHtml(status)}</span>
-        <button class="mini-action ghost" type="button" data-open-link="${escapeAttr(card.url)}">打开</button>
-        <button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.url)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>
+        ${card.url ? `<button class="mini-action ghost" type="button" data-open-link="${escapeAttr(card.url)}">打开</button>` : ""}
+        ${card.url ? `<button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.url)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>` : ""}
       </div>
     </article>
   `;
+}
+
+function buildMessageMiniProgramCard(message) {
+  const parsed = parseMessagePayload(message.content);
+  const isMini = Number(message.contentType) === 6 || Boolean(message.miniProTitle || message.miniProName || message.miniProImg || message.miniProUrl);
+  if (!isMini) return null;
+  const title = firstValue(message.miniProTitle, parsed.title, parsed.Title, message.cardTitle, "小程序");
+  const appName = firstValue(message.miniProName, parsed.appName, parsed.AppName, parsed.source, "小程序");
+  const desc = firstValue(message.miniProDesc, parsed.description, parsed.desc, parsed.des, message.cardDesc, title);
+  const image = firstValue(message.miniProImg, parsed.image, parsed.thumbUrl, parsed.icon, message.cardImg, "");
+  const url = normalizeLinkUrl(firstValue(message.miniProUrl, parsed.url, parsed.pagePath, message.cardUrl, ""));
+  return { title, appName, desc, image, url };
+}
+
+function renderMessageMiniProgramCard(card) {
+  return `
+    <article class="message-mini-card">
+      <div class="mini-card-title">
+        <strong>${escapeHtml(card.title || "小程序")}</strong>
+        ${card.url ? `<button class="link-card-detail" type="button" data-open-link="${escapeAttr(card.url)}">打开</button>` : ""}
+      </div>
+      <div class="mini-card-main">
+        <span>${escapeHtml(card.desc || card.title || "小程序消息")}</span>
+        ${card.image ? `<img class="mini-card-image" src="${escapeAttr(normalizeImageUrl(card.image))}" alt="">` : '<span class="mini-card-icon" aria-hidden="true"></span>'}
+      </div>
+      <div class="mini-card-footer">
+        <span class="mini-card-mark" aria-hidden="true"></span>
+        <span>${escapeHtml(card.appName || "小程序")}</span>
+        ${card.url ? `<button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.url)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function buildMessageFileCard(message) {
+  const parsed = parseMessagePayload(message.content);
+  const fileUrl = firstValue(
+    message.fileUrl,
+    message.url,
+    message.cardUrl,
+    parsed.fileUrl,
+    parsed.FileUrl,
+    parsed.url,
+    parsed.Url,
+    parsed.cdnattachurl,
+    parsed.CdnAttachUrl,
+    ""
+  );
+  const normalizedUrl = normalizeLinkUrl(fileUrl);
+  const title = firstValue(
+    message.fileName,
+    message.fileTitle,
+    message.displayName,
+    parsed.fileName,
+    parsed.FileName,
+    parsed.title,
+    parsed.Title,
+    message.cardTitle,
+    getFileNameFromUrl(normalizedUrl),
+    ""
+  );
+  const extension = getFileExtension(firstValue(title, normalizedUrl, message.content));
+  const isFile = Number(message.contentType) === 8 || Boolean(message.fileName || message.fileUrl || message.fileSize || title && extension && normalizedUrl && isDocumentExtension(extension));
+  if (!isFile) return null;
+  const size = formatFileSize(firstValue(
+    message.fileSize,
+    parsed.fileSize,
+    parsed.FileSize,
+    parsed.size,
+    parsed.Size,
+    parsed.totalLen,
+    parsed.TotalLen,
+    parsed.totallen,
+    ""
+  ));
+  const source = firstValue(message.displayName, parsed.appName, parsed.AppName, parsed.source, parsed.Source, "微信电脑版");
+  return {
+    title: title || "文件",
+    extension: extension || "file",
+    size,
+    source,
+    url: normalizedUrl,
+    raw: message.content
+  };
+}
+
+function renderMessageFileCard(card) {
+  const icon = getFileIconMeta(card.extension);
+  return `
+    <article class="message-file-card">
+      <div class="file-card-main">
+        <div class="file-card-copy">
+          <strong title="${escapeAttr(card.title)}">${escapeHtml(card.title)}</strong>
+          <span>${escapeHtml(card.size || "文件")}</span>
+        </div>
+        <span class="file-card-icon ${escapeAttr(icon.className)}">${escapeHtml(icon.label)}</span>
+      </div>
+      <div class="file-card-footer">
+        <span class="file-card-source-icon" aria-hidden="true"></span>
+        <span>${escapeHtml(card.source || "文件消息")}</span>
+        ${card.url ? `<button class="mini-action ghost" type="button" data-open-link="${escapeAttr(card.url)}">打开</button>` : ""}
+        ${card.url ? `<button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.url)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>` : `<button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.title)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>`}
+      </div>
+    </article>
+  `;
+}
+
+function parseMessagePayload(content) {
+  const text = String(content || "").trim();
+  if (!text) return {};
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  if (!text.includes("<")) return {};
+  const getXmlValue = (name) => {
+    const match = text.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`, "i"));
+    return match ? decodeHtmlEntities(match[1].trim()) : "";
+  };
+  return {
+    title: getXmlValue("title"),
+    description: getXmlValue("des") || getXmlValue("desc"),
+    appName: getXmlValue("sourcedisplayname") || getXmlValue("appname"),
+    url: getXmlValue("url"),
+    fileName: getXmlValue("filename") || getXmlValue("title"),
+    fileSize: getXmlValue("totallen") || getXmlValue("filesize"),
+    fileUrl: getXmlValue("cdnattachurl") || getXmlValue("url"),
+    thumbUrl: getXmlValue("thumburl") || getXmlValue("cdnthumburl")
+  };
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'");
+}
+
+function getFileNameFromUrl(url) {
+  if (!url) return "";
+  try {
+    const pathname = new URL(url).pathname;
+    return decodeURIComponent(pathname.split("/").filter(Boolean).pop() || "");
+  } catch {
+    return "";
+  }
+}
+
+function getFileExtension(value) {
+  const text = String(value || "");
+  const match = text.match(/\.([a-z0-9]{1,8})(?:$|[?#\s"])/i) || text.match(/\.([a-z0-9]{1,8})$/i);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function isDocumentExtension(extension) {
+  return ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "pdf", "zip", "rar", "7z", "txt", "csv"].includes(String(extension || "").toLowerCase());
+}
+
+function formatFileSize(value) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "string" && /[kmgt]?b$/i.test(value.trim())) return value.trim();
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return String(value || "");
+  const units = ["B", "K", "M", "G"];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const precision = size >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${size.toFixed(precision)}${units[unitIndex]}`;
+}
+
+function getFileIconMeta(extension) {
+  const ext = String(extension || "").toLowerCase();
+  if (["doc", "docx"].includes(ext)) return { label: "W", className: "is-word" };
+  if (["xls", "xlsx", "csv"].includes(ext)) return { label: "X", className: "is-excel" };
+  if (["ppt", "pptx"].includes(ext)) return { label: "P", className: "is-powerpoint" };
+  if (ext === "pdf") return { label: "PDF", className: "is-pdf" };
+  if (["zip", "rar", "7z"].includes(ext)) return { label: "ZIP", className: "is-archive" };
+  return { label: (ext || "FILE").slice(0, 4).toUpperCase(), className: "is-generic" };
 }
 
 function extractFirstUrl(text) {

@@ -1382,16 +1382,29 @@ textarea:focus-visible {
 }
 
 .message-content.has-link-card,
+.message-content.has-rich-card,
 .message-content:has(.message-link-card) {
   padding: 0;
   border: 0;
   background: transparent;
+  white-space: normal;
 }
 
 .message-link-card {
   display: grid;
   position: relative;
   width: min(320px, 72vw);
+  overflow: hidden;
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(27, 73, 126, 0.08);
+}
+
+.message-mini-card,
+.message-file-card {
+  display: grid;
+  width: min(300px, 72vw);
   overflow: hidden;
   border: 1px solid #dce6f2;
   border-radius: 6px;
@@ -1506,6 +1519,210 @@ textarea:focus-visible {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.message-mini-card {
+  width: min(260px, 70vw);
+}
+
+.mini-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 8px 12px 6px;
+}
+
+.mini-card-title strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-card-title .link-card-detail {
+  position: static;
+  flex: 0 0 auto;
+}
+
+.mini-card-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 10px;
+  align-items: center;
+  min-height: 48px;
+  padding: 7px 12px 10px;
+  border-top: 1px solid #eef2f7;
+}
+
+.mini-card-main > span:first-child {
+  overflow: hidden;
+  color: #1f2937;
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-card-icon,
+.mini-card-mark {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #21bf60;
+}
+
+.mini-card-icon {
+  width: 34px;
+  height: 34px;
+  position: relative;
+}
+
+.mini-card-icon::before,
+.mini-card-icon::after,
+.mini-card-mark::before {
+  display: block;
+  content: "";
+}
+
+.mini-card-icon::before {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+}
+
+.mini-card-icon::after {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-35deg);
+}
+
+.mini-card-image {
+  width: 38px;
+  height: 38px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.mini-card-footer,
+.file-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 6px 10px;
+  border-top: 1px solid #edf2f7;
+  color: #8a98aa;
+  font-size: 11px;
+  background: #fbfdff;
+}
+
+.mini-card-footer > span:nth-child(2),
+.file-card-footer > span:nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-card-mark {
+  width: 14px;
+  height: 14px;
+}
+
+.mini-card-mark::before {
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+}
+
+.message-file-card {
+  width: min(340px, 74vw);
+  background: #eef1f5;
+}
+
+.file-card-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 12px;
+  align-items: center;
+  min-height: 74px;
+  padding: 12px;
+}
+
+.file-card-copy {
+  min-width: 0;
+}
+
+.file-card-copy strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #151f2f;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.file-card-copy span {
+  display: block;
+  margin-top: 5px;
+  color: #8793a3;
+  font-size: 12px;
+}
+
+.file-card-icon {
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 5px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  background: #2784df;
+}
+
+.file-card-icon.is-excel {
+  background: #1f9d57;
+}
+
+.file-card-icon.is-powerpoint {
+  background: #d3532f;
+}
+
+.file-card-icon.is-pdf {
+  background: #e24848;
+  font-size: 10px;
+}
+
+.file-card-icon.is-archive,
+.file-card-icon.is-generic {
+  background: #64748b;
+  font-size: 10px;
+}
+
+.file-card-source-icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 62% 45%, #fff 0 2px, transparent 2.5px),
+    radial-gradient(circle at 38% 45%, #fff 0 2px, transparent 2.5px),
+    #21bf60;
 }
 
 .inline-link-button {
@@ -2606,6 +2823,12 @@ textarea:focus-visible {
   max-width: 100%;
   padding: 8px 10px;
   font-size: 12px;
+}
+
+.history-chat-list .message-content.has-rich-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .history-chat-list .message-meta {
