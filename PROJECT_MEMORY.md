@@ -1280,36 +1280,38 @@ UI 修复：
 
 ## 31. 2026-06-08 真实数据源、历史列表和默认 API 地址修复
 
+> 2026-06-08 追加纠偏：本节里“默认 API 改为 `https://im.52youzai.com/api`”的结论已被第 33 节覆盖。用户真实目标是连接飞牛上的悠聊 Docker 服务 `/vol1/1000/Docker/youchat`，默认地址应为 `http://192.168.9.83:18080/api`。
+
 用户反馈：
 
 - Web 数据仍对不上 Windows 客户端。
 - 客户端界面没有 `本地`、`保留` 等字样。
 - 希望按照真实数据来，不要本地拼出来的业务数据。
 
-本次新增发现：
+当时新增发现与误判：
 
 - 原客户端配置文件：
   - `C:\Program Files\youchat-desktop\appsettings.json`
   - `C:\Program Files\youchat-desktop\bin\appsettings.json`
-- 其中 `DefaultOptions.ChatServiceUrl` 是：
+- 其中 Windows 安装包默认 `DefaultOptions.ChatServiceUrl` 是：
   - `https://im.52youzai.com/api`
-- 本机当前只监听到 Web dev server `5177`，未监听 `18080/8080` 悠聊本地服务端口。
-- 因此如果 Web 仍指向 `192.168.9.83:18080` 或 `localhost:8080`，就很可能和 Windows 客户端不是同一个服务或数据库，数据必然对不上。
-- 最近 `logs/api-capture.ndjson` 仍有旧目标 `http://192.168.9.83:18080/api` 的请求记录，说明浏览器曾保存过早期 Web 默认地址。代码默认值变更不会自动覆盖旧 `localStorage`，必须做迁移。
+- 当时只检查了本机端口，未继续查飞牛 Docker，所以误判为应该默认连正式服。
+- 后续第 33 节已经确认：用户真实目标是飞牛 Docker 服务 `http://192.168.9.83:18080/api`，不是正式服。
+- `logs/api-capture.ndjson` 里的 `http://192.168.9.83:18080/api` 记录不是错误方向，而是用户当前真实服务端链路。
 
 本次实现：
 
 - `public/app.js`
-  - 默认 `DEFAULT_API_BASE` 改为 `https://im.52youzai.com/api`，对齐 Windows 客户端正式 `ChatServiceUrl`。
-  - 新增 `LEGACY_DEFAULT_API_BASES` 和 `loadStoredApiBase()`，启动时会把旧默认地址 `http://192.168.9.83:18080/api`、`http://localhost:8080/api` 自动迁移为 `https://im.52youzai.com/api`。
-  - 登录页服务器地址支持直接填写完整 API 地址，例如 `https://im.52youzai.com/api`。
+  - 当时曾误把默认 `DEFAULT_API_BASE` 改为 `https://im.52youzai.com/api`，这个改动已在第 33 节撤回。
+  - 当时曾误把 `http://192.168.9.83:18080/api` 当作旧默认地址迁移走，这个改动已在第 33 节撤回。
+  - 登录页服务器地址支持直接填写完整 API 地址，例如 `http://192.168.9.83:18080/api`。
   - 如果只填 host + port，则仍兼容构造成 `http://host:port/api`，用于本地或 Docker 服务。
   - 删除 `LOCAL_HISTORY_STORAGE_KEY`、`state.localHistoryContacts`、`state.listLocalCounts`、`loadLocalHistoryContacts()`、`persistLocalHistoryContacts()`、`removeLocalHistoryContact()`。
   - `loadContacts()` 在 `history` tab 不再合并本地历史缓存，只展示 `/Contact/GetContactList` 的 `isHistory=true` 真实接口结果。
   - `archiveAndClearCurrentList()` 清空后只写 `state.clearedContactState` 做短时防回弹过滤，不再生成本地历史记录。
   - `accessHistoryContact()` 接入历史会话后不再操作本地历史缓存。
 - `server.js`
-  - 默认 `YOUCHAT_API_BASE` fallback 改为 `https://im.52youzai.com/api`。
+  - 当时曾误把默认 `YOUCHAT_API_BASE` fallback 改为 `https://im.52youzai.com/api`，这个改动已在第 33 节撤回。
 - `README.md`
   - 更新启动说明，明确默认后端对齐原客户端。
   - 更新清空列表说明，明确历史列表只展示接口历史，不混入 Web 本地缓存。
@@ -1322,7 +1324,7 @@ UI 修复：
 - 清空列表只能短时过滤当前列表，避免刷新回弹；不能把被清空的联系人写成本地历史。
 - `state.listCountSources` 仍可用于内部日志，但不能渲染给客服。
 - 如果后续要恢复“清空后进入历史”，必须通过真实客户端抓包确认服务端如何迁移历史，而不是在 Web 端伪造。
-- 如果用户再次反馈“数据对不上客户端”，第一步检查浏览器 `localStorage.youchat.apiBase` 和 `logs/api-capture.ndjson` 里的 `target`，确认 Web 是否已经打到 `https://im.52youzai.com/api`。
+- 如果用户再次反馈“数据对不上客户端”，第一步检查浏览器 `localStorage.youchat.apiBase` 和 `logs/api-capture.ndjson` 里的 `target`，确认 Web 是否已经打到第 33 节确认的飞牛地址 `http://192.168.9.83:18080/api`。
 
 验证：
 
@@ -1398,3 +1400,89 @@ UI 修复：
 - 不要把 `#aiSuggestionCard` 改回绝对定位浮层。
 - 不要恢复 `--composer-height`、`--ai-suggestion-height` 或 `ResizeObserver` 动态高度方案。
 - 不要让 `.composer-tools` 换行；按钮不够宽时横向滚动，不能压缩输入框。
+
+## 33. 2026-06-08 飞牛 youchat 服务端链路回正
+
+用户纠正：
+
+- 当前二开目标不是连接悠聊正式服，而是连接用户已经部署在飞牛里的悠聊服务端。
+- 飞牛地址：`http://192.168.9.83/`。
+- SSH 用户：`Boom`。
+- 用户明确提到要看 `youliaoapp` / 悠聊 Docker 相关内容，不能继续只改 Web 壳或默认正式服。
+
+本次实际巡检结果：
+
+- 本机安装客户端路径：`C:\Program Files\youchat-desktop`。
+- 安装包不是 git 工程，主要包含：
+  - `appsettings.json`
+  - `bin\appsettings.json`
+  - `bin\YouChatService.xml`
+  - `wwwroot`
+  - `resources\app.asar`
+- Windows 客户端配置仍保留正式服：
+  - `DefaultOptions.ServerAddr = 139.196.171.27`
+  - `DefaultOptions.SocketPort = 7190`
+  - `DefaultOptions.ChatServiceUrl = https://im.52youzai.com/api`
+- 但用户当前要对齐的是飞牛 Docker 部署，不是这个正式服默认值。
+
+飞牛服务发现：
+
+- `http://192.168.9.83/` 是飞牛 fnOS 面板。
+- SSH 22 可达，`Boom` 用户可登录。
+- 飞牛上发现真实悠聊部署目录：
+  - `/vol1/1000/Docker/youchat`
+- 关键文件：
+  - `/vol1/1000/Docker/youchat/docker-compose.yml`
+  - `/vol1/1000/Docker/youchat/.env`
+  - `/vol1/1000/Docker/youchat/YouChatService`
+  - `/vol1/1000/Docker/youchat/YouChatService.xml`
+  - `/vol1/1000/Docker/youchat/wwwroot`
+  - `/vol1/1000/Docker/youchat/YouChatService.postman_collection.json`
+- Docker compose 端口：
+  - `youchat-service`: host `18080` -> container `8080`
+  - `youchat-control`: host `18081` -> container `8081`
+- `.env` 显示当前数据库模式为 MySQL：
+  - `YOUCHAT_DATABASE_MODE=mysql`
+  - `YOUCHAT_DB_HOST=mysql`
+  - `YOUCHAT_DB_PORT=3306`
+  - `YOUCHAT_DB_NAME=1556504756803862529`
+  - `YOUCHAT_DB_USERNAME=yz`
+
+接口验证：
+
+- `POST http://192.168.9.83:18080/api/System/GetOptions` 返回 200。
+- 返回内容包含真实数据库连接：`Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;...`
+- `POST http://192.168.9.83:18080/api/System/LogIn` 使用 `boom / 950331` 返回：
+  - `{"success":true,"message":"","data":true}`
+- `POST http://192.168.9.83:18080/api/Summary/LogIn` 使用 `boom / 950331` 返回 Bearer JWT。
+- `GET http://192.168.9.83:18080/api/System/GetOptions` 返回 404，所以以后探测悠聊业务接口时不能用 GET 误判接口不存在，优先使用 POST。
+
+本次修复：
+
+- `public/app.js`
+  - `DEFAULT_API_BASE` 改回 `http://192.168.9.83:18080/api`。
+  - `LEGACY_DEFAULT_API_BASES` 改为迁移旧的错误目标：
+    - `https://im.52youzai.com/api`
+    - `http://127.0.0.1:8080/api`
+    - `http://localhost:8080/api`
+  - 登录页默认 host 改为 `192.168.9.83`，端口保持 `18080`。
+  - `parseApiBase()` 异常 fallback 改为飞牛目标。
+- `server.js`
+  - `DEFAULT_API_BASE` fallback 改回 `http://192.168.9.83:18080/api`。
+- `start-dev-web.ps1`
+  - `YOUCHAT_API_BASE` 改为 `http://192.168.9.83:18080/api`，避免启动脚本继续覆盖成 `localhost:8080`。
+- `README.md`
+  - 启动说明改为飞牛 Docker 服务。
+  - 说明旧正式服地址会自动迁回飞牛地址。
+- `AI_HANDOFF.md`
+  - 默认 API 目标、飞牛部署路径、端口映射、POST 探测规则已更新。
+
+重要新规则：
+
+- 这条项目线的默认真实数据源是飞牛悠聊 Docker：`http://192.168.9.83:18080/api`。
+- 不要再把默认值改回 `https://im.52youzai.com/api`，除非用户明确说要连正式服。
+- 如果数据对不上，第一步看：
+  - 浏览器 `localStorage.youchat.apiBase`
+  - `logs/api-capture.ndjson` 里的 `target`
+  - `/vol1/1000/Docker/youchat` 的 compose 和 `.env`
+- 检查 API 是否存在时优先 POST，不要用 GET 404 下结论。

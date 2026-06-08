@@ -60,11 +60,14 @@ Frontend uses:
 
 Default API target:
 
-- `public/app.js` and `server.js` default to the Windows client's `ChatServiceUrl`: `https://im.52youzai.com/api`.
-- The login server field accepts a full API URL, for example `https://im.52youzai.com/api`.
+- `public/app.js`, `server.js`, and `start-dev-web.ps1` default to the user's FnOS Docker service: `http://192.168.9.83:18080/api`.
+- FnOS deployment path discovered on 2026-06-08: `/vol1/1000/Docker/youchat`.
+- Docker compose maps `youchat-service` as host `18080` -> container `8080`; control API is host `18081` -> container `8081`.
+- `POST http://192.168.9.83:18080/api/System/GetOptions` returns 200; `GET` on the same route returns 404, so probe YouChat APIs with POST unless the client code proves otherwise.
+- The login server field accepts a full API URL, for example `http://192.168.9.83:18080/api`.
 - If the user enters host + port, Web builds `http://host:port/api`.
-- Old saved browser defaults `http://192.168.9.83:18080/api` and `http://localhost:8080/api` are automatically migrated back to `https://im.52youzai.com/api` by `loadStoredApiBase()`.
-- If data does not match the Windows client, inspect `localStorage.youchat.apiBase` and recent `logs/api-capture.ndjson` targets first. A stale target means Web is not querying the same service/database as the client.
+- Saved browser defaults `https://im.52youzai.com/api`, `http://127.0.0.1:8080/api`, and `http://localhost:8080/api` are automatically migrated back to `http://192.168.9.83:18080/api` by `loadStoredApiBase()`.
+- If data does not match the Windows/FnOS client chain, inspect `localStorage.youchat.apiBase` and recent `logs/api-capture.ndjson` targets first. A stale target means Web is not querying the same service/database as the FnOS Docker service.
 
 ## Contact List Data Gotchas
 

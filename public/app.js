@@ -1,6 +1,7 @@
-const DEFAULT_API_BASE = "https://im.52youzai.com/api";
+const DEFAULT_API_BASE = "http://192.168.9.83:18080/api";
 const LEGACY_DEFAULT_API_BASES = new Set([
-  "http://192.168.9.83:18080/api",
+  "https://im.52youzai.com/api",
+  "http://127.0.0.1:8080/api",
   "http://localhost:8080/api"
 ]);
 const DEFAULT_AI_BASE_URL = "https://sub2.sn55.cn/";
@@ -409,7 +410,7 @@ function bindEvents() {
 
 function hydrateLoginFields() {
   const parsed = parseApiBase(state.apiBase);
-  el.serverAddress.value = parsed.isFull ? parsed.address : (parsed.host || "im.52youzai.com");
+  el.serverAddress.value = parsed.isFull ? parsed.address : (parsed.host || "192.168.9.83");
   el.serverPort.value = parsed.isFull ? "" : (parsed.port || "18080");
   el.username.value = state.account || "Boom666";
   el.rememberAccount.checked = state.remember;
@@ -541,7 +542,7 @@ function parseApiBase(value) {
       isFull
     };
   } catch {
-    return { address: DEFAULT_API_BASE, host: "im.52youzai.com", port: "443", isFull: true };
+    return { address: DEFAULT_API_BASE, host: "192.168.9.83", port: "18080", isFull: false };
   }
 }
 

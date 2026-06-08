@@ -59,13 +59,13 @@ npm run dev
 
 ```powershell
 $env:PORT = "5177"
-$env:YOUCHAT_API_BASE = "https://im.52youzai.com/api"
+$env:YOUCHAT_API_BASE = "http://192.168.9.83:18080/api"
 npm run dev
 ```
 
-Web 默认后端地址已经对齐原 Windows 客户端 `appsettings.json` 里的 `ChatServiceUrl`。登录页服务器地址可以直接填完整 API 地址，例如 `https://im.52youzai.com/api`；如果填 `127.0.0.1` 加端口，则会按 `http://127.0.0.1:端口/api` 连接本地或 Docker 服务。
+Web 默认后端地址对齐飞牛上的悠聊 Docker 服务：`http://192.168.9.83:18080/api`。登录页服务器地址可以直接填完整 API 地址，例如 `http://192.168.9.83:18080/api`；如果填主机加端口，则会按 `http://主机:端口/api` 连接本地或 Docker 服务。
 
-如果浏览器里还保存着早期 Web 默认地址 `http://192.168.9.83:18080/api` 或 `http://localhost:8080/api`，页面启动时会自动迁移回 `https://im.52youzai.com/api`，避免和 Windows 客户端连到不同服务导致会话、历史数量对不上。
+如果浏览器里还保存着早期误用的正式服地址 `https://im.52youzai.com/api` 或本机地址 `http://localhost:8080/api`，页面启动时会自动迁移回 `http://192.168.9.83:18080/api`，避免和飞牛本地服务、数据库对不上。
 
 也可以直接运行：
 
