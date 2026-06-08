@@ -33,6 +33,11 @@
 27. [2026-06-07 长链接卡片与网页视频浮层预览](#27-2026-06-07-长链接卡片与网页视频浮层预览)
 28. [2026-06-08 历史计数来源与输入区位置修复](#28-2026-06-08-历史计数来源与输入区位置修复)
 29. [2026-06-08 当前会话账号过滤回退与数量修复](#29-2026-06-08-当前会话账号过滤回退与数量修复)
+30. [2026-06-08 会话列表真实口径二次纠偏](#30-2026-06-08-会话列表真实口径二次纠偏)
+31. [2026-06-08 真实数据源、历史列表和默认 API 地址修复](#31-2026-06-08-真实数据源历史列表和默认-api-地址修复)
+32. [2026-06-08 输入区模块化隔离修复](#32-2026-06-08-输入区模块化隔离修复)
+33. [2026-06-08 飞牛 youchat 服务端链路回正](#33-2026-06-08-飞牛-youchat-服务端链路回正)
+34. [2026-06-08 飞牛 MySQL 排序规则修复](#34-2026-06-08-飞牛-mysql-排序规则修复)
 
 ## 1. 项目目标
 
@@ -1486,3 +1491,99 @@ UI 修复：
   - `logs/api-capture.ndjson` 里的 `target`
   - `/vol1/1000/Docker/youchat` 的 compose 和 `.env`
 - 检查 API 是否存在时优先 POST，不要用 GET 404 下结论。
+
+## 34. 2026-06-08 飞牛 MySQL 排序规则修复
+
+用户反馈：
+
+- Web 二开客户端拿不到联系人和聊天信息。
+- 随后用户重启官方 Windows 客户端，官方客户端也拿不到信息。
+- 因此本次不再继续先改 Web UI，而是优先排查飞牛 Docker 服务端。
+
+服务端状态：
+
+- 飞牛地址：`192.168.9.83`。
+- 悠聊部署目录：`/vol1/1000/Docker/youchat`。
+- `youchat-service`、`youchat-mysql`、`youchat-autologin`、`youchat-control` 均在运行。
+- `POST http://192.168.9.83:18080/api/System/GetOptions` 正常返回。
+- `POST http://192.168.9.83:18080/api/System/GetAccountInfo` 正常返回 `realName=Boom`。
+- `GET http://192.168.9.83:18080/api/Senstive/GetAccountList` 正常返回客服账号 `Boom666 / 客服-王`。
+- 故障时 `POST /api/Contact/GetContactList` 返回裸 `data:0`，`POST /api/ChatContent/GetList` 会触发错误。
+
+关键日志：
+
+- 日志文件：`/vol1/1000/Docker/youchat/logs\Boom-1556504756803862529/20260608/error_20260608.log`。
+- 高频错误：
+  - `Illegal mix of collations for operation 'UNION'`
+  - 报错位置包含 `ChatContentService.GetList`、`ChatContentService.ComsumMessage`、`ConversationDetectiveJob`。
+- 这说明服务端在 UNION 多张聊天分表时，MySQL 字符集排序规则不一致，导致聊天记录和会话检测查询失败。官方客户端和 Web 都依赖同一个服务端，所以会一起异常。
+
+数据库发现：
+
+- 数据库：`1556504756803862529`。
+- 旧聊天分表和核心表大多是 `utf8mb4_general_ci`：
+  - `ChatContent_2026_06_01`
+  - `Contact`
+  - `Conversation`
+  - 其他历史 `ChatContent_YYYY_MM_DD`
+- 2026-06-08 新建的聊天分表是 `utf8mb4_unicode_ci`：
+  - `ChatContent_2026_06_08`
+- 数据库默认排序规则当时也是 `utf8mb4_unicode_ci`，导致后续新分表继续可能继承错误默认值。
+
+已执行修复：
+
+- 修复前备份：
+  - `/vol1/1000/Docker/youchat/docker-control/db-backups/pre-collation-fix-20260608-160844.sql.gz`
+  - 已用 `gzip -t` 验证可读。
+  - `mysqldump` 曾提示缺少 `PROCESS` 权限读取 tablespace，但 dump 文件完整结束并可解压。
+- 修复 SQL：
+
+```sql
+ALTER DATABASE `1556504756803862529`
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+
+ALTER TABLE `ChatContent_2026_06_08`
+  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+```
+
+- 修复后干净备份：
+  - `/vol1/1000/Docker/youchat/docker-control/db-backups/post-collation-fix-20260608-161035.sql.gz`
+  - 使用 `--no-tablespaces` 重新备份，已通过 `gzip -t`。
+
+验证结果：
+
+- `POST /api/Contact/GetContactList` 恢复真实联系人数据：
+  - 当前列表返回 `total=29`。
+  - JSON 请求可返回全量口径 `total=8033`。
+  - 示例联系人包含真实 `userName`、`nickName`、`userRemark`、`unRead`、`records`。
+- `POST /api/ChatContent/GetList` 恢复真实聊天记录：
+  - `contactId=3032` 返回文字和图片消息。
+  - `contactId=7602` 返回真实历史消息。
+- 16:08 之后日志不再新增同类 `Illegal mix of collations for operation 'UNION'` 错误。
+
+残留注意：
+
+- `POST /api/System/CheckLoginStatus` 单独仍可能超时或在缺少参数时记录 `Value cannot be null. (Parameter 's')`。
+- 这不是本次联系人和聊天记录为空的主因，但后续如果需要精确复刻登录状态检查，应抓官方客户端实际请求参数。
+
+未来排查规则：
+
+- 如果官方客户端和 Web 同时拿不到联系人/聊天记录，优先查服务端日志和 MySQL，不要先怀疑 Web UI。
+- 如果下一周新建 `ChatContent_YYYY_MM_DD` 分表后再出现同样错误，先检查该表 `TABLE_COLLATION` 是否又变成非 `utf8mb4_general_ci`。
+- 新建分表异常的根本防线是保持数据库默认排序规则为 `utf8mb4_general_ci`。
+- 排查命令口径：
+
+```sql
+SELECT TABLE_NAME, TABLE_COLLATION
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME LIKE 'ChatContent_%'
+ORDER BY TABLE_NAME DESC;
+
+SELECT COLLATION_NAME, COUNT(*)
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND COLLATION_NAME IS NOT NULL
+GROUP BY COLLATION_NAME
+ORDER BY COUNT(*) DESC;
+```

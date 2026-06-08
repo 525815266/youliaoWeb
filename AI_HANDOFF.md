@@ -68,6 +68,11 @@ Default API target:
 - If the user enters host + port, Web builds `http://host:port/api`.
 - Saved browser defaults `https://im.52youzai.com/api`, `http://127.0.0.1:8080/api`, and `http://localhost:8080/api` are automatically migrated back to `http://192.168.9.83:18080/api` by `loadStoredApiBase()`.
 - If data does not match the Windows/FnOS client chain, inspect `localStorage.youchat.apiBase` and recent `logs/api-capture.ndjson` targets first. A stale target means Web is not querying the same service/database as the FnOS Docker service.
+- 2026-06-08 service-side incident: both the Web workbench and official Windows client could not load contact/chat data. Root cause was MySQL collation drift in the FnOS Docker database, not Web UI code. `ChatContent_2026_06_08` was created as `utf8mb4_unicode_ci` while older chat partition tables were `utf8mb4_general_ci`, so `ChatContentService.GetList`, `ComsumMessage`, and `ConversationDetectiveJob` failed with `Illegal mix of collations for operation 'UNION'`.
+- Applied on FnOS MySQL: database `1556504756803862529` default collation and table `ChatContent_2026_06_08` were converted to `utf8mb4_general_ci`. Backups:
+  - pre-fix: `/vol1/1000/Docker/youchat/docker-control/db-backups/pre-collation-fix-20260608-160844.sql.gz`
+  - post-fix: `/vol1/1000/Docker/youchat/docker-control/db-backups/post-collation-fix-20260608-161035.sql.gz`
+- After fix, `/Contact/GetContactList` returned real data again (`total=29` for form current-list probe) and `/ChatContent/GetList` returned real messages. If this recurs after a new week partition table appears, inspect `information_schema.TABLES` for `ChatContent_%` table collations before changing frontend code.
 
 ## Contact List Data Gotchas
 
@@ -681,6 +686,29 @@ Important bug fix:
   - `GET /health` 200
   - `GET /app.js` 200
   - `GET /styles.css` 200
+
+2026-06-08 FnOS MySQL collation recovery:
+
+- User reported the official Windows client also stopped loading information after restart.
+- Diagnosed the FnOS Docker service instead of Web UI.
+- `youchat-service`, `youchat-mysql`, `youchat-autologin`, and `youchat-control` were running.
+- Logs under `/vol1/1000/Docker/youchat/logs\Boom-1556504756803862529/20260608/error_20260608.log` showed repeated `Illegal mix of collations for operation 'UNION'`.
+- DB inspection showed:
+  - `ChatContent_2026_06_01`: `utf8mb4_general_ci`
+  - `ChatContent_2026_06_08`: `utf8mb4_unicode_ci`
+  - core tables like `Contact` and `Conversation`: `utf8mb4_general_ci`
+- Backed up DB, then ran:
+
+```sql
+ALTER DATABASE `1556504756803862529`
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+ALTER TABLE `ChatContent_2026_06_08`
+  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+```
+
+- Made clean post-fix backup with `mysqldump --no-tablespaces`.
+- Verified `POST /api/Contact/GetContactList` and `POST /api/ChatContent/GetList` return real records again.
+- `System/CheckLoginStatus` can still time out or throw when called without params; do not confuse that residual endpoint behavior with the restored contact/chat path.
 
 ## Non-Negotiables
 

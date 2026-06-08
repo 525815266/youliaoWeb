@@ -204,6 +204,23 @@ Web 会把接口统一代理到：
 http://服务器IP:端口/api
 ```
 
+## 飞牛服务端排查记录
+
+2026-06-08 出现过 Web 和官方 Windows 客户端同时拿不到联系人/聊天记录的问题。已确认根因是飞牛 MySQL 聊天分表排序规则混用：
+
+- 旧表多为 `utf8mb4_general_ci`。
+- 新表 `ChatContent_2026_06_08` 曾变成 `utf8mb4_unicode_ci`。
+- 服务端 UNION 多张聊天表时报 `Illegal mix of collations for operation 'UNION'`。
+
+已在飞牛上修复数据库默认排序规则和当天分表，并备份：
+
+```text
+/vol1/1000/Docker/youchat/docker-control/db-backups/pre-collation-fix-20260608-160844.sql.gz
+/vol1/1000/Docker/youchat/docker-control/db-backups/post-collation-fix-20260608-161035.sql.gz
+```
+
+以后如果官方客户端和 Web 同时拿不到数据，先查飞牛服务端日志和 MySQL 分表排序规则，再判断是否需要改前端。
+
 ## 当前注意点
 
 - 当前不会使用假数据，接口失败会显示真实失败信息并写入抓包日志。
