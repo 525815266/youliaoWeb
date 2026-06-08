@@ -38,6 +38,9 @@
 32. [2026-06-08 输入区模块化隔离修复](#32-2026-06-08-输入区模块化隔离修复)
 33. [2026-06-08 飞牛 youchat 服务端链路回正](#33-2026-06-08-飞牛-youchat-服务端链路回正)
 34. [2026-06-08 飞牛 MySQL 排序规则修复](#34-2026-06-08-飞牛-mysql-排序规则修复)
+35. [2026-06-08 Web 刷新后当前会话混入历史修复](#35-2026-06-08-web-刷新后当前会话混入历史修复)
+36. [2026-06-08 聊天消息卡片分类渲染](#36-2026-06-08-聊天消息卡片分类渲染)
+37. [2026-06-08 Skill 优化回写与命中态排序](#37-2026-06-08-skill-优化回写与命中态排序)
 
 ## 1. 项目目标
 
@@ -266,8 +269,9 @@ AI 推荐逻辑：
 - 发送框上方展示 1 到 3 条横条候选，每条有“采用”和“发送”，推荐条左侧提供“换一换”。
 - “换一换”会基于原推荐和真实上下文重新生成不同语气/说法，语气池包含自然安抚、简短直接、耐心解释、轻柔口语。
 - 如果客服不采用 AI 推荐，而是自己发送文字或图片，会触发自动学习。
-- 同类人工回复命中超过一定次数后，可提升 skill 优先级并允许自动回复。
-- Skill 回复列表和当前命中 skill 卡片都提供“优化”按钮。优化会结合当前 skill 话术、客服输入框中的补充文字、草稿图片数量和最近聊天上下文生成 1 到 3 条候选。
+- 如果人工回复时当前已经命中某个 skill，则优先把这次人工回复记录到该 skill 的 `manualOverrides`，不是另建一个孤立 learned skill。
+- 同一命中 skill 被人工纠正累计 3 次后，会自动把人工话术回写到该 skill 的 `replySteps/fallback`，并保留原 skill 中已有图片步骤。
+- Skill 回复列表和当前命中 skill 卡片都提供“优化”按钮。优化会结合当前 skill 话术、客服输入框中的补充文字、草稿图片数量和最近聊天上下文生成 1 到 3 条候选。优化候选上有“更新skill”，点击后可立即把该候选写回当前 skill。
 
 ## 9. 图片与输入框
 
@@ -1700,3 +1704,51 @@ ORDER BY COUNT(*) DESC;
 - 不要再把 `contentType=6` 小程序交给 `buildMessageLinkCard()`。
 - 不要删除 `.history-chat-list .message-content.has-rich-card` 覆盖，否则右侧工具栏聊天记录会把卡片挤回普通气泡。
 - 如果后续抓到更多文件字段，例如 `FileSize/fileUrl/cdnattachurl`，优先扩展 `parseMessagePayload()` 和 `buildMessageFileCard()`，不要写一次性字符串拆分。
+
+## 37. 2026-06-08 Skill 优化回写与命中态排序
+
+用户反馈：
+
+- 客服没有采用 AI 推荐或 skill 推荐，而是自己按新策略回复时，系统应该学习“我是怎么回复的”。
+- 如果已经命中 skill，但推荐和 skill 的话术不正确，点击“优化”后应能把当前 skill 回复改掉，否则优化按钮意义不大。
+- 右侧工具栏的 skill 列表要有动态变化：skill 开着并命中后，命中项最亮、跑到最上面，其他没命中的项变灰。
+
+已修改：
+
+- `public/app.js`
+  - `sendText()` 在发送前保存当前命中的 skill，避免发送完成后清空推荐导致学习对象丢失。
+  - `learnFromManualReply(content, imageUrls, { matchedSkill })` 新增命中 skill 学习路径。
+  - 新增 `learnMatchedSkillOverride()`：
+    - 当客服未采用推荐而人工发送时，如果当前命中 skill，则把人工回复写入该 skill 的 `manualOverrides`。
+    - 同一个 prompt/reply 重复出现会增加 `count`，避免无限堆重复样本。
+    - 累计人工纠正达到 3 次后，自动把人工回复回写到该 skill 的 `replySteps/fallback`。
+    - 回写时通过 `mergeTextWithExistingSkillImages()` 保留原 skill 的图片步骤，并记录人工发送成功后的真实图片 URL。
+  - 新增 `replaceReplySkill()`，复用现有 `/local/reply-skills` 持久化接口保存整个 skill 文件。
+  - 新增 `updateSkillFromSuggestion()`：
+    - skill 优化候选上显示“更新skill”按钮。
+    - 点击后立即把优化后的文字写回当前 skill 的 `replySteps/fallback`。
+    - 更新后记录 `revisionCount` 和 `lastOptimizedAt`。
+  - `renderAiSuggestionCard()` 对 `type="optimize"` 且带 `skillId` 的候选渲染“更新skill”主按钮。
+  - `renderSkillReplyPanel()`、`filterReplySkills()`、`renderSkillRow()` 变为命中态驱动：
+    - 命中的 skill 排第一。
+    - 命中项显示“中”标记。
+    - 未命中项加 `is-dimmed`。
+    - 命中 skill 的人工纠正次数显示在关键词行。
+- `public/styles.css`
+  - 新增 `.ai-suggestion-row-actions .mini-action.primary`，让“更新skill”成为明确主操作。
+  - 新增 `.skill-list.has-active-match`、`.skill-row.is-matched`、`.skill-row.is-dimmed`。
+  - 命中项有蓝色高亮、轻微上浮、短动画 `skill-match-rise`。
+  - 未命中项灰度降低，hover 时恢复可读性，仍然可以点击采用/发送/优化。
+
+验证结果：
+
+- `npm run check` 通过。
+- `git diff --check` 仅提示 Windows 换行转换，不存在实际空白错误。
+
+维护规则：
+
+- 不要让“优化”只停留在临时候选。对 skill 优化候选必须保留“更新skill”入口。
+- 不要把命中 skill 的人工回复另建成孤立 learned skill；优先沉淀回当前命中的 skill。
+- 3 次自动回写是保守阈值，避免一次误回复污染内置话术。若用户后续要求更激进，可把阈值抽成配置。
+- 命中 skill 回写时要保留原图片步骤，除非用户明确要求替换图片。
+- 右侧 skill 列表的置灰只是视觉状态，不是禁用状态；客服仍可手动选择其他 skill。

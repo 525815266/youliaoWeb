@@ -325,6 +325,9 @@ Core functions:
 - `maybeBuildSkillSuggestion`
 - `sendSuggestionSteps`
 - `learnFromManualReply`
+- `learnMatchedSkillOverride`
+- `replaceReplySkill`
+- `updateSkillFromSuggestion`
 - `generateAiWithRelay`
 - `requestAiRelaySuggestions`
 - `requestAiChatReplies`
@@ -371,6 +374,27 @@ Skill optimize:
 - `optimizeSkillById(id)` uses current skill text, draft text, draft image count, latest customer message, and recent conversation.
 - It only optimizes text. It must not infer image contents.
 - Optimized suggestions use `keepDraftImages` so applying/sending preserves staged images.
+- Optimized skill suggestions carry `type="optimize"` and `skillId`.
+- `renderAiSuggestionCard()` must show `更新skill` for optimized skill suggestions. This is the explicit path to overwrite the current skill.
+- `updateSkillFromSuggestion()` writes optimized text back to that skill's `replySteps/fallback` using `replaceReplySkill()`.
+- `mergeTextWithExistingSkillImages()` preserves existing image steps when text is updated.
+
+Skill manual learning:
+
+- `sendText()` snapshots `buildSkillSuggestion()` before sending when no suggestion was adopted.
+- If a matched skill exists, `learnFromManualReply(..., { matchedSkill })` calls `learnMatchedSkillOverride()` instead of creating an unrelated learned skill.
+- `learnMatchedSkillOverride()` stores manual replies in `skill.manualOverrides`.
+- Repeated identical prompt/reply increments `count`.
+- Total manual override count >= 3 automatically writes the manual reply back to the matched skill's `replySteps/fallback`, raises priority at least to 75, and keeps auto-reply eligibility unless the skill explicitly disabled it.
+- Do not remove this path. User explicitly wants ignored AI/skill suggestions to teach the matched skill.
+
+Skill right-panel match UI:
+
+- `renderSkillReplyPanel()` passes the current suggestion into `filterReplySkills()` and `renderSkillRow()`.
+- Matched skill is sorted first.
+- Matched skill gets `.is-matched`; other rows get `.is-dimmed`.
+- Dimmed rows remain clickable. They are visual alternatives, not disabled.
+- `public/styles.css` has `.skill-row.is-matched`, `.skill-row.is-dimmed`, and `@keyframes skill-match-rise`.
 
 DeepSeek:
 

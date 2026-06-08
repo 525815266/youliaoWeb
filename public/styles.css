@@ -1965,6 +1965,17 @@ textarea:focus-visible {
   padding-top: 0;
 }
 
+.ai-suggestion-row-actions .mini-action.primary {
+  border-color: #1677ff;
+  color: #fff;
+  background: #1677ff;
+}
+
+.ai-suggestion-row-actions .mini-action.primary:hover {
+  border-color: #0d63c7;
+  background: #0d63c7;
+}
+
 .ai-suggestion-card.is-no-reply {
   background: rgba(248, 250, 252, 0.97);
 }
@@ -2667,16 +2678,63 @@ textarea:focus-visible {
   gap: 6px;
 }
 
+.skill-list.has-active-match .skill-row {
+  transition: opacity 160ms ease, border-color 160ms ease, background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
 .skill-row.is-disabled {
   opacity: 0.6;
 }
 
+.skill-row.is-dimmed {
+  opacity: 0.48;
+  filter: grayscale(0.15);
+}
+
+.skill-row.is-dimmed:hover {
+  opacity: 0.76;
+  filter: none;
+}
+
+.skill-row.is-matched {
+  position: relative;
+  margin: 6px -4px 8px;
+  padding: 10px 4px;
+  border: 1px solid #b9dafc;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #f4faff 0%, #ffffff 100%);
+  box-shadow: 0 7px 18px rgba(27, 105, 184, 0.1);
+  transform: translateY(-1px);
+  animation: skill-match-rise 220ms ease-out;
+}
+
+.skill-row.is-matched .quick-index {
+  color: #fff;
+  background: #1677ff;
+}
+
+.skill-row.is-matched .quick-copy {
+  color: #0d63c7;
+}
+
+.skill-row.is-matched strong {
+  color: #0d63c7;
+}
+
+.skill-row.is-matched em {
+  color: #fff;
+  background: #1677ff;
+}
+
 .skill-row em {
   margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 999px;
   color: #0d63c7;
   font-style: normal;
   font-size: 11px;
   font-weight: 500;
+  background: #e8f3ff;
 }
 
 .skill-row small {
@@ -2685,6 +2743,18 @@ textarea:focus-visible {
   color: #7c8a9b;
   font-size: 11px;
   line-height: 1.4;
+}
+
+@keyframes skill-match-rise {
+  from {
+    opacity: 0.72;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
 }
 
 .order-card {

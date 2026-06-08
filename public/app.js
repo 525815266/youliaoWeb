@@ -3305,6 +3305,7 @@ async function sendText() {
   const content = el.replyText.value.trim();
   const contactId = getContactId(state.activeContact);
   const images = [...state.draftImages];
+  const matchedSkillBeforeSend = !state.lastSuggestionUsed ? buildSkillSuggestion() : null;
   if (!contactId || (!content && !images.length)) {
     toast("请先选择会话，并输入回复内容或粘贴图片。", true);
     return;
@@ -3320,7 +3321,7 @@ async function sendText() {
       sentImageUrls.push(imageUrl);
       await delay(180);
     }
-    await learnFromManualReply(content, sentImageUrls);
+    await learnFromManualReply(content, sentImageUrls, { matchedSkill: matchedSkillBeforeSend });
     el.replyText.value = "";
     clearDraftImages();
     clearAiSuggestion();
@@ -4676,7 +4677,7 @@ async function autoReplyWithSuggestion(suggestion) {
   }
 }
 
-async function learnFromManualReply(content, imageUrls = []) {
+async function learnFromManualReply(content, imageUrls = [], options = {}) {
   if (!state.skillAutoLearn || state.lastSuggestionUsed) return;
   const latest = getLatestActionableInboundMessage();
   if (!latest || latest.isSystemNotice || latest.direction !== "incoming") return;
@@ -4688,6 +4689,14 @@ async function learnFromManualReply(content, imageUrls = []) {
     reply ? { type: "text", content: reply } : null,
     ...images.map((url, index) => ({ type: "image", url, label: `人工回复图片 ${index + 1}` }))
   ].filter(Boolean);
+
+  const matchedSkillId = options.matchedSkill?.skillId;
+  const matchedSkill = matchedSkillId ? getSkillById(matchedSkillId) : null;
+  if (matchedSkill && !matchedSkill.noReply) {
+    await learnMatchedSkillOverride(matchedSkill, { prompt, reply, images, steps, latest });
+    return;
+  }
+
   const existing = findLearnedSkillForPrompt(prompt);
   const nextHitCount = Number(existing?.hitCount || existing?.learnCount || 0) + 1;
 
@@ -4719,6 +4728,66 @@ async function learnFromManualReply(content, imageUrls = []) {
     }
   } catch (error) {
     log("reply skill learn failed", { error: error.message, prompt });
+  }
+}
+
+async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, latest }) {
+  const overrides = Array.isArray(skill.manualOverrides) ? [...skill.manualOverrides] : [];
+  const latestKey = latest ? getMessageKey(latest, 0) : "";
+  const duplicateIndex = overrides.findIndex((item) => (
+    normalizeForMatch(item.prompt) === normalizeForMatch(prompt) &&
+    normalizeForMatch(item.reply) === normalizeForMatch(reply)
+  ));
+  const override = {
+    at: new Date().toISOString(),
+    prompt,
+    reply,
+    imageUrls: images,
+    contactId: getContactId(state.activeContact),
+    messageKey: latestKey
+  };
+
+  if (duplicateIndex >= 0) {
+    overrides[duplicateIndex] = {
+      ...overrides[duplicateIndex],
+      ...override,
+      count: Number(overrides[duplicateIndex].count || 1) + 1
+    };
+  } else {
+    overrides.unshift({ ...override, count: 1 });
+  }
+
+  const totalOverrideCount = overrides.reduce((sum, item) => sum + Number(item.count || 1), 0);
+  const nextSkill = {
+    ...skill,
+    manualOverrides: overrides.slice(0, 12),
+    lastManualOverrideAt: override.at,
+    samples: [...new Set([...(skill.samples || []), prompt])].slice(0, 14),
+    keywords: [...new Set([...(skill.keywords || []), ...extractLearningKeywords(prompt)])].slice(0, 24),
+    revisionCount: Number(skill.revisionCount || 0) + 1
+  };
+
+  if (totalOverrideCount >= 3) {
+    nextSkill.replySteps = mergeTextWithExistingSkillImages(steps, skill);
+    nextSkill.fallback = reply || skill.fallback || "";
+    nextSkill.priority = Math.max(Number(skill.priority || 50), 75);
+    nextSkill.allowAutoReply = skill.allowAutoReply !== false;
+    nextSkill.lastAutoRevisedAt = override.at;
+  }
+
+  try {
+    await replaceReplySkill(nextSkill);
+    log("matched reply skill learned", {
+      skillId: skill.id,
+      prompt,
+      reply,
+      images,
+      overrideCount: totalOverrideCount,
+      autoRevised: totalOverrideCount >= 3
+    });
+    if (state.activeTool === "skill") renderToolContent();
+  } catch (error) {
+    log("matched reply skill learn failed", { error: error.message, skillId: skill.id, prompt });
   }
 }
 
@@ -4772,6 +4841,7 @@ function appendAiSuggestions(contents, options = {}) {
   if (!options.silent) {
     toast(suggestion.noReply ? "已识别为无需回复的消息。" : "已生成推荐回复，可点击采用或发送。");
   }
+  if (state.activeTool === "skill") renderToolContent();
 }
 
 function normalizeSuggestion(content) {
@@ -4855,6 +4925,7 @@ function renderAiSuggestionCard() {
         <span class="ai-suggestion-index">${index + 1}.</span>
         <p>${escapeHtml(formatSuggestionText(suggestion))}</p>
         <div class="ai-suggestion-row-actions">
+          ${suggestion.type === "optimize" && suggestion.skillId ? `<button class="mini-action primary" type="button" data-suggestion-action="update-skill" data-suggestion-index="${index}">更新skill</button>` : ""}
           <button class="mini-action" type="button" data-suggestion-action="apply" data-suggestion-index="${index}" ${suggestion.noReply ? "disabled" : ""}>采用</button>
           <button class="mini-action" type="button" data-suggestion-action="send" data-suggestion-index="${index}" ${suggestion.noReply ? "disabled" : ""}>发送</button>
         </div>
@@ -4895,6 +4966,8 @@ function handleAiSuggestionClick(event) {
     } else {
       sendSuggestionSteps(suggestion);
     }
+  } else if (target.dataset.suggestionAction === "update-skill") {
+    updateSkillFromSuggestion(suggestion);
   }
 }
 
@@ -5344,9 +5417,12 @@ function renderQuickReplyPanel() {
 
 function renderSkillReplyPanel() {
   const suggestion = buildSkillSuggestion();
-  const skills = filterReplySkills();
+  const skills = filterReplySkills(suggestion);
   const autoText = state.skillAutoReply ? "自动回复已开" : "仅推荐";
   const learnText = state.skillAutoLearn ? "自动学习已开" : "自动学习已关";
+  const matchText = suggestion?.skillId
+    ? suggestion.noReply ? "命中无需回复 skill" : "命中可回复 skill"
+    : "未命中";
   return `
     <section class="tool-section skill-section">
       <h3>
@@ -5363,26 +5439,37 @@ function renderSkillReplyPanel() {
       </div>
       <div class="skill-summary">
         <span>${escapeHtml(autoText)} / ${escapeHtml(learnText)}</span>
-        <span>${state.replySkillsLoading ? "加载中" : `${state.replySkills.length} 个 skill`}</span>
+        <span>${escapeHtml(matchText)} / ${state.replySkillsLoading ? "加载中" : `${state.replySkills.length} 个 skill`}</span>
       </div>
       ${suggestion ? renderSkillMatchCard(suggestion) : '<div class="skill-match-card muted">当前上下文暂未命中 skill，会交给 AI 结合快捷回复兜底。</div>'}
-      <div class="quick-list">
-        ${skills.length ? skills.map((skill, index) => renderSkillRow(skill, index)).join("") : '<p class="empty-state">没有匹配的 skill。</p>'}
+      <div class="quick-list skill-list ${suggestion?.skillId ? "has-active-match" : ""}">
+        ${skills.length ? skills.map((skill, index) => renderSkillRow(skill, index, suggestion)).join("") : '<p class="empty-state">没有匹配的 skill。</p>'}
       </div>
     </section>
   `;
 }
 
-function filterReplySkills() {
+function filterReplySkills(suggestion = null) {
   const keyword = normalizeForMatch(state.skillKeyword);
-  const skills = [...state.replySkills].sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
-  if (!keyword) return skills;
-  return skills.filter((skill) => normalizeForMatch([
-    skill.title,
-    ...(skill.keywords || []),
-    ...(skill.samples || []),
-    getSkillText(skill)
-  ].join(" ")).includes(keyword));
+  const matchedId = suggestion?.skillId ? String(suggestion.skillId) : "";
+  const skills = [...state.replySkills]
+    .filter((skill) => {
+      if (!keyword) return true;
+      if (matchedId && String(skill.id) === matchedId) return true;
+      return normalizeForMatch([
+        skill.title,
+        ...(skill.keywords || []),
+        ...(skill.samples || []),
+        getSkillText(skill)
+      ].join(" ")).includes(keyword);
+    })
+    .sort((a, b) => {
+      const aMatched = matchedId && String(a.id) === matchedId;
+      const bMatched = matchedId && String(b.id) === matchedId;
+      if (aMatched !== bMatched) return aMatched ? -1 : 1;
+      return Number(b.priority || 0) - Number(a.priority || 0);
+    });
+  return skills;
 }
 
 function renderSkillMatchCard(suggestion) {
@@ -5399,18 +5486,23 @@ function renderSkillMatchCard(suggestion) {
   `;
 }
 
-function renderSkillRow(skill, index) {
+function renderSkillRow(skill, index, suggestion = null) {
   const status = skill.noReply ? "无需回复" : skill.allowAutoReply ? "可自动" : "推荐";
   const keywords = (skill.keywords || []).slice(0, 8).join("、") || "-";
   const content = skill.noReply ? (skill.fallback || "无需回复") : getSkillText(skill);
+  const isMatched = suggestion?.skillId && String(skill.id) === String(suggestion.skillId);
+  const isDimmed = suggestion?.skillId && !isMatched;
+  const overrideCount = Array.isArray(skill.manualOverrides)
+    ? skill.manualOverrides.reduce((sum, item) => sum + Number(item.count || 1), 0)
+    : 0;
   return `
-    <article class="quick-row skill-row ${skill.enabled === false ? "is-disabled" : ""}">
-      <span class="quick-index">${index + 1}</span>
+    <article class="quick-row skill-row ${skill.enabled === false ? "is-disabled" : ""} ${isMatched ? "is-matched" : ""} ${isDimmed ? "is-dimmed" : ""}">
+      <span class="quick-index">${isMatched ? "中" : index + 1}</span>
       <button class="quick-copy" type="button" data-copy="${escapeAttr(content)}" title="复制 skill" aria-label="复制 skill"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>
       <div class="quick-main">
         <strong>${escapeHtml(skill.title || "未命名 skill")} <em>${escapeHtml(status)}</em></strong>
         <p>${escapeHtml(content || "暂无话术")}</p>
-        <small>关键词：${escapeHtml(keywords)}</small>
+        <small>关键词：${escapeHtml(keywords)}${overrideCount ? ` / 人工纠正 ${overrideCount} 次` : ""}</small>
       </div>
       <div class="quick-actions">
         <button class="mini-action" type="button" data-skill-apply="${escapeAttr(skill.id)}" ${skill.noReply ? "disabled" : ""}>采用</button>
@@ -5843,6 +5935,72 @@ function updateSkillKeyword() {
 
 function getSkillById(id) {
   return state.replySkills.find((skill) => String(skill.id) === String(id));
+}
+
+async function replaceReplySkill(nextSkill) {
+  const id = String(nextSkill?.id || "");
+  if (!id) throw new Error("缺少 skill id");
+  const index = state.replySkills.findIndex((skill) => String(skill.id) === id);
+  if (index < 0) throw new Error("没有找到要更新的 skill");
+  const merged = {
+    ...state.replySkills[index],
+    ...nextSkill,
+    updatedAt: new Date().toISOString()
+  };
+  state.replySkills = [
+    ...state.replySkills.slice(0, index),
+    merged,
+    ...state.replySkills.slice(index + 1)
+  ];
+  await saveReplySkills();
+  return getSkillById(id) || merged;
+}
+
+function mergeTextWithExistingSkillImages(textSteps, skill) {
+  const existingImageSteps = getSkillSteps(skill).filter((step) => step.type === "image");
+  const nextTextSteps = textSteps
+    .filter((step) => step.type !== "image" && String(step.content || "").trim())
+    .map((step) => ({ type: "text", content: String(step.content || "").trim() }));
+  const nextImageSteps = textSteps
+    .filter((step) => step.type === "image" && (step.url || step.content))
+    .map((step) => ({
+      type: "image",
+      url: step.url || step.content || "",
+      label: step.label || "人工回复图片"
+    }));
+  return [...nextTextSteps, ...nextImageSteps, ...existingImageSteps].slice(0, 8);
+}
+
+async function updateSkillFromSuggestion(suggestion) {
+  const skill = getSkillById(suggestion?.skillId);
+  if (!skill) {
+    toast("没有找到要更新的 skill。", true);
+    return;
+  }
+  if (skill.noReply) {
+    toast("无需回复类 skill 不需要更新话术。", true);
+    return;
+  }
+  const text = getSuggestionTextForComposer(suggestion).trim();
+  if (!text) {
+    toast("优化候选为空，不能更新 skill。", true);
+    return;
+  }
+
+  try {
+    await replaceReplySkill({
+      ...skill,
+      replySteps: mergeTextWithExistingSkillImages([{ type: "text", content: text }], skill),
+      fallback: text,
+      revisionCount: Number(skill.revisionCount || 0) + 1,
+      lastOptimizedAt: new Date().toISOString()
+    });
+    state.lastSuggestionUsed = true;
+    if (state.activeTool === "skill") renderToolContent();
+    toast("已把优化后的话术更新到当前 skill。");
+  } catch (error) {
+    toast(`更新 skill 失败：${error.message}`, true);
+  }
 }
 
 function applySkillById(id) {
