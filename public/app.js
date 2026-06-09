@@ -115,6 +115,7 @@ const READ_STATE_STORAGE_KEY = "youchat.readContactState";
 const CLEARED_CONTACTS_STORAGE_KEY = "youchat.clearedContactState";
 const CONTACT_LIST_ACCOUNT_IDS_STORAGE_KEY = "youchat.contactListAccountIds";
 const CLIENT_PAUSED_STORAGE_KEY = "youchat.client.paused";
+const SEND_MODE_STORAGE_KEY = "youchat.composer.sendMode";
 const CLEAR_LIST_GRACE_MS = 30000;
 const CONTACT_LIST_ACCOUNT_ID_PATTERN = /^[1-9]\d{0,9}$/;
 const GLOBAL_SEARCH_PAGE_SIZE = 20;
@@ -207,6 +208,7 @@ const state = {
   skillAutoLearn: localStorage.getItem("youchat.skill.autoLearn") !== "false",
   skillAutoSending: false,
   sendingMessage: false,
+  sendMode: normalizeSendMode(localStorage.getItem(SEND_MODE_STORAGE_KEY)),
   lastSkillAutoReplyKey: "",
   emojiOpen: false,
   draftImages: [],
@@ -386,6 +388,7 @@ function boot() {
     "refreshAiSuggestion",
     "closeAiSuggestion",
     "draftImageTray",
+    "sendMode",
     "sendText",
     "useAi",
     "aiSuggest",
@@ -427,6 +430,7 @@ function boot() {
 
   hydrateLoginFields();
   hydrateAiSettingsFields();
+  hydrateComposerFields();
   bindEvents();
   renderAll();
   loadReplySkills();
@@ -466,9 +470,11 @@ function bindEvents() {
   el.draftImageTray.addEventListener("click", handleDraftImageClick);
   el.aiSuggest.addEventListener("click", generateAiWithRelay);
   el.replyText.addEventListener("input", handleReplyInput);
+  el.replyText.addEventListener("keydown", handleReplyKeydown);
   el.replyText.addEventListener("paste", handleReplyPaste);
   el.replyText.addEventListener("dragover", handleReplyDragOver);
   el.replyText.addEventListener("drop", handleReplyDrop);
+  el.sendMode.addEventListener("change", handleSendModeChange);
   el.emojiTool.addEventListener("click", toggleEmojiPopover);
   el.emojiPopover.addEventListener("click", handleEmojiPick);
   el.superCommandTool.addEventListener("click", showSuperCommandModal);
@@ -553,6 +559,19 @@ function hydrateAiSettingsFields() {
   el.aiAuthType.value = state.aiAuthType;
   el.aiTemperature.value = state.aiTemperature;
   updateAiButtonState();
+}
+
+function hydrateComposerFields() {
+  if (el.sendMode) el.sendMode.value = state.sendMode;
+  updateComposerStatus();
+}
+
+function updateComposerStatus() {
+  const shortcut = state.sendMode === "ctrl-enter" ? "Ctrl+Enter 发送，Enter 换行" : "Enter 发送，Ctrl+Enter 换行";
+  const detail = state.draftImages.length ? `已附加 ${state.draftImages.length} 张图，${shortcut}` : shortcut;
+  if (el.sendMode) el.sendMode.value = state.sendMode;
+  const status = document.querySelector(".composer-status");
+  if (status) status.textContent = `文字和图片会按接口能力分开发送，${detail}`;
 }
 
 function updateSendControls() {
@@ -1580,6 +1599,10 @@ function getAiRelayBasePayload(temperature = state.aiTemperature) {
     authType: state.aiAuthType,
     temperature: clampAiTemperature(temperature)
   };
+}
+
+function normalizeSendMode(value) {
+  return value === "ctrl-enter" ? "ctrl-enter" : "enter";
 }
 
 function clampAiTemperature(value) {
@@ -4837,6 +4860,27 @@ function handleReplyInput() {
   triggerDraftAiOptimize();
 }
 
+function handleReplyKeydown(event) {
+  if (event.key !== "Enter" || event.isComposing) return;
+  const shouldSend = state.sendMode === "ctrl-enter" ? event.ctrlKey || event.metaKey : !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+  const shouldInsertLine = state.sendMode === "enter" ? event.ctrlKey || event.metaKey : !event.ctrlKey && !event.metaKey && !event.altKey;
+  if (shouldSend) {
+    event.preventDefault();
+    sendText();
+    return;
+  }
+  if (shouldInsertLine && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    insertTextAtCursor(el.replyText, "\n");
+  }
+}
+
+function handleSendModeChange(event) {
+  state.sendMode = normalizeSendMode(event.target.value);
+  localStorage.setItem(SEND_MODE_STORAGE_KEY, state.sendMode);
+  updateComposerStatus();
+}
+
 function handleReplyPaste(event) {
   const files = getClipboardImageFiles(event.clipboardData);
   if (!files.length) return;
@@ -5118,6 +5162,7 @@ function renderDraftImages() {
   `),
     hasDraftImages ? `<span class="draft-image-count">共 ${state.draftImages.length} 个图片</span>` : ""
   ].join("");
+  updateComposerStatus();
 }
 
 function handleDraftImageClick(event) {
@@ -6274,15 +6319,20 @@ function getSkillMatchText(latest) {
 }
 
 function getSkillSteps(skill) {
-  if (Array.isArray(skill.replySteps) && skill.replySteps.length) {
-    return skill.replySteps.map((step) => ({
+  const sourceSteps = Array.isArray(skill?.steps) && skill.steps.length
+    ? skill.steps
+    : Array.isArray(skill?.replySteps) && skill.replySteps.length
+      ? skill.replySteps
+      : [];
+  if (sourceSteps.length) {
+    return sourceSteps.map((step) => ({
       type: step.type === "image" ? "image" : "text",
       content: step.content || "",
       url: step.url || "",
       label: step.label || ""
     }));
   }
-  return skill.fallback ? [{ type: "text", content: skill.fallback }] : [];
+  return skill?.fallback ? [{ type: "text", content: skill.fallback }] : [];
 }
 
 function getSkillText(skill) {
@@ -6291,6 +6341,37 @@ function getSkillText(skill) {
     .map((step) => step.content || "")
     .filter(Boolean)
     .join("\n\n");
+}
+
+function getSkillImageSteps(skillOrSuggestion) {
+  return getSkillSteps(skillOrSuggestion)
+    .filter((step) => step.type === "image")
+    .map((step) => ({
+      ...step,
+      url: normalizeImageUrl(step.url || step.content || "")
+    }))
+    .filter((step) => step.url);
+}
+
+function renderSkillImageStrip(skillOrSuggestion, options = {}) {
+  const images = getSkillImageSteps(skillOrSuggestion);
+  if (!images.length) return "";
+  const limit = options.limit || 4;
+  const visibleImages = images.slice(0, limit);
+  const hiddenCount = Math.max(0, images.length - visibleImages.length);
+  return `
+    <div class="skill-image-strip" aria-label="skill 图片">
+      ${visibleImages.map((step, index) => {
+        const imageUrl = normalizeImageUrl(step.url || step.content);
+        return `
+          <button class="skill-image-thumb" type="button" data-image-preview="${escapeAttr(imageUrl)}" title="${escapeAttr(step.label || `skill 图片 ${index + 1}`)}">
+            <img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(step.label || `skill 图片 ${index + 1}`)}">
+          </button>
+        `;
+      }).join("")}
+      ${hiddenCount ? `<span class="skill-image-more">+${hiddenCount}</span>` : ""}
+    </div>
+  `;
 }
 
 function getLatestInboundMessage() {
@@ -7179,7 +7260,10 @@ function filterReplySkills(suggestion = null) {
 function renderSkillMatchCard(suggestion) {
   return `
     <div class="skill-match-card ${suggestion.noReply ? "no-reply" : ""}">
-      <strong>${escapeHtml(suggestion.title || "skill 命中")}</strong>
+      <div class="skill-match-head">
+        <strong>${escapeHtml(suggestion.title || "skill 命中")}</strong>
+        ${renderSkillImageStrip(suggestion, { limit: 3 })}
+      </div>
       <p>${escapeHtml(formatSuggestionText(suggestion))}</p>
       <div class="skill-match-actions">
         <button class="mini-action" type="button" data-action="optimize-skill-match" ${suggestion.noReply ? "disabled" : ""}>优化</button>
@@ -7194,7 +7278,7 @@ function renderSkillRow(skill, index, suggestion = null) {
   const status = skill.noReply ? "无需回复" : skill.allowAutoReply ? "可自动" : "推荐";
   const keywords = (skill.keywords || []).slice(0, 8).join("、") || "-";
   const content = skill.noReply ? (skill.fallback || "无需回复") : getSkillText(skill);
-  const imageCount = getSkillSteps(skill).filter((step) => step.type === "image").length;
+  const imageCount = getSkillImageSteps(skill).length;
   const isMatched = suggestion?.skillId && String(skill.id) === String(suggestion.skillId);
   const isDimmed = suggestion?.skillId && !isMatched;
   const overrideCount = Array.isArray(skill.manualOverrides)
@@ -7207,6 +7291,7 @@ function renderSkillRow(skill, index, suggestion = null) {
       <div class="quick-main">
         <strong>${escapeHtml(skill.title || "未命名 skill")} <em>${escapeHtml(status)}</em></strong>
         <p>${escapeHtml(content || "暂无话术")}</p>
+        ${renderSkillImageStrip(skill)}
         <small>关键词：${escapeHtml(keywords)}${imageCount ? ` / 含 ${imageCount} 张图` : ""}${overrideCount ? ` / 人工纠正 ${overrideCount} 次` : ""}</small>
       </div>
       <div class="quick-actions">

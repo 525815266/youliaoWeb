@@ -209,6 +209,16 @@ Rules:
 - System notices are internal, not customer messages.
 - No-reply notifications should not trigger customer replies.
 
+Composer send shortcut:
+
+- `#sendMode` lives to the right of `#sendText`.
+- Persisted key: `localStorage.youchat.composer.sendMode`.
+- Default is `enter`.
+- Important functions: `hydrateComposerFields`, `updateComposerStatus`, `handleReplyKeydown`, `handleSendModeChange`, `normalizeSendMode`.
+- `enter` mode: Enter sends; Shift+Enter or Ctrl+Enter can insert a line break.
+- `ctrl-enter` mode: Enter inserts a line break; Ctrl+Enter sends.
+- `handleReplyKeydown()` checks `event.isComposing`; keep this to avoid sending while Chinese IME is composing text.
+
 ## Link Cards And Preview Overlay
 
 User requirement:
@@ -264,10 +274,28 @@ Rules:
 - `renderMessageContent()` renders image messages as `.message-image-button[data-image-preview]`, not a bare `<img>`.
 - Image preview state is `state.activeLinkPreview = { url, type: "image" }`; `renderActiveLinkPreview()` switches the existing overlay into `.is-image-preview`.
 - Main chat, right toolbar, and tool modals should all route preview clicks through `handlePreviewClickTarget()` so image/link behavior stays consistent.
+- The preview header uses grid columns `minmax(0, 1fr) auto`; keep actions in the fixed right column so long URLs cannot push the close button off screen.
 - App deep links are configured in `APP_DEEP_LINK_PROFILES`; examples include `weishi://feed`, `kwai://`, `snssdk1128://`, `xhsdiscover://`.
 - Deep links should render as cards, not raw long text. Parse nested encoded params such as `feed_info`, use embedded real `http(s)` URL for preview/open, and keep the original app scheme for copy.
 - Logo fallback supports external favicon first and local generated SVG via `imageFallback` on error.
 - Unknown sites with no thumbnail still show a domain abbreviation fallback.
+
+## Skill Reply UI
+
+Important functions:
+
+- `getSkillSteps`
+- `getSkillText`
+- `getSkillImageSteps`
+- `renderSkillImageStrip`
+- `renderSkillMatchCard`
+- `renderSkillRow`
+
+Rules:
+
+- Skill images come only from real `replySteps` or suggestion `steps` with `type: "image"`.
+- Skill image thumbnails use `.skill-image-thumb[data-image-preview]`, so they reuse the same in-page image preview overlay as chat images.
+- Keep skill cards compact: text preview is clamped to 3 lines and images render as 34px thumbnails.
 - Direct `video/*` or video file URLs use `<video>`.
 - Player URLs such as `twitter:player` or `og:video:iframe` use iframe.
 - Ordinary webpages use iframe, but some sites block embedding. Keep the `打开网页` button.

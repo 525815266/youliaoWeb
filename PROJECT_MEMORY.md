@@ -50,6 +50,7 @@
 44. [2026-06-09 客户头像同步](#44-2026-06-09-客户头像同步)
 45. [2026-06-09 CodeBuddy API 支持](#45-2026-06-09-codebuddy-api-支持)
 46. [2026-06-09 聊天图片网页浮层预览](#46-2026-06-09-聊天图片网页浮层预览)
+47. [2026-06-09 发送快捷键、skill 图片与预览头部修复](#47-2026-06-09-发送快捷键skill-图片与预览头部修复)
 
 ## 1. 项目目标
 
@@ -2254,3 +2255,34 @@ ORDER BY COUNT(*) DESC;
 - 聊天图片必须继续使用真实 `message.content` 或真实图片字段，不允许用占位图替代客户图片。
 - 图片预览继续复用 `#linkPreviewOverlay`，不要另做一套与链接/视频割裂的弹窗。
 - 后续如果新增右侧聊天记录、全局搜索结果或数据库管理里的消息渲染，只要使用 `renderMessageBubble()`，图片预览会自动生效；如果手写消息 HTML，必须补 `data-image-preview` 点击目标。
+
+## 47. 2026-06-09 发送快捷键、skill 图片与预览头部修复
+
+用户反馈：
+
+- 输入框需要支持 `Enter` 发送或 `Ctrl+Enter` 发送，默认 `Enter` 发送，选择下拉放在发送按钮右侧。
+- skill 已能优化文案，但卡片显示太长、图片步骤不显示，客服看不到要发哪些图。
+- 长链接预览浮层头部 URL 太长时会把右侧关闭 X 挤出屏幕，导致无法关闭。
+
+已修改：
+
+- `public/index.html`
+  - 发送按钮右侧新增 `#sendMode` 下拉，选项为 `Enter 发送` 和 `Ctrl+Enter 发送`。
+- `public/app.js`
+  - 新增 `SEND_MODE_STORAGE_KEY = "youchat.composer.sendMode"`，发送模式持久化到 `localStorage`。
+  - 新增 `hydrateComposerFields()`、`updateComposerStatus()`、`handleReplyKeydown()`、`handleSendModeChange()`、`normalizeSendMode()`。
+  - 默认 `Enter` 发送；默认模式下 `Shift+Enter`/`Ctrl+Enter` 可换行；`Ctrl+Enter` 模式下 `Enter` 换行、`Ctrl+Enter` 发送。输入法合成期间不会误发送。
+  - `getSkillSteps()` 同时支持 skill 的 `replySteps` 和 AI/skill suggestion 的 `steps`。
+  - 新增 `getSkillImageSteps()` 和 `renderSkillImageStrip()`，skill 列表和命中卡都会显示真实图片步骤缩略图；缩略图使用 `data-image-preview`，点击复用图片预览浮层。
+- `public/styles.css`
+  - 新增 `.send-mode-select`，让发送模式下拉紧贴发送按钮右侧。
+  - 压缩 `.quick-row`、`.skill-match-card`、`.skill-row` 间距；skill 文案预览限制为 3 行，避免一条 skill 占满右侧工具栏。
+  - 新增 `.skill-image-strip`、`.skill-image-thumb`、`.skill-image-more`，用 34px 小缩略图展示 skill 图片。
+  - `.link-preview-head` 改为 `grid-template-columns: minmax(0, 1fr) auto`，右侧复制/打开/关闭按钮固定在动作区，长 URL 只能在左侧省略，不会再挤掉关闭按钮。
+
+维护规则：
+
+- 发送快捷键只读写 `youchat.composer.sendMode`，不要把它混到 AI 设置里。
+- skill 图片必须来自真实 `replySteps/steps` 里的图片 URL，不使用占位图伪造。
+- skill 缩略图和聊天图片一样走 `handlePreviewClickTarget()`，不要另写一套图片弹窗。
+- 预览浮层头部必须保留左内容 `minmax(0, 1fr)`、右动作区 `auto` 的布局，避免长链接再次遮住关闭按钮。
