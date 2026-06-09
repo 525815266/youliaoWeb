@@ -275,6 +275,20 @@ http://服务器IP:端口/api
 
 以后如果官方客户端和 Web 同时拿不到数据，先查飞牛服务端日志和 MySQL 分表排序规则，再判断是否需要改前端。
 
+2026-06-09 又出现过“历史只剩 4 条”的服务端问题。根因不是前端计数，而是 `youchat-service` 误读 SQLite：
+
+- `/System/GetOptions` 显示 `databaseType=2`、`connectionString=null`。
+- SQLite 只有少量联系人，会导致历史/当前数量严重偏小。
+- 已把飞牛配置切回 MySQL 并重启 `youchat-service`，历史恢复到 `5714`。
+
+以后数量异常先跑：
+
+```powershell
+npm run fnos:health
+```
+
+脚本会检查数据库模式、历史数量和几个关键联系人列表口径。如果 `databaseType=2`，先修飞牛服务端 `YouChatConfig.json`，不要先改 Web 前端。
+
 ## 当前注意点
 
 - 当前不会使用假数据，接口失败会显示真实失败信息并写入抓包日志。

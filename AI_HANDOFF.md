@@ -73,6 +73,10 @@ Default API target:
   - pre-fix: `/vol1/1000/Docker/youchat/docker-control/db-backups/pre-collation-fix-20260608-160844.sql.gz`
   - post-fix: `/vol1/1000/Docker/youchat/docker-control/db-backups/post-collation-fix-20260608-161035.sql.gz`
 - After fix, `/Contact/GetContactList` returned real data again (`total=29` for form current-list probe) and `/ChatContent/GetList` returned real messages. If this recurs after a new week partition table appears, inspect `information_schema.TABLES` for `ChatContent_%` table collations before changing frontend code.
+- 2026-06-09 service-side incident: history count fell to `4` because `youchat-service` was reading SQLite, not MySQL. `/System/GetOptions` returned `dataBaseOptions.databaseType=2` and `connectionString=null`. MySQL still had `Contact=8041` and `Conversation=26798`, while SQLite `\悠聊数据库\DataBase-1556504756803862529.db` had only `Contact=265` and `Conversation=16`.
+- Fixed by backing up config/SQLite under `/vol1/1000/Docker/youchat/docker-control/config-backups/manual-mysql-switch-20260609-152800`, editing `/vol1/1000/Docker/youchat/\悠聊数据库\config\YouChatConfig.json` back to `DatabaseType=0` with the MySQL connection string, and restarting only `youchat-service`.
+- Post-fix probes: `/System/GetOptions` shows `databaseType=0`; `/Contact/GetContactList isHistory=true` returns `total=5714`; bare `/Contact/GetContactList` returns `total=8041`.
+- Run `npm run fnos:health` before frontend debugging when counts look wrong. If it reports `databaseType=2`, fix FnOS service database mode first. The script lives at `tools/check-fnos-youchat-health.ps1`.
 
 ## Contact List Data Gotchas
 

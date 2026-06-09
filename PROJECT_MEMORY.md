@@ -51,6 +51,7 @@
 45. [2026-06-09 CodeBuddy API 支持](#45-2026-06-09-codebuddy-api-支持)
 46. [2026-06-09 聊天图片网页浮层预览](#46-2026-06-09-聊天图片网页浮层预览)
 47. [2026-06-09 发送快捷键、skill 图片与预览头部修复](#47-2026-06-09-发送快捷键skill-图片与预览头部修复)
+48. [2026-06-09 飞牛服务误切 SQLite 修复](#48-2026-06-09-飞牛服务误切-sqlite-修复)
 
 ## 1. 项目目标
 
@@ -2286,3 +2287,67 @@ ORDER BY COUNT(*) DESC;
 - skill 图片必须来自真实 `replySteps/steps` 里的图片 URL，不使用占位图伪造。
 - skill 缩略图和聊天图片一样走 `handlePreviewClickTarget()`，不要另写一套图片弹窗。
 - 预览浮层头部必须保留左内容 `minmax(0, 1fr)`、右动作区 `auto` 的布局，避免长链接再次遮住关闭按钮。
+
+## 48. 2026-06-09 飞牛服务误切 SQLite 修复
+
+用户反馈：
+
+- Web 和服务端恢复后，左侧“历史”数量只剩 4。
+- 用户怀疑飞牛服务端异常，要求继续任务并先跑起 Web。
+
+排查过程：
+
+- Web 已运行在 `http://localhost:5177`，健康检查返回 `apiBase=http://192.168.9.83:18080/api`。
+- 直接请求 `/Contact/GetContactList`：
+  - `isHistory=true` 一度只返回 `total=4`。
+  - 不带历史参数只返回约 `total=262`。
+- 通过 SSH 只读检查飞牛 Docker：
+  - `youchat-service`、`youchat-mysql` 均在运行。
+  - MySQL 数据库 `1556504756803862529` 仍有 `Contact=8041`、`Conversation=26798`。
+  - MySQL 历史候选仍在，并不是数据整体丢失。
+- 关键根因：
+  - `/System/GetOptions` 返回 `dataBaseOptions.databaseType=2`、`connectionString=null`。
+  - 服务端实际读取的是容器目录里的 SQLite 文件 `\悠聊数据库\DataBase-1556504756803862529.db`。
+  - 该 SQLite 只有 `Contact=265`、`Conversation=16`，所以历史接口只剩 4 是服务端读库模式错误导致。
+
+修复动作：
+
+- 先备份当前配置和 SQLite：
+  - `/vol1/1000/Docker/youchat/docker-control/config-backups/sqlite-to-mysql-20260609-152526`
+  - `/vol1/1000/Docker/youchat/docker-control/config-backups/manual-mysql-switch-20260609-152800`
+- 将 `/vol1/1000/Docker/youchat/\悠聊数据库\config\YouChatConfig.json` 的 `DataBaseOptions` 改回：
+  - `DatabaseType=0`
+  - `ConnectionString=Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=...;CharSet=utf8mb4;SslMode=None;Allow User Variables=true;`
+- 重启 `youchat-service`，不重启 MySQL。
+
+验证结果：
+
+- `/System/GetOptions` 已恢复 `databaseType=0`，连接串指向 MySQL。
+- 飞牛本机接口：
+  - 全量 `/Contact/GetContactList`：`total=8041`。
+  - 历史 `/Contact/GetContactList isHistory=true`：`total=5714`。
+  - 留言：`total=0`。
+- Web 代理接口：
+  - `http://localhost:5177/api/Contact/GetContactList` 历史返回 `total=5714`。
+  - `npm run check` 通过。
+
+新增预防：
+
+- 新增 `tools/check-fnos-youchat-health.ps1`。
+- 新增 `npm run fnos:health`。
+- 脚本会检查：
+  - `/System/GetOptions` 的 `databaseType` 是否为 `0(mysql)`。
+  - 全量联系人、历史、留言、`accountId=2` 探测数量。
+  - 历史低于阈值时失败并提示优先检查 SQLite/MySQL 模式。
+
+以后排查规则：
+
+- 如果 Web 和官方客户端同时数量异常，先跑：
+
+```powershell
+cd C:\youchat-dev-web
+npm run fnos:health
+```
+
+- 如果 `databaseType=2`，不要先改前端，优先把飞牛服务端配置切回 MySQL 并重启 `youchat-service`。
+- 如果 `databaseType=0` 但接口报错，再检查 MySQL 日志、`ChatContent_%` 表排序规则、磁盘和服务日志。
