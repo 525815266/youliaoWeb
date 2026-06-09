@@ -722,6 +722,26 @@ function getAiChatCompletionsUrl(baseUrl) {
   return new URL(`${rawBase}/v1/chat/completions`);
 }
 
+function normalizeAiAuthType(value, targetUrl = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["x-api-key", "x_api_key", "api-key", "apikey"].includes(normalized)) return "x-api-key";
+  if (["bearer", "authorization", "authorization-bearer"].includes(normalized)) return "bearer";
+  try {
+    const hostname = new URL(String(targetUrl || DEFAULT_AI_BASE)).hostname;
+    if (/codebuddy/i.test(hostname) || /copilot\.tencent\.com$/i.test(hostname)) return "x-api-key";
+  } catch {
+    // Ignore invalid target here. URL validation happens before proxying.
+  }
+  return "bearer";
+}
+
+function getAiAuthHeaders(apiKey, authType, targetUrl) {
+  if (normalizeAiAuthType(authType, targetUrl) === "x-api-key") {
+    return { "X-Api-Key": apiKey };
+  }
+  return { Authorization: `Bearer ${apiKey}` };
+}
+
 async function proxyApi(req, res) {
   const apiPath = req.url.replace(/^\/api/, "");
   const { base, search } = getTargetBase(req.url);
@@ -856,11 +876,12 @@ async function proxyAi(req, res) {
   if (incoming.thinking !== undefined) payload.thinking = incoming.thinking;
 
   try {
+    const authHeaders = getAiAuthHeaders(apiKey, incoming.authType, targetUrl.toString());
     const upstream = await fetch(targetUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
+        ...authHeaders
       },
       body: JSON.stringify(payload)
     });

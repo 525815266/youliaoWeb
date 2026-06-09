@@ -176,6 +176,7 @@ POST /ai/chat/completions
 
 - `sub2 中转`：`https://sub2.sn55.cn/`，默认模型 `gpt-5.4-mini`。
 - `DeepSeek`：`https://api.deepseek.com`，默认模型 `deepseek-v4-flash`。DeepSeek 使用自己的 API Key，点击预设不会覆盖当前密钥。
+- `CodeBuddy`：自动切换为 `X-Api-Key` 认证。CodeBuddy 平台创建访问密钥后，把平台给出的 API 端点、访问密钥和模型填入设置即可；如果只填根地址，Web 会按 OpenAI 兼容规则补 `/v1/chat/completions`。
 
 右侧新增了 `skill回复` 标签。skill 数据不是假数据，保存在本地文件：
 

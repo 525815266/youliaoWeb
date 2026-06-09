@@ -8,16 +8,25 @@ const DEFAULT_AI_BASE_URL = "https://sub2.sn55.cn/";
 const DEFAULT_AI_API_KEY = "sk-b9d9c696d71c86d875a0379dcbc0eca8e5863884022405bb031d95341951485b";
 const DEFAULT_AI_MODEL = "gpt-5.4-mini";
 const DEFAULT_AI_TEMPERATURE = 0.35;
+const DEFAULT_AI_AUTH_TYPE = "bearer";
 const AI_PRESETS = {
   sub2: {
     label: "sub2 中转",
     baseUrl: DEFAULT_AI_BASE_URL,
-    model: DEFAULT_AI_MODEL
+    model: DEFAULT_AI_MODEL,
+    authType: "bearer"
   },
   deepseek: {
     label: "DeepSeek 官方",
     baseUrl: "https://api.deepseek.com",
-    model: "deepseek-v4-flash"
+    model: "deepseek-v4-flash",
+    authType: "bearer"
+  },
+  codebuddy: {
+    label: "CodeBuddy",
+    baseUrl: "https://api.codebuddy.ai",
+    model: "codebuddy",
+    authType: "x-api-key"
   }
 };
 const ONLINE_SERVICE_URL = "https://work.weixin.qq.com/kfid/kfcac6535078c49e290";
@@ -177,6 +186,7 @@ const state = {
   aiBaseUrl: localStorage.getItem("youchat.ai.baseUrl") || DEFAULT_AI_BASE_URL,
   aiApiKey: localStorage.getItem("youchat.ai.apiKey") || DEFAULT_AI_API_KEY,
   aiModel: normalizeAiModel(localStorage.getItem("youchat.ai.model") || DEFAULT_AI_MODEL),
+  aiAuthType: normalizeAiAuthType(localStorage.getItem("youchat.ai.authType") || DEFAULT_AI_AUTH_TYPE),
   aiTemperature: clampAiTemperature(localStorage.getItem("youchat.ai.temperature") || DEFAULT_AI_TEMPERATURE),
   aiGenerating: false,
   aiSuggestion: null,
@@ -351,6 +361,7 @@ function boot() {
     "aiBaseUrl",
     "aiApiKey",
     "aiModel",
+    "aiAuthType",
     "aiTemperature",
     "resetAiSettings",
     "connectionState",
@@ -539,6 +550,7 @@ function hydrateAiSettingsFields() {
   el.aiBaseUrl.value = state.aiBaseUrl;
   el.aiApiKey.value = state.aiApiKey;
   el.aiModel.value = state.aiModel;
+  el.aiAuthType.value = state.aiAuthType;
   el.aiTemperature.value = state.aiTemperature;
   updateAiButtonState();
 }
@@ -1494,6 +1506,7 @@ function saveAiSettings(event) {
   state.aiBaseUrl = normalizeAiBaseUrl(el.aiBaseUrl.value);
   state.aiApiKey = el.aiApiKey.value.trim();
   state.aiModel = normalizeAiModel(el.aiModel.value);
+  state.aiAuthType = normalizeAiAuthType(el.aiAuthType.value);
   state.aiTemperature = clampAiTemperature(el.aiTemperature.value);
   persistAiSettings();
   hydrateAiSettingsFields();
@@ -1508,6 +1521,7 @@ function resetAiSettings() {
   state.aiBaseUrl = DEFAULT_AI_BASE_URL;
   state.aiApiKey = DEFAULT_AI_API_KEY;
   state.aiModel = DEFAULT_AI_MODEL;
+  state.aiAuthType = DEFAULT_AI_AUTH_TYPE;
   state.aiTemperature = DEFAULT_AI_TEMPERATURE;
   persistAiSettings();
   hydrateAiSettingsFields();
@@ -1521,8 +1535,11 @@ function handleAiPresetClick(event) {
   if (!preset) return;
   el.aiBaseUrl.value = preset.baseUrl;
   el.aiModel.value = preset.model;
+  el.aiAuthType.value = preset.authType || DEFAULT_AI_AUTH_TYPE;
   if (target.dataset.aiPreset === "deepseek") {
     toast("已填入 DeepSeek 官方端点和模型，请填写 DeepSeek 平台的 API Key。");
+  } else if (target.dataset.aiPreset === "codebuddy") {
+    toast("已切换 CodeBuddy：请填写访问密钥、确认平台给出的 API 端点和模型。");
   } else {
     toast("已填入 sub2 中转端点和模型。");
   }
@@ -1535,6 +1552,7 @@ function persistAiSettings() {
   localStorage.setItem("youchat.ai.baseUrl", state.aiBaseUrl);
   localStorage.setItem("youchat.ai.apiKey", state.aiApiKey);
   localStorage.setItem("youchat.ai.model", state.aiModel);
+  localStorage.setItem("youchat.ai.authType", state.aiAuthType);
   localStorage.setItem("youchat.ai.temperature", String(state.aiTemperature));
   updateAiButtonState();
 }
@@ -1547,6 +1565,21 @@ function normalizeAiBaseUrl(value) {
 function normalizeAiModel(value) {
   const model = String(value || "").trim();
   return !model || model === "gpt-4o-mini" ? DEFAULT_AI_MODEL : model;
+}
+
+function normalizeAiAuthType(value) {
+  const normalized = String(value || DEFAULT_AI_AUTH_TYPE).trim().toLowerCase();
+  return normalized === "x-api-key" ? "x-api-key" : DEFAULT_AI_AUTH_TYPE;
+}
+
+function getAiRelayBasePayload(temperature = state.aiTemperature) {
+  return {
+    baseUrl: state.aiBaseUrl,
+    apiKey: state.aiApiKey,
+    model: state.aiModel,
+    authType: state.aiAuthType,
+    temperature: clampAiTemperature(temperature)
+  };
 }
 
 function clampAiTemperature(value) {
@@ -5653,10 +5686,7 @@ async function requestAiRelaySuggestions(options = {}) {
 
   try {
     const payload = {
-      baseUrl: state.aiBaseUrl,
-      apiKey: state.aiApiKey,
-      model: state.aiModel,
-      temperature: state.aiTemperature,
+      ...getAiRelayBasePayload(),
       messages: [
         {
           role: "system",
@@ -5750,10 +5780,7 @@ async function requestAiChatReplies({ systemLines, userContent, temperature, sig
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      baseUrl: state.aiBaseUrl,
-      apiKey: state.aiApiKey,
-      model: state.aiModel,
-      temperature: clampAiTemperature(temperature ?? state.aiTemperature),
+      ...getAiRelayBasePayload(temperature ?? state.aiTemperature),
       messages: [
         {
           role: "system",
@@ -5973,10 +6000,7 @@ async function optimizeDraftReply() {
 
   try {
     const payload = {
-      baseUrl: state.aiBaseUrl,
-      apiKey: state.aiApiKey,
-      model: state.aiModel,
-      temperature: Math.min(0.6, Number(state.aiTemperature || 0.35) + 0.1),
+      ...getAiRelayBasePayload(Math.min(0.6, Number(state.aiTemperature || 0.35) + 0.1)),
       messages: [
         {
           role: "system",

@@ -48,6 +48,7 @@
 42. [2026-06-09 应用深链长链接卡片](#42-2026-06-09-应用深链长链接卡片)
 43. [2026-06-09 小程序卡片微信式大封面](#43-2026-06-09-小程序卡片微信式大封面)
 44. [2026-06-09 客户头像同步](#44-2026-06-09-客户头像同步)
+45. [2026-06-09 CodeBuddy API 支持](#45-2026-06-09-codebuddy-api-支持)
 
 ## 1. 项目目标
 
@@ -2187,3 +2188,44 @@ ORDER BY COUNT(*) DESC;
 - 不伪造头像。没有真实头像或真实 URL 加载失败时，只显示客户昵称/备注首字文字头像。
 - 详情接口头像优先于列表头像，但必须同步回当前会话和列表状态，避免三个区域各自显示不同头像。
 - 刷新头像时不要调用会滚到底部的渲染，必须保留 `messageList.scrollTop`，避免客服正在翻历史时被打断。
+
+## 45. 2026-06-09 CodeBuddy API 支持
+
+用户需求：
+
+- 希望右上角 AI 设置支持 CodeBuddy 的 API，后续可以用 CodeBuddy 访问密钥驱动 AI 推荐、文字优化和 skill 优化。
+
+真实依据：
+
+- CodeBuddy 官方环境变量文档包含：
+  - `CODEBUDDY_API_KEY`：用于模型 API 调用的访问密钥。
+  - `CODEBUDDY_BASE_URL`：用于覆盖模型 API 端点。
+  - `CODEBUDDY_MODEL`：用于覆盖模型名称。
+- CodeBuddy 身份/API Key 文档说明 API Key 通过 `X-Api-Key` 请求头传递。
+
+已修改：
+
+- `public/index.html`
+  - AI 设置供应商预设新增 `CodeBuddy`。
+  - 新增“认证方式”下拉：
+    - `Authorization: Bearer`
+    - `X-Api-Key`
+- `public/app.js`
+  - 新增 `DEFAULT_AI_AUTH_TYPE = "bearer"`。
+  - `AI_PRESETS` 扩展 `authType`，CodeBuddy 预设使用 `authType: "x-api-key"`。
+  - 新增 `state.aiAuthType`，持久化到 `localStorage.youchat.ai.authType`。
+  - `hydrateAiSettingsFields()`、`saveAiSettings()`、`resetAiSettings()`、`handleAiPresetClick()` 同步处理认证方式。
+  - 新增 `normalizeAiAuthType()` 和 `getAiRelayBasePayload()`，所有 AI 中转请求统一携带 `baseUrl/apiKey/model/authType/temperature`，避免推荐回复、换一换、文字优化、skill 优化其中某一处漏掉 CodeBuddy 鉴权。
+- `server.js`
+  - 新增 `normalizeAiAuthType()` 和 `getAiAuthHeaders()`。
+  - `/ai/chat/completions` 根据 `incoming.authType` 选择：
+    - `bearer` -> `Authorization: Bearer <key>`
+    - `x-api-key` -> `X-Api-Key: <key>`
+  - 如果 `baseUrl` hostname 包含 `codebuddy` 或为 `copilot.tencent.com`，未显式传 authType 时也自动使用 `X-Api-Key`。
+
+使用规则：
+
+- CodeBuddy 平台创建访问密钥后，在 Web 右上角 `AI` 设置中点 `CodeBuddy`。
+- 填入 CodeBuddy 平台给出的 API 端点、访问密钥和模型名。
+- 如果平台给的是完整 `/chat/completions` 地址，可以直接填完整地址；如果只给根地址或 `/v1`，`server.js:getAiChatCompletionsUrl()` 会按 OpenAI 兼容规则补全。
+- 不要把 CodeBuddy 改回 Bearer 鉴权，否则会导致 CodeBuddy 访问密钥请求失败。

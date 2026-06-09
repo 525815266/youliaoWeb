@@ -3367,7 +3367,8 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
-.settings-field input {
+.settings-field input,
+.settings-field select {
   width: 100%;
   height: 33px;
   border: 1px solid var(--line);
@@ -3375,6 +3376,10 @@ textarea:focus-visible {
   padding: 0 9px;
   color: #172033;
   background: #fff;
+}
+
+.settings-field select {
+  appearance: auto;
 }
 
 .settings-field input[type="password"] {

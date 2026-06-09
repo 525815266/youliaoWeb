@@ -323,15 +323,18 @@ Defaults:
 
 - `DEFAULT_AI_BASE_URL = "https://sub2.sn55.cn/"`
 - `DEFAULT_AI_MODEL = "gpt-5.4-mini"`
+- `DEFAULT_AI_AUTH_TYPE = "bearer"`
 - API key is currently hardcoded by user request and persisted in localStorage.
 - `AI_PRESETS.deepseek` sets `baseUrl = "https://api.deepseek.com"` and `model = "deepseek-v4-flash"`.
 - DeepSeek uses its own API key. The preset must not overwrite the current key.
+- `AI_PRESETS.codebuddy` sets `authType = "x-api-key"`. CodeBuddy access keys use `X-Api-Key`, not Bearer.
 
 Settings:
 
 - `state.aiEnabled`: AI recommendations enabled.
 - `state.skillAutoReply`: skill auto-send switch.
 - `state.skillAutoLearn`: manual reply learning switch.
+- `state.aiAuthType`: `"bearer"` or `"x-api-key"`.
 - `hydrateAiSettingsFields`
 - `saveAiSettings`
 - `persistAiSettings`
@@ -347,6 +350,15 @@ Local skill endpoints in `server.js`:
 - `POST /local/reply-skills/learn`
 
 Core functions:
+
+- `getAiRelayBasePayload`
+- `normalizeAiAuthType`
+
+Server AI proxy:
+
+- `server.js:getAiChatCompletionsUrl()` still normalizes OpenAI-compatible `/chat/completions` URLs.
+- `server.js:getAiAuthHeaders()` chooses `Authorization: Bearer <key>` or `X-Api-Key: <key>`.
+- If a CodeBuddy/Copilot Tencent host is used without explicit authType, the proxy defaults to `X-Api-Key`.
 
 - `loadReplySkills`
 - `saveReplySkills`

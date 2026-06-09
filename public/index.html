@@ -34,6 +34,7 @@
               <span>供应商</span>
               <button class="mini-action" type="button" data-ai-preset="sub2">sub2 中转</button>
               <button class="mini-action" type="button" data-ai-preset="deepseek">DeepSeek</button>
+              <button class="mini-action" type="button" data-ai-preset="codebuddy">CodeBuddy</button>
             </div>
             <label class="settings-field">
               <span>API 端点</span>
@@ -42,6 +43,13 @@
           <label class="settings-field">
             <span>API 密钥</span>
             <input id="aiApiKey" type="password" autocomplete="off" />
+          </label>
+          <label class="settings-field">
+            <span>认证方式</span>
+            <select id="aiAuthType">
+              <option value="bearer">Authorization: Bearer</option>
+              <option value="x-api-key">X-Api-Key</option>
+            </select>
           </label>
           <label class="settings-field">
             <span>模型</span>
