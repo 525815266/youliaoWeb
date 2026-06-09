@@ -38,12 +38,12 @@
 
 - 表情：插入微信/悠聊表情短码到输入框。
 - 发送指令：调用 `/ChatContent/SendSuperCmd`。
-- 选择图片：调用 `/ChatContent/GetOssConfig` 获取 OSS 参数，优先浏览器直传，失败时走 `/local/oss-upload` 本地代理，再用 `/ChatContent/SendMsg(contentType=1/4)` 发出。
+- 选择图片：调用 `/ChatContent/GetOssConfig` 获取 OSS 参数，为每张图生成唯一 OSS key，优先走 `/local/oss-upload` 本地代理上传，浏览器直传只作为兜底，再用 `/ChatContent/SendMsg(contentType=1/4)` 发出。
 - 红包：调用 `/ChatContent/GetRedPacks` 读取模板，再调用 `/ChatContent/SendRedPacks`。
 - 截图：使用浏览器屏幕捕获生成图片，再走图片发送链路。
 - 星标：把当前输入/推荐话术写入 `data/reply-skills.json`；如果输入框里已有草稿图片，会先走真实 OSS 上传拿到图片 URL，再把图片步骤一起写入 skill。
 - 转 AI：调用 `/Conversation/TransferToAI`。
-- 粘贴图片：输入框支持直接粘贴/拖入图片；剪贴板里同时有文字和图片时，文字会正常进入输入框，图片会进入输入框左侧草稿栏。点击发送时文字走 `/ChatContent/SendMsg(contentType=0)`，图片逐张走上传 + `/ChatContent/SendMsg(contentType=1/4)`。发送过程中按钮会锁定为“发送中...”，避免服务端排队未回显时重复点击造成多次发送。
+- 粘贴图片：输入框支持直接粘贴/拖入图片；剪贴板里同时有文字和图片时，文字会正常进入输入框，图片会进入输入框左侧草稿栏。点击发送时会先上传全部图片拿到真实 URL，再提交文字和图片消息。发送过程中按钮会锁定为“发送中...”，状态条显示当前阶段；如果某一步失败，已成功发出的内容不会在重试时重复发送。
 - 发送快捷键：发送按钮右侧可以选择 `Enter 发送` 或 `Ctrl+Enter 发送`，默认 `Enter 发送`，选择会持久化到浏览器。
 - 聊天图片预览：客户或客服发送的真实图片在主聊天区和右侧聊天记录里都可以点击，直接复用网页/视频预览浮层在当前页面打开，支持复制地址和打开原图。
 - 文字优化：输入文字后会用 AI 生成 1-3 条“您输入的可优化为”候选，只优化文字，不改图片；采纳/发送时可保留原图一起发送。

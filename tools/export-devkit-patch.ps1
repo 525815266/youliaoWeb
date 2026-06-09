@@ -39,6 +39,18 @@ function Copy-IntoPayload {
   Copy-Item -LiteralPath $source -Destination $dest -Recurse -Force
 }
 
+function Remove-PayloadPath {
+  param(
+    [string]$PayloadRoot,
+    [string]$RelativePath
+  )
+
+  $target = Join-Path $PayloadRoot $RelativePath
+  if (Test-Path -LiteralPath $target) {
+    Remove-Item -LiteralPath $target -Recurse -Force
+  }
+}
+
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 if (-not $OutDir) { $OutDir = Join-Path $ProjectRoot "patches" }
 if (-not $ClientWwwroot) {
@@ -68,12 +80,23 @@ try {
     "watch-api-capture.ps1",
     "capture-client-proxy.js",
     "public",
-    "data",
     "tools"
   )
 
   foreach ($relative in $includePaths) {
     Copy-IntoPayload -SourceRoot $ProjectRoot -PayloadRoot $payloadRoot -RelativePath $relative
+  }
+
+  $excludePayloadPaths = @(
+    "data",
+    "logs",
+    "reports",
+    "node_modules",
+    ".youchat-patch-backups"
+  )
+
+  foreach ($relative in $excludePayloadPaths) {
+    Remove-PayloadPath -PayloadRoot $payloadRoot -RelativePath $relative
   }
 
   $payloadFiles = Get-ChildItem -LiteralPath $payloadRoot -Recurse -File | Sort-Object FullName | ForEach-Object {

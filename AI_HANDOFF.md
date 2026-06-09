@@ -934,6 +934,37 @@ ALTER TABLE `ChatContent_2026_06_08`
 - Do not merge native client settings with Web AI settings. The native options modal may show server `aiOptions`, but those are service-side options and must not overwrite `localStorage` AI relay settings.
 - If local `/api` proxy probes show transient `fetch failed`, verify the same route directly against `http://192.168.9.83:18080/api/...` before assuming the native API is broken. During this pass direct upstream probes worked for System, Summary, Notice, and SearchList, while a few proxy probes were intermittent.
 
+2026-06-09 image send hang fix:
+
+- User reported image sending stayed at `发送中` and never completed.
+- Real capture showed `GetOssConfig` returned Qiniu config (`qnDomain`, `qnRegionUrl`, `qnToken`) but the failed flow did not reach `SendMsg contentType=1`.
+- Important functions:
+  - `sendText`
+  - `sendImageFile`
+  - `uploadChatImage`
+  - `uploadImageViaLocalProxy`
+  - `buildOssObjectKey`
+  - `createOssUploadFileName`
+  - server `handleOssUpload`
+  - server `summarizeUploadConfig`
+- Current strategy:
+  - Generate a unique 32-hex image filename before `GetOssConfig`.
+  - Use `/local/oss-upload` first for Qiniu upload.
+  - Browser direct upload is only fallback and times out after 15s.
+  - API proxy, OSS proxy, and AI proxy all have hard timeouts.
+  - `sendText()` uploads all draft images before submitting text, then submits text and image messages. This avoids repeated text messages when image upload fails.
+  - If text was submitted but later image message submission fails, clear the text box, remove already submitted image drafts, and keep only unsent image drafts for retry.
+- Never use the clipboard filename `image.png` as the OSS key. Use the unique filename or an explicit server-provided key.
+- `/local/oss-upload` capture logs must not include full Qiniu tokens. Use `summarizeUploadConfig()`.
+- `tools/export-devkit-patch.ps1` excludes runtime `data/`, `logs/`, `reports/`, `node_modules/`, and `.youchat-patch-backups/`. Keep it that way so portable patches do not overwrite learned skills or ship captures.
+- Verified with a no-customer-send smoke test:
+  - `GetOssConfig` 200.
+  - `/local/oss-upload` uploaded a 1x1 PNG to Qiniu and returned a unique `https://qiniu.yunsert.com/<hex>.png`.
+  - Did not call `/ChatContent/SendMsg` during the smoke test.
+- Validation commands run:
+  - `npm run check`
+  - `npm run fnos:health`
+
 ## Non-Negotiables
 
 - Do not fake searchable user IDs.

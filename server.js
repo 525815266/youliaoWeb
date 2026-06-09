@@ -1,4 +1,5 @@
 const http = require("http");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
@@ -15,6 +16,9 @@ const REPLY_SKILLS_FILE = path.join(DATA_DIR, "reply-skills.json");
 const API_CAPTURE_FILE = path.join(LOG_DIR, "api-capture.ndjson");
 const MAX_CAPTURE_TEXT = 8000;
 const MAX_LINK_PREVIEW_BYTES = 900000;
+const API_PROXY_TIMEOUT_MS = 60000;
+const OSS_UPLOAD_TIMEOUT_MS = 70000;
+const AI_PROXY_TIMEOUT_MS = 90000;
 const DIRECT_VIDEO_EXTENSIONS = /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8)(?:$|\?)/i;
 
 const mimeTypes = {
@@ -38,6 +42,33 @@ function sendJson(res, status, payload) {
     "Cache-Control": "no-store"
   });
   res.end(JSON.stringify(payload, null, 2));
+}
+
+async function fetchWithTimeout(resource, options = {}, timeoutMs = API_PROXY_TIMEOUT_MS, label = "request") {
+  const controller = new AbortController();
+  const externalSignal = options.signal;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const abortFromExternal = () => controller.abort();
+
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", abortFromExternal, { once: true });
+  }
+
+  try {
+    return await fetch(resource, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`);
+    if (error?.name === "AbortError") throw new Error(`${label} was canceled`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal) externalSignal.removeEventListener("abort", abortFromExternal);
+  }
 }
 
 function sendClientBraftIcons(res) {
@@ -105,6 +136,19 @@ function decodeCaptureBody(buffer, contentType = "") {
     return trimCaptureText(buffer.toString("utf8"));
   }
   return `<binary ${buffer.length} bytes>`;
+}
+
+function summarizeUploadConfig(config = {}) {
+  return {
+    cloudType: config.cloudType,
+    qnDomain: config.qnDomain || config.qiniuDomain || "",
+    qnRegionUrl: config.qnRegionUrl || config.qiniuUploadUrl || config.qnUploadUrl || "",
+    hasQnToken: Boolean(config.qnToken || config.qiniuToken || config.uploadToken),
+    txHostUrl: config.txHostUrl || "",
+    uploadUrl: config.uploadUrl || config.action || config.host || config.endpoint || config.ossHost || config.domain || "",
+    hasPolicy: Boolean(config.policy || config.Policy),
+    hasSignature: Boolean(config.signature || config.Signature)
+  };
 }
 
 function captureApi(entry) {
@@ -391,16 +435,47 @@ function extractUploadEndpoint(config) {
 }
 
 function buildOssObjectKey(config, fileName) {
-  return firstNonEmpty(
+  const explicitKey = firstNonEmpty(
     config.key,
     config.objectKey,
     config.fileKey,
     config.path,
     config.filePath,
-    config.fullPath,
-    config.dir ? `${String(config.dir).replace(/\/?$/, "/")}${fileName}` : "",
-    config.prefix ? `${String(config.prefix).replace(/\/?$/, "/")}${fileName}` : ""
-  ) || fileName;
+    config.fullPath
+  );
+  if (explicitKey) return normalizeOssObjectKey(explicitKey, fileName);
+  return joinOssKey(firstNonEmpty(config.dir, config.prefix), fileName || createOssUploadFileName(fileName));
+}
+
+function normalizeOssObjectKey(value, fileName) {
+  let key = String(value || "")
+    .replace(/\$\{fileName\}|\$\{filename\}|\{fileName\}|\{filename\}|%fileName%|%filename%/g, fileName)
+    .replace(/^https?:\/\/[^/]+\//i, "")
+    .replace(/^\/+/, "");
+  if (!key || /\/$/.test(key)) key = joinOssKey(key, fileName);
+  return key || fileName;
+}
+
+function joinOssKey(prefix, fileName) {
+  const cleanFileName = String(fileName || createOssUploadFileName()).replace(/^\/+/, "");
+  const cleanPrefix = String(prefix || "").replace(/^\/+|\/+$/g, "");
+  return cleanPrefix ? `${cleanPrefix}/${cleanFileName}` : cleanFileName;
+}
+
+function createOssUploadFileName(fileName = "", contentType = "") {
+  return `${crypto.randomBytes(16).toString("hex")}${getSafeImageExtension(fileName, contentType)}`;
+}
+
+function getSafeImageExtension(fileName = "", contentType = "") {
+  const match = String(fileName).toLowerCase().match(/\.([a-z0-9]{2,8})$/);
+  const ext = match ? `.${match[1]}` : "";
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext)) return ext === ".jpeg" ? ".jpg" : ext;
+  const type = String(contentType || "").toLowerCase();
+  if (type.includes("gif")) return ".gif";
+  if (type.includes("webp")) return ".webp";
+  if (type.includes("jpeg") || type.includes("jpg")) return ".jpg";
+  if (type.includes("bmp")) return ".bmp";
+  return ".png";
 }
 
 function buildOssFormData(config, objectKey, fileName, contentType, buffer) {
@@ -486,16 +561,33 @@ async function handleOssUpload(req, res) {
     const buffer = Buffer.from(base64, "base64");
     const endpoint = extractUploadEndpoint(config);
     if (!endpoint) {
-      sendJson(res, 400, { success: false, message: "OSS upload endpoint is missing", config: summarize(config) });
+      sendJson(res, 400, { success: false, message: "OSS upload endpoint is missing", config: summarizeUploadConfig(config) });
       return;
     }
 
-    const objectKey = payload.objectKey || buildOssObjectKey(config, fileName);
+    const objectKey = payload.objectKey || buildOssObjectKey(config, fileName || createOssUploadFileName(fileName, contentType));
     const form = buildOssFormData(config, objectKey, fileName, contentType, buffer);
-    const upstream = await fetch(endpoint, { method: "POST", body: form });
+    const upstream = await fetchWithTimeout(endpoint, { method: "POST", body: form }, OSS_UPLOAD_TIMEOUT_MS, "OSS upload");
     const text = await upstream.text();
     const parsed = parseMaybeJson(text);
     const url = extractUploadedUrl(parsed, firstNonEmpty(config.qnDomain, config.qiniuDomain, endpoint), objectKey);
+
+    captureApi({
+      at: new Date().toISOString(),
+      method: req.method,
+      url: req.url,
+      target: endpoint,
+      status: upstream.status,
+      requestBody: JSON.stringify({
+        fileName,
+        contentType,
+        bytes: buffer.length,
+        objectKey,
+        config: summarizeUploadConfig(config)
+      }),
+      responseContentType: upstream.headers.get("content-type") || "",
+      responseBody: trimCaptureText(text, 1200)
+    });
 
     sendJson(res, upstream.ok ? 200 : 502, {
       success: upstream.ok,
@@ -505,6 +597,14 @@ async function handleOssUpload(req, res) {
       response: trimCaptureText(text, 1200)
     });
   } catch (error) {
+    captureApi({
+      at: new Date().toISOString(),
+      method: req.method,
+      url: req.url,
+      target: "/local/oss-upload",
+      status: 500,
+      error: error.message
+    });
     sendJson(res, 500, { success: false, message: "OSS upload proxy failed", error: error.message });
   }
 }
@@ -762,7 +862,7 @@ async function proxyApi(req, res) {
   };
 
   try {
-    const upstream = await fetch(targetUrl, options);
+    const upstream = await fetchWithTimeout(targetUrl, options, API_PROXY_TIMEOUT_MS, "YouChat API proxy");
     const buffer = Buffer.from(await upstream.arrayBuffer());
     const responseHeaders = {};
 
@@ -877,14 +977,14 @@ async function proxyAi(req, res) {
 
   try {
     const authHeaders = getAiAuthHeaders(apiKey, incoming.authType, targetUrl.toString());
-    const upstream = await fetch(targetUrl, {
+    const upstream = await fetchWithTimeout(targetUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...authHeaders
       },
       body: JSON.stringify(payload)
-    });
+    }, AI_PROXY_TIMEOUT_MS, "AI proxy");
     const text = await upstream.text();
     res.writeHead(upstream.status, {
       "Content-Type": upstream.headers.get("content-type") || "application/json; charset=utf-8",

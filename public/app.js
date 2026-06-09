@@ -9,6 +9,9 @@ const DEFAULT_AI_API_KEY = "sk-b9d9c696d71c86d875a0379dcbc0eca8e5863884022405bb0
 const DEFAULT_AI_MODEL = "gpt-5.4-mini";
 const DEFAULT_AI_TEMPERATURE = 0.35;
 const DEFAULT_AI_AUTH_TYPE = "bearer";
+const API_REQUEST_TIMEOUT_MS = 45000;
+const IMAGE_UPLOAD_TIMEOUT_MS = 15000;
+const LOCAL_IMAGE_UPLOAD_TIMEOUT_MS = 70000;
 const AI_PRESETS = {
   sub2: {
     label: "sub2 中转",
@@ -208,6 +211,7 @@ const state = {
   skillAutoLearn: localStorage.getItem("youchat.skill.autoLearn") !== "false",
   skillAutoSending: false,
   sendingMessage: false,
+  sendingStage: "",
   sendMode: normalizeSendMode(localStorage.getItem(SEND_MODE_STORAGE_KEY)),
   lastSkillAutoReplyKey: "",
   emojiOpen: false,
@@ -571,7 +575,9 @@ function updateComposerStatus() {
   const detail = state.draftImages.length ? `已附加 ${state.draftImages.length} 张图，${shortcut}` : shortcut;
   if (el.sendMode) el.sendMode.value = state.sendMode;
   const status = document.querySelector(".composer-status");
-  if (status) status.textContent = `文字和图片会按接口能力分开发送，${detail}`;
+  if (status) status.textContent = state.sendingMessage && state.sendingStage
+    ? state.sendingStage
+    : `文字和图片会按接口能力分开发送，${detail}`;
 }
 
 function updateSendControls() {
@@ -584,18 +590,27 @@ function updateSendControls() {
   if (el.applyAiSuggestion) el.applyAiSuggestion.disabled = sending || !state.aiSuggestion || Boolean(state.aiSuggestion.noReply);
 }
 
+function setSendingStage(stage) {
+  state.sendingStage = stage || "";
+  updateComposerStatus();
+}
+
 async function withSendingLock(task) {
   if (state.sendingMessage) {
     toast("消息正在提交，请不要重复点击。", true);
     return null;
   }
   state.sendingMessage = true;
+  state.sendingStage = "正在准备发送...";
   updateSendControls();
+  updateComposerStatus();
   try {
     return await task();
   } finally {
     state.sendingMessage = false;
+    state.sendingStage = "";
     updateSendControls();
+    updateComposerStatus();
     renderAiSuggestionCard();
     if (state.activeTool === "skill") renderToolContent();
   }
@@ -1852,6 +1867,33 @@ function apiPath(path) {
   return `/api${normalized}?__target=${encodeURIComponent(state.apiBase)}`;
 }
 
+async function fetchWithTimeout(resource, options = {}, timeoutMs = API_REQUEST_TIMEOUT_MS, label = "request") {
+  const controller = new AbortController();
+  const externalSignal = options.signal;
+  let timedOut = false;
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const abortFromExternal = () => controller.abort();
+
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", abortFromExternal, { once: true });
+  }
+
+  try {
+    return await fetch(resource, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`);
+    if (error?.name === "AbortError") throw new Error(`${label} was canceled`);
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+    if (externalSignal) externalSignal.removeEventListener("abort", abortFromExternal);
+  }
+}
+
 async function api(path, data = {}, options = {}) {
   const method = options.method || "POST";
   const headers = {};
@@ -1867,11 +1909,11 @@ async function api(path, data = {}, options = {}) {
   }
 
   const started = Date.now();
-  const response = await fetch(apiPath(path), {
+  const response = await fetchWithTimeout(apiPath(path), {
     method,
     headers,
     body: ["GET", "HEAD"].includes(method) ? undefined : body
-  });
+  }, options.timeoutMs || API_REQUEST_TIMEOUT_MS, `${method} ${path}`);
   const text = await response.text();
   const payload = parsePayload(text);
 
@@ -4948,16 +4990,31 @@ async function sendText() {
       return;
     }
 
+    let textSubmitted = false;
+    const submittedImageIds = new Set();
     try {
       const sentImageUrls = [];
-      if (content) {
-        await sendChatContent({ content, contentType: 0 });
-      }
-      for (const image of images) {
-        const imageUrl = await sendImageFile(image.file, { silent: true });
+      for (const [index, image] of images.entries()) {
+        setSendingStage(`正在上传第 ${index + 1}/${images.length} 张图片...`);
+        const imageUrl = await uploadChatImage(image.file);
         sentImageUrls.push(imageUrl);
         await delay(180);
       }
+      if (content) {
+        setSendingStage("正在提交文字消息...");
+        await sendChatContent({ content, contentType: 0 });
+        textSubmitted = true;
+      }
+      for (const [index, imageUrl] of sentImageUrls.entries()) {
+        setSendingStage(`正在提交第 ${index + 1}/${sentImageUrls.length} 张图片消息...`);
+        await sendChatContent({
+          content: imageUrl,
+          contentType: images[index]?.file?.type === "image/gif" ? 4 : 1
+        });
+        if (images[index]?.id) submittedImageIds.add(images[index].id);
+        await delay(180);
+      }
+      setSendingStage("正在学习回复并刷新聊天...");
       await learnFromManualReply(content, sentImageUrls, { matchedSkill: matchedSkillBeforeSend });
       el.replyText.value = "";
       clearDraftImages();
@@ -4966,6 +5023,11 @@ async function sendText() {
       await loadMessages(1, "replace", { forceBottom: true });
       toast(images.length ? "文字和图片已提交到悠聊服务。" : "消息已提交到悠聊服务。");
     } catch (error) {
+      if (textSubmitted) el.replyText.value = "";
+      if (submittedImageIds.size) {
+        state.draftImages = state.draftImages.filter((image) => !submittedImageIds.has(image.id));
+        renderDraftImages();
+      }
       toast(`发送失败：${error.message}`, true);
     }
   });
@@ -5100,6 +5162,7 @@ async function sendImageFile(file, options = {}) {
   assertActiveContact();
   if (!file.type.startsWith("image/")) throw new Error("请选择图片文件");
   const imageUrl = await uploadChatImage(file);
+  setSendingStage("正在提交图片消息...");
   await sendChatContent({ content: imageUrl, contentType: file.type === "image/gif" ? 4 : 1 });
   if (!options.silent) {
     touchActiveContact("[image]");
@@ -5191,9 +5254,11 @@ async function uploadDraftImagesForSkill() {
 
 async function uploadChatImage(file) {
   const contactId = assertActiveContact();
+  const uploadFileName = createOssUploadFileName(file);
+  setSendingStage("正在获取图片上传配置...");
   const payload = await api("/ChatContent/GetOssConfig", {
     contactId,
-    fileName: file.name
+    fileName: uploadFileName
   });
   const config = getData(payload) || {};
   log("oss config", summarize(config));
@@ -5206,43 +5271,57 @@ async function uploadChatImage(file) {
     throw new Error("已拿到上传配置，但未识别到 OSS 上传地址，请继续抓包确认 GetOssConfig 返回结构");
   }
 
-  const objectKey = buildOssObjectKey(config, file.name);
+  const objectKey = buildOssObjectKey(config, uploadFileName);
+  const localPayload = { config, objectKey, file, fileName: uploadFileName };
   try {
-    const uploadForm = buildOssUploadForm(config, objectKey, file);
-    const response = await fetch(endpoint, {
+    setSendingStage("正在通过本地代理上传图片...");
+    return await uploadImageViaLocalProxy(localPayload);
+  } catch (proxyError) {
+    log("local oss upload failed, retry via browser", { error: proxyError.message, objectKey });
+  }
+
+  try {
+    setSendingStage("正在通过浏览器直传图片...");
+    const uploadForm = buildOssUploadForm(config, objectKey, file, uploadFileName);
+    const response = await fetchWithTimeout(endpoint, {
       method: "POST",
       body: uploadForm
-    });
+    }, IMAGE_UPLOAD_TIMEOUT_MS, "image upload");
     const text = await response.text();
     log("oss upload response", { status: response.status, response: text.slice(0, 600) });
     if (!response.ok) throw new Error(`OSS 上传失败 HTTP ${response.status}`);
 
-    return extractUploadedFileUrl(parsePayload(text)) ||
+    const uploadedUrl = extractUploadedFileUrl(parsePayload(text)) ||
       extractUploadedFileUrl(config, objectKey) ||
       joinUrl(endpoint, objectKey);
+    if (!uploadedUrl) throw new Error("OSS 上传完成，但未生成图片地址");
+    return uploadedUrl;
   } catch (error) {
-    log("oss browser upload failed, retry via local proxy", { error: error.message });
-    return uploadImageViaLocalProxy({ config, objectKey, file });
+    throw new Error(`图片上传失败：${error.message}`);
   }
 }
 
-async function uploadImageViaLocalProxy({ config, objectKey, file }) {
+async function uploadImageViaLocalProxy({ config, objectKey, file, fileName }) {
   const payload = {
     config,
     objectKey,
-    fileName: file.name,
+    fileName: fileName || file.name,
     contentType: file.type,
     base64: await fileToBase64(file)
   };
-  const response = await fetch("/local/oss-upload", {
+  const response = await fetchWithTimeout("/local/oss-upload", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
-  });
-  const result = await response.json();
+  }, LOCAL_IMAGE_UPLOAD_TIMEOUT_MS, "local image upload");
+  const text = await response.text();
+  const result = parsePayload(text) || {};
   log("local oss upload", summarize(result));
   if (!response.ok || result.success === false || !result.url) {
-    throw new Error(getMessage(result) || "图片上传代理未返回图片地址");
+    const detail = result.error && result.error !== result.message
+      ? `${getMessage(result) || "图片上传代理失败"}：${result.error}`
+      : getMessage(result);
+    throw new Error(detail || "图片上传代理未返回图片地址");
   }
   return result.url;
 }
@@ -5276,19 +5355,61 @@ function extractUploadEndpoint(config) {
 }
 
 function buildOssObjectKey(config, fileName) {
-  return firstValue(
+  const explicitKey = firstValue(
     config.key,
     config.objectKey,
     config.fileKey,
     config.path,
     config.filePath,
-    config.fullPath,
-    config.dir ? `${String(config.dir).replace(/\/?$/, "/")}${fileName}` : "",
-    config.prefix ? `${String(config.prefix).replace(/\/?$/, "/")}${fileName}` : ""
-  ) || fileName;
+    config.fullPath
+  );
+  if (explicitKey) return normalizeOssObjectKey(explicitKey, fileName);
+  return joinOssKey(firstValue(config.dir, config.prefix), fileName);
 }
 
-function buildOssUploadForm(config, objectKey, file) {
+function normalizeOssObjectKey(value, fileName) {
+  let key = String(value || "")
+    .replace(/\$\{fileName\}|\$\{filename\}|\{fileName\}|\{filename\}|%fileName%|%filename%/g, fileName)
+    .replace(/^https?:\/\/[^/]+\//i, "")
+    .replace(/^\/+/, "");
+  if (!key || /\/$/.test(key)) key = joinOssKey(key, fileName);
+  return key || fileName;
+}
+
+function joinOssKey(prefix, fileName) {
+  const cleanFileName = String(fileName || createOssUploadFileName({ name: "image.png", type: "image/png" })).replace(/^\/+/, "");
+  const cleanPrefix = String(prefix || "").replace(/^\/+|\/+$/g, "");
+  return cleanPrefix ? `${cleanPrefix}/${cleanFileName}` : cleanFileName;
+}
+
+function createOssUploadFileName(file = {}) {
+  return `${randomHex(32)}${getSafeImageExtension(file.name, file.type)}`;
+}
+
+function randomHex(length) {
+  const bytes = new Uint8Array(Math.ceil(length / 2));
+  if (window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, length);
+  }
+  let value = "";
+  while (value.length < length) value += Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
+  return value.slice(0, length);
+}
+
+function getSafeImageExtension(fileName = "", contentType = "") {
+  const match = String(fileName).toLowerCase().match(/\.([a-z0-9]{2,8})$/);
+  const ext = match ? `.${match[1]}` : "";
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext)) return ext === ".jpeg" ? ".jpg" : ext;
+  const type = String(contentType || "").toLowerCase();
+  if (type.includes("gif")) return ".gif";
+  if (type.includes("webp")) return ".webp";
+  if (type.includes("jpeg") || type.includes("jpg")) return ".jpg";
+  if (type.includes("bmp")) return ".bmp";
+  return ".png";
+}
+
+function buildOssUploadForm(config, objectKey, file, fileName = "") {
   const form = new FormData();
   const qiniuToken = firstValue(config.qnToken, config.qiniuToken, config.uploadToken);
   const fieldMap = qiniuToken
@@ -5317,7 +5438,7 @@ function buildOssUploadForm(config, objectKey, file) {
     });
   }
 
-  form.append("file", file, file.name);
+  form.append("file", file, fileName || file.name);
   return form;
 }
 

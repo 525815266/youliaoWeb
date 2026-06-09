@@ -52,6 +52,7 @@
 46. [2026-06-09 聊天图片网页浮层预览](#46-2026-06-09-聊天图片网页浮层预览)
 47. [2026-06-09 发送快捷键、skill 图片与预览头部修复](#47-2026-06-09-发送快捷键skill-图片与预览头部修复)
 48. [2026-06-09 飞牛服务误切 SQLite 修复](#48-2026-06-09-飞牛服务误切-sqlite-修复)
+49. [2026-06-09 图片发送卡在发送中修复](#49-2026-06-09-图片发送卡在发送中修复)
 
 ## 1. 项目目标
 
@@ -2351,3 +2352,86 @@ npm run fnos:health
 
 - 如果 `databaseType=2`，不要先改前端，优先把飞牛服务端配置切回 MySQL 并重启 `youchat-service`。
 - 如果 `databaseType=0` 但接口报错，再检查 MySQL 日志、`ChatContent_%` 表排序规则、磁盘和服务日志。
+
+## 49. 2026-06-09 图片发送卡在发送中修复
+
+用户反馈：
+
+- 粘贴或选择图片后点击发送，按钮一直显示“发送中”，随后没有反应。
+- 之前已经出现过图片发送拿到 `/ChatContent/GetOssConfig` 后没有继续产生 `/ChatContent/SendMsg contentType=1` 的情况。
+
+真实日志依据：
+
+- `logs/api-capture.ndjson` 中失败链路显示：
+  - `/ChatContent/GetOssConfig` 返回七牛配置：
+    - `qnDomain=https://qiniu.yunsert.com`
+    - `qnRegionUrl=http://upload.qiniup.com`
+    - `qnToken=...`
+  - 后续没有对应的 `/ChatContent/SendMsg contentType=1`。
+- 旧实现先走浏览器直传 OSS，失败或卡住后才走 `/local/oss-upload` 本地代理。
+- 旧实现当服务端未返回 `key/objectKey/path` 时，直接用原始文件名作为 OSS key。粘贴图片常见文件名是 `image.png`，会导致重复 key、覆盖或显示混乱。
+
+已修改：
+
+- `public/app.js`
+  - 新增请求超时：
+    - 普通 API：45 秒。
+    - 浏览器 OSS 直传：15 秒。
+    - 本地 OSS 上传代理：70 秒。
+  - 新增 `fetchWithTimeout()`，所有前端 `/api` 请求和图片上传请求都会超时退出，不再无限挂起。
+  - 图片上传改为“本地代理优先，浏览器直传兜底”：
+    - 先调用 `/ChatContent/GetOssConfig`。
+    - 生成 32 位随机十六进制文件名，例如 `d79e0e5d82e55d523ad2975d34f0a1e5.png`。
+    - 优先调用 `/local/oss-upload` 由本地 Node 服务上传七牛，避开浏览器 CORS 和直传卡住问题。
+    - 本地代理失败时，再尝试浏览器直传，直传最多等待 15 秒。
+  - 新增 `createOssUploadFileName()`、`randomHex()`、`getSafeImageExtension()`、`normalizeOssObjectKey()`、`joinOssKey()`。
+  - `buildOssObjectKey()` 支持服务端返回目录、前缀或模板 key；没有明确 key 时使用唯一文件名，不再用 `image.png`。
+  - 发送状态条会显示当前阶段：
+    - 正在准备发送
+    - 正在获取图片上传配置
+    - 正在通过本地代理上传图片
+    - 正在通过浏览器直传图片
+    - 正在提交文字消息
+    - 正在提交图片消息
+    - 正在学习回复并刷新聊天
+  - 文字 + 图片一起发送时，先上传所有图片拿到 URL，再提交文字和图片消息，避免图片上传失败后重试导致文字重复发送。
+  - 如果文字已经成功提交但后续图片消息失败，输入框文字会清空，已成功提交的图片会从草稿里移除，未成功提交的图片保留，用户重试时不会重复发文字。
+- `server.js`
+  - 新增后端请求超时：
+    - 悠聊 API 代理：60 秒。
+    - OSS 上传代理：70 秒。
+    - AI 代理：90 秒。
+  - 新增后端 `fetchWithTimeout()`。
+  - `/local/oss-upload` 使用同一套唯一 key 和七牛表单字段上传。
+  - 新增 `summarizeUploadConfig()`，抓包日志只记录上传配置摘要，不记录完整 token。
+- `/local/oss-upload` 会把 OSS 上传结果写入 `logs/api-capture.ndjson`，包含 endpoint、objectKey、文件大小和 OSS 响应摘要。
+- `tools/export-devkit-patch.ps1`
+  - 补丁包排除 `data/`、`logs/`、`reports/`、`node_modules/` 和 `.youchat-patch-backups/`。
+  - 以后导出的迁移包不会覆盖其他环境里的 skill 学习数据，也不会夹带抓包日志。
+
+验证结果：
+
+- `npm run check` 通过。
+- `npm run fnos:health` 通过：
+  - `databaseType=0 (mysql)`
+  - `totalContacts=8043`
+  - `historyContacts=5710`
+  - `currentAccount2=5`
+- 本地服务 `http://localhost:5177/health` 正常。
+- 不发送给客户的真实上传烟测通过：
+  - `/ChatContent/GetOssConfig` 返回 200。
+  - `/local/oss-upload` 上传 1x1 测试 PNG 到七牛返回 200。
+  - 返回 URL 示例：`https://qiniu.yunsert.com/d79e0e5d82e55d523ad2975d34f0a1e5.png`。
+  - 没有调用 `/ChatContent/SendMsg`，不会给真实客户发送测试图片。
+
+以后排查规则：
+
+- 图片发送卡住时，先看 `logs/api-capture.ndjson`：
+  - 是否有 `/ChatContent/GetOssConfig`。
+  - 是否有 `/local/oss-upload`，以及 OSS 响应里的 `key/hash`。
+  - 是否有 `/ChatContent/SendMsg` 且 `contentType=1` 或 GIF 时 `contentType=4`。
+- 如果 `GetOssConfig` 有返回但 `/local/oss-upload` 失败，优先检查七牛 `qnRegionUrl/qnToken/qnDomain` 和本地 Node 代理。
+- 如果 `/local/oss-upload` 成功但没有 `SendMsg contentType=1`，排查前端发送阶段或 `sendText()` 的异常。
+- 不要再把粘贴图片原始名 `image.png` 作为 OSS key。必须使用唯一 key 或服务端明确返回的 key。
+- 不要在 `/local/oss-upload` 抓包里记录完整 `qnToken`，只记录 `hasQnToken=true/false`。
+- 导出迁移 patch 前确认 zip 内不包含 `payload/data/reply-skills.json` 或 `payload/logs/api-capture.ndjson`。
