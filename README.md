@@ -117,7 +117,7 @@ Remove-Item -LiteralPath C:\youchat-dev-web\logs\api-capture.ndjson -ErrorAction
 客户端设置菜单包含：
 
 - `设置`：读取 `/System/GetOptions`，保存 `/System/SetOptions`。
-- `数据库管理`：读取 `/System/GetConnectionString`，保存 `/System/SetConnectionString`。
+- `数据库管理`：按原客户端“删除聊天记录”窗口调用 `/ChatContent/Delete`。
 - `挂起/恢复`：Web 本地暂停或恢复自动刷新。
 - `退出登录`：回到登录页。
 - `关闭程序`：网页端会尝试关闭当前标签页。
@@ -146,7 +146,7 @@ POST /Notice/ConsumeNotice
 
 当前通知列表总数来自 `data.total.value`，列表来自 `data.data`。如果后续抓包发现有未读专用字段或接口，再优先替换通知角标来源。
 
-数据库管理会按 `/System/GetConnectionString` 返回的 `databaseType` 数字枚举保存，不把显示名称当作类型值提交。
+数据库管理会删除指定日期范围内的聊天记录。该功能来自原客户端接口 `ChatContentController.Delete(System.DateTime startTime, System.DateTime endTime)`，Web 会把日期转换成 `YYYY-MM-DD 00:00:00` 到 `YYYY-MM-DD 23:59:59` 后提交到 `/ChatContent/Delete`。确认按钮默认禁用，必须输入 `我已知晓删除的聊天记录无法恢复` 才能提交；删除不可恢复，操作前先确认数据库备份。
 
 统计后台按钮会按当前服务端地址打开 `/abnormal`，例如：
 

@@ -3738,6 +3738,94 @@ textarea:focus-visible {
   padding: 9px 11px;
 }
 
+.database-delete-panel {
+  display: grid;
+  gap: 16px;
+  min-height: 360px;
+  padding: 4px 10px 0;
+}
+
+.database-delete-tabs {
+  display: flex;
+  border-bottom: 1px solid #e3ebf5;
+}
+
+.database-delete-tabs button {
+  height: 36px;
+  border: 0;
+  border-bottom: 2px solid var(--you-blue);
+  padding: 0;
+  color: #006dff;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.database-delete-form {
+  display: grid;
+  gap: 24px;
+}
+
+.database-delete-form .modal-field {
+  grid-template-columns: 74px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+}
+
+.database-delete-form .modal-field > span {
+  color: #1f2937;
+  text-align: right;
+}
+
+.database-delete-form .modal-field i {
+  color: #e12d39;
+  font-style: normal;
+}
+
+.database-delete-form .modal-field small {
+  grid-column: 2;
+  color: #9aa4b2;
+  font-size: 12px;
+}
+
+.date-range-control,
+.confirm-input-wrap {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.date-range-control {
+  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr);
+}
+
+.date-range-control b {
+  color: #97a3b5;
+  font-weight: 400;
+  text-align: center;
+}
+
+.date-range-control input,
+.confirm-input-wrap input {
+  border: 0;
+  background: transparent;
+}
+
+.confirm-input-wrap {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.confirm-input-wrap em {
+  padding-right: 10px;
+  color: #7a8798;
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
 .global-search-layout,
 .client-stats-layout,
 .client-notice-layout {

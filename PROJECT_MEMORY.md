@@ -1813,6 +1813,7 @@ ORDER BY COUNT(*) DESC;
   - `NoticeController.GetList(msgType, warnType, eventType, startTime, endTime, accountId, robotId, index, size)`
   - `NoticeController.ConsumeNotice(noticeId)`
   - `SummaryController.RealTimeSummary(startTime, endTime)`
+  - `ChatContentController.Delete(startTime, endTime)`
   - `SystemController.GetConnectionString`
   - `SystemController.SetConnectionString(connectionString, DbType)`
   - `SystemController.GetOptions`
@@ -1842,11 +1843,10 @@ ORDER BY COUNT(*) DESC;
     - 关闭程序
   - AI 设置改为独立 `ai-top-button`，使用 AI 图标和 `AI` 文本，和客户端齿轮用分隔线隔开。
 - `public/app.js`
-  - 新增 `CLIENT_PAUSED_STORAGE_KEY`、`GLOBAL_SEARCH_PAGE_SIZE`、`CLIENT_NOTICE_PAGE_SIZE`、`DB_TYPE_OPTIONS`。
+  - 新增 `CLIENT_PAUSED_STORAGE_KEY`、`GLOBAL_SEARCH_PAGE_SIZE`、`CLIENT_NOTICE_PAGE_SIZE`。
   - `state` 新增：
     - `clientPaused`
     - `clientOptions`
-    - `clientConnectionString`
     - `globalSearch`
     - `clientStats`
     - `clientNotice`
@@ -1863,9 +1863,10 @@ ORDER BY COUNT(*) DESC;
     - 保存调用 `/System/SetOptions`
     - 明确说明这是悠聊服务端 AI 配置，不覆盖 Web AI 推荐设置。
   - 新增 `showDatabaseModal()`：
-    - 读取 `/System/GetConnectionString`
-    - 保存调用 `/System/SetConnectionString`
-    - 当前真实返回是 `databaseType: 0`，页面用数字枚举提交，不再把 `MySql` 字符串当作类型值。
+    - 按原客户端“数据库管理 -> 删除聊天记录”窗口实现。
+    - 日期范围输入提交到 `/ChatContent/Delete`。
+    - 确认按钮默认禁用，必须输入 `我已知晓删除的聊天记录无法恢复`。
+    - 旧的连接串读取/保存入口不再挂到该菜单，避免误把高风险数据库连接改动当成截图里的数据库管理功能。
   - 新增 `showGlobalSearchModal()`：
     - 调用 `/ChatContent/SearchList`
     - 支持关键字、用户/ID/备注、机器人、日期范围、分页
@@ -1899,7 +1900,6 @@ ORDER BY COUNT(*) DESC;
     - `unwrapPayloadData()`
     - `getRecordsDeep()`
     - `getTotalDeep()`
-    - `normalizeDbType()`
     - `estimateNoticeUnread()`
 - `public/styles.css`
   - 补齐原生 iconfont 映射：
@@ -1917,6 +1917,7 @@ ORDER BY COUNT(*) DESC;
     - 原始 JSON 查看
     - 消息统计指标和 SVG 图表
     - 通知列表
+    - 删除聊天记录弹窗
 
 验证结果：
 
@@ -1926,7 +1927,6 @@ ORDER BY COUNT(*) DESC;
 - 本地服务 `http://localhost:5177` 返回 200。
 - 直连飞牛接口验证：
   - `/System/GetOptions` 返回真实 `commonOptions/jobOptions/aiOptions/dataBaseOptions`。
-  - `/System/GetConnectionString` 返回真实 `connectionString` 和 `databaseType: 0`。
   - `/Summary/RealTimeSummary` 返回真实嵌套分段数组。
   - `/Notice/GetList` 返回真实 `{ total: { value: 0 }, data: [] }`。
   - `/ChatContent/SearchList` 返回真实 `{ total: 0, list: [] }`。
@@ -1943,7 +1943,7 @@ ORDER BY COUNT(*) DESC;
 - 本地 `/api` 代理偶发 `fetch failed` 时，先用直连 `http://192.168.9.83:18080/api/...` 分辨是代理请求格式/连接复用问题，还是飞牛服务端真实失败。
 - 客户端设置保存有风险，后续改字段时必须保留原始 JSON 查看区，方便确认真实服务端返回结构。
 
-## 39. 2026-06-08 Skill 图片回写、混合粘贴与发送防重复
+## 40. 2026-06-08 Skill 图片回写、混合粘贴与发送防重复
 
 用户反馈：
 
@@ -1988,3 +1988,57 @@ ORDER BY COUNT(*) DESC;
 - 如果用户点击“更新skill”时草稿里有新图片，应把新图片加到 skill，同时保留旧图片并按 URL 去重。
 - 不要把 `#draftImageTray` 再移回独立附件行；当前设计是输入框内部左侧附件栏。
 - 发送锁是前端防重复提交层，不替代服务端幂等。后续若服务端提供消息 requestId/idempotency key，再加服务端级防重。
+
+## 41. 2026-06-09 数据库管理删除聊天记录
+
+用户反馈：
+
+- 原客户端截图里的“数据库管理”实际是“删除聊天记录”功能，不是数据库连接字符串编辑。
+- Web 版需要按原客户端窗口补齐：标题为“数据库管理”，内部只有“删除聊天记录”页签、日期范围、确认删除输入框和确认按钮。
+
+原生接口来源：
+
+- `C:\Program Files\youchat-desktop\bin\YouChatService.xml`
+  - `ChatContentController.Delete(System.DateTime startTime, System.DateTime endTime)`
+  - summary：`删除聊天记录`
+
+已修改：
+
+- `public/app.js`
+  - 新增 `DATABASE_DELETE_CONFIRM_TEXT = "我已知晓删除的聊天记录无法恢复"`。
+  - 新增 `state.databaseDelete`，保存开始日期、结束日期、确认文案和删除中状态。
+  - `showDatabaseModal()` 改成删除聊天记录弹窗，不再读取 `/System/GetConnectionString`。
+  - `renderDatabaseModal()` 渲染：
+    - `删除聊天记录` 激活页签
+    - `databaseDeleteStart`、`databaseDeleteEnd` 日期输入
+    - `databaseDeleteConfirm` 确认输入和 `0 / 50` 字数提示
+  - `deleteChatRecordsFromModal()` 调用真实接口：
+    - `POST /ChatContent/Delete`
+    - `startTime: YYYY-MM-DD 00:00:00`
+    - `endTime: YYYY-MM-DD 23:59:59`
+  - 确认按钮默认禁用，只有日期范围合法且确认文案完全匹配时才启用。
+  - 日期输入被清空时会立即判定为无效，不沿用旧日期。
+  - 删除成功后刷新当前聊天区；右侧处于聊天记录工具栏时同步刷新右侧历史。
+  - 清理旧的 `DB_TYPE_OPTIONS`、`clientConnectionString`、`clientDbType`、`normalizeDbType()` 残留，避免后续误接回连接字符串保存。
+- `public/styles.css`
+  - 新增 `.database-delete-panel`、`.database-delete-tabs`、`.database-delete-form`、`.date-range-control`、`.confirm-input-wrap` 样式。
+  - 布局贴近原客户端紧凑弹窗，同时保留 Web 现有蓝白产品风格。
+- `README.md`
+  - 右上角客户端功能区说明改为 `/ChatContent/Delete`。
+  - 补充确认文案和删除不可恢复提醒。
+- `AI_HANDOFF.md`
+  - 原生顶栏功能说明改为数据库管理删除聊天记录，避免后续 AI 继续按旧连接串管理理解。
+
+验证结果：
+
+- 已从 `C:\Program Files\youchat-desktop\bin\YouChatService.xml` 确认原生接口 `ChatContentController.Delete(System.DateTime,System.DateTime)`，summary 为 `删除聊天记录`。
+- `npm run check` 通过。
+- `git diff --check` 通过，仅有 Windows CRLF 换行提示。
+- 本地 `http://localhost:5177` 可打开，页面标题为 `悠聊 Web 客服工作台`；当前浏览器停在登录页，本轮没有为了验证弹窗而触发真实登录或删除接口。
+
+维护规则：
+
+- 该菜单当前只做“删除聊天记录”。不要在没有用户明确要求时恢复 `/System/GetConnectionString`、`/System/SetConnectionString` 编辑入口。
+- `/System/GetOptions` 里的 `dataBaseOptions` 仍可在“设置”弹窗查看和保存，但那属于客户端设置，不等于“数据库管理”截图里的删除记录功能。
+- 删除类接口必须保留强确认文案，不要为了省一步把确认按钮默认打开。
+- 如果后续客户端新增更多数据库管理页签，再在 `.database-delete-tabs` 扩展，不要把危险功能混到同一个确认按钮里。

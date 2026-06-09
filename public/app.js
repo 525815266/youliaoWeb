@@ -95,16 +95,7 @@ const CLEAR_LIST_GRACE_MS = 30000;
 const CONTACT_LIST_ACCOUNT_ID_PATTERN = /^[1-9]\d{0,9}$/;
 const GLOBAL_SEARCH_PAGE_SIZE = 20;
 const CLIENT_NOTICE_PAGE_SIZE = 20;
-const DB_TYPE_OPTIONS = [
-  { value: "0", label: "MySql" },
-  { value: "1", label: "SqlServer" },
-  { value: "2", label: "Sqlite" },
-  { value: "3", label: "Oracle" },
-  { value: "4", label: "PostgreSQL" },
-  { value: "5", label: "达梦" },
-  { value: "8", label: "MySqlConnector" },
-  { value: "13", label: "ClickHouse" }
-];
+const DATABASE_DELETE_CONFIRM_TEXT = "我已知晓删除的聊天记录无法恢复";
 const EMOJI_SHORTCUTS = [
   "[微笑]",
   "[撇嘴]",
@@ -226,8 +217,6 @@ const state = {
   clientPaused: localStorage.getItem(CLIENT_PAUSED_STORAGE_KEY) === "true",
   clientOptions: null,
   clientOptionsLoading: false,
-  clientConnectionString: "",
-  clientDbType: "",
   globalSearch: {
     keyword: "",
     contacts: "",
@@ -261,6 +250,12 @@ const state = {
     events: [],
     loading: false,
     error: ""
+  },
+  databaseDelete: {
+    startTime: "",
+    endTime: "",
+    confirmText: "",
+    deleting: false
   },
   activeContact: null,
   contextMenu: null,
@@ -451,6 +446,7 @@ function bindEvents() {
   el.toolModalCancel.addEventListener("click", closeToolModal);
   el.toolModalConfirm.addEventListener("click", confirmToolModal);
   el.toolModalBody.addEventListener("click", handleToolModalBodyClick);
+  el.toolModalBody.addEventListener("input", handleToolModalBodyInput);
   el.toolModalBody.addEventListener("change", handleToolModalBodyChange);
   el.toolModalBody.addEventListener("keydown", handleToolModalBodyKeydown);
   el.linkPreviewOverlay.addEventListener("click", (event) => {
@@ -751,88 +747,128 @@ async function saveClientOptionsFromModal() {
   }
 }
 
-async function showDatabaseModal() {
-  state.clientConnectionString = "";
-  state.clientDbType = "";
+function showDatabaseModal() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  state.databaseDelete = {
+    startTime: state.databaseDelete.startTime || toDateInputValue(start),
+    endTime: state.databaseDelete.endTime || toDateInputValue(now),
+    confirmText: "",
+    deleting: false
+  };
   openToolModal({
     type: "database",
     title: "数据库管理",
-    confirmText: "保存连接",
-    body: '<div class="client-modal-loading">正在读取 /System/GetConnectionString...</div>',
-    onConfirm: saveDatabaseConnectionFromModal
+    confirmText: "确定",
+    body: renderDatabaseModal(),
+    onConfirm: deleteChatRecordsFromModal
   });
-
-  try {
-    const payload = await api("/System/GetConnectionString", {});
-    const data = getData(payload);
-    const connection = typeof data === "string"
-      ? data
-      : firstValue(data?.connectionString, data?.ConnectionString, data?.connStr, payload?.connectionString, "");
-    state.clientConnectionString = String(connection || "");
-    state.clientDbType = normalizeDbType(firstValue(
-      data?.databaseType,
-      data?.DatabaseType,
-      data?.dbType,
-      data?.DbType,
-      data?.type,
-      payload?.databaseType,
-      payload?.dbType,
-      ""
-    ));
-  } catch (error) {
-    state.clientConnectionString = "";
-    state.clientDbType = "";
-    log("database connection load failed", { error: error.message });
-    toast(`数据库连接读取失败：${error.message}`, true);
-  } finally {
-    if (state.activeModal?.type === "database") {
-      el.toolModalBody.innerHTML = renderDatabaseModal();
-    }
-  }
+  updateDatabaseDeleteConfirmState();
 }
 
 function renderDatabaseModal() {
+  const confirmLength = String(state.databaseDelete.confirmText || "").length;
   return `
-    <label class="modal-field">
-      <span>数据库类型</span>
-      <select id="clientDbType">
-        ${DB_TYPE_OPTIONS.map((type) => `
-          <option value="${escapeAttr(type.value)}" ${normalizeDbType(state.clientDbType) === type.value ? "selected" : ""}>${escapeHtml(`${type.label} (${type.value})`)}</option>
-        `).join("")}
-      </select>
-    </label>
-    <label class="modal-field">
-      <span>连接字符串</span>
-      <textarea id="clientConnectionString" rows="7" placeholder="接口未返回连接字符串">${escapeHtml(state.clientConnectionString)}</textarea>
-    </label>
-    <p class="modal-hint">该区域调用原生接口 /System/GetConnectionString 与 /System/SetConnectionString。修改前请确认服务端数据库备份。</p>
+    <section class="database-delete-panel">
+      <nav class="database-delete-tabs" aria-label="数据库管理功能">
+        <button type="button" class="is-active">删除聊天记录</button>
+      </nav>
+      <div class="database-delete-form">
+        <label class="modal-field database-date-range">
+          <span><i>*</i> 选择日期：</span>
+          <div class="date-range-control">
+            <input id="databaseDeleteStart" type="date" value="${escapeAttr(state.databaseDelete.startTime)}" />
+            <b aria-hidden="true">→</b>
+            <input id="databaseDeleteEnd" type="date" value="${escapeAttr(state.databaseDelete.endTime)}" />
+          </div>
+          <small>*选择要删除的聊天记录日期范围</small>
+        </label>
+        <label class="modal-field database-confirm-field">
+          <span><i>*</i> 确认删除：</span>
+          <div class="confirm-input-wrap">
+            <input id="databaseDeleteConfirm" maxlength="50" value="${escapeAttr(state.databaseDelete.confirmText)}" placeholder="请输入确认信息" />
+            <em>${confirmLength} / 50</em>
+          </div>
+          <small>*请输入：${escapeHtml(DATABASE_DELETE_CONFIRM_TEXT)}</small>
+        </label>
+      </div>
+    </section>
   `;
 }
 
-async function saveDatabaseConnectionFromModal() {
-  const connectionString = $("clientConnectionString")?.value.trim() || "";
-  const dbType = normalizeDbType($("clientDbType")?.value || state.clientDbType || "0");
-  if (!connectionString) {
-    toast("请输入数据库连接字符串。", true);
+function syncDatabaseDeleteFields() {
+  state.databaseDelete.startTime = $("databaseDeleteStart")?.value || "";
+  state.databaseDelete.endTime = $("databaseDeleteEnd")?.value || "";
+  state.databaseDelete.confirmText = $("databaseDeleteConfirm")?.value || "";
+}
+
+function updateDatabaseDeleteConfirmState() {
+  if (!state.activeModal || state.activeModal.type !== "database") return;
+  syncDatabaseDeleteFields();
+  const hasValidRange = isValidDatabaseDeleteRange(state.databaseDelete.startTime, state.databaseDelete.endTime);
+  const valid = Boolean(
+    state.databaseDelete.startTime &&
+    state.databaseDelete.endTime &&
+    hasValidRange &&
+    state.databaseDelete.confirmText === DATABASE_DELETE_CONFIRM_TEXT &&
+    !state.databaseDelete.deleting
+  );
+  el.toolModalConfirm.disabled = !valid;
+  el.toolModalConfirm.textContent = state.databaseDelete.deleting ? "删除中..." : "确定";
+  const counter = el.toolModalBody.querySelector(".confirm-input-wrap em");
+  if (counter) counter.textContent = `${state.databaseDelete.confirmText.length} / 50`;
+}
+
+async function deleteChatRecordsFromModal() {
+  syncDatabaseDeleteFields();
+  if (!state.databaseDelete.startTime || !state.databaseDelete.endTime) {
+    toast("请选择要删除的聊天记录日期范围。", true);
+    return false;
+  }
+  if (!isValidDatabaseDeleteRange(state.databaseDelete.startTime, state.databaseDelete.endTime)) {
+    toast("开始日期不能晚于结束日期。", true);
+    return false;
+  }
+  const startTime = toLocalDateTimeString(state.databaseDelete.startTime, false);
+  const endTime = toLocalDateTimeString(state.databaseDelete.endTime, true);
+  if (state.databaseDelete.confirmText !== DATABASE_DELETE_CONFIRM_TEXT) {
+    toast("确认信息不正确，无法删除聊天记录。", true);
     return false;
   }
 
+  state.databaseDelete.deleting = true;
+  updateDatabaseDeleteConfirmState();
   try {
-    await api("/System/SetConnectionString", {
-      connectionString,
-      databaseType: dbType,
-      DbType: dbType,
-      type: dbType
+    await api("/ChatContent/Delete", {
+      startTime,
+      endTime
     });
-    state.clientConnectionString = connectionString;
-    state.clientDbType = dbType;
-    toast("数据库连接已提交。");
+    toast("删除聊天记录请求已提交。");
     closeToolModal();
+    await Promise.allSettled([
+      loadMessages(1, "replace", { forceBottom: true }),
+      state.activeTool === "history" ? loadHistoryMessages(1, "replace", { forceBottom: true }) : Promise.resolve()
+    ]);
     return true;
   } catch (error) {
-    toast(`保存数据库连接失败：${error.message}`, true);
+    toast(`删除聊天记录失败：${error.message}`, true);
     return false;
+  } finally {
+    state.databaseDelete.deleting = false;
+    updateDatabaseDeleteConfirmState();
   }
+}
+
+function isValidDatabaseDeleteRange(startDate, endDate) {
+  if (!startDate || !endDate) return false;
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T23:59:59`);
+  return !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && start.getTime() <= end.getTime();
+}
+
+function toLocalDateTimeString(dateText, endOfDay = false) {
+  const suffix = endOfDay ? "23:59:59" : "00:00:00";
+  return `${dateText} ${suffix}`;
 }
 
 function openStatsBackend() {
@@ -4992,6 +5028,8 @@ function openToolModal(config) {
   el.toolModalTitle.textContent = config.title || "";
   el.toolModalBody.innerHTML = config.body || "";
   el.toolModalConfirm.textContent = config.confirmText || "确定";
+  el.toolModalConfirm.disabled = Boolean(config.confirmDisabled);
+  el.toolModalCancel.classList.toggle("is-hidden", config.hideCancel === true);
   el.toolModalConfirm.classList.toggle("is-hidden", config.hideConfirm === true);
   el.toolModalPanel.classList.remove("tool-modal-wide", "tool-modal-large", "tool-modal-xl");
   if (config.size === "wide") el.toolModalPanel.classList.add("tool-modal-wide");
@@ -5004,6 +5042,10 @@ function closeToolModal() {
   state.activeModal = null;
   el.toolModalOverlay.classList.add("is-hidden");
   el.toolModalBody.innerHTML = "";
+  el.toolModalConfirm.disabled = false;
+  el.toolModalConfirm.textContent = "确定";
+  el.toolModalCancel.classList.remove("is-hidden");
+  el.toolModalConfirm.classList.remove("is-hidden");
 }
 
 async function confirmToolModal() {
@@ -5013,7 +5055,8 @@ async function confirmToolModal() {
   try {
     await modal.onConfirm();
   } finally {
-    el.toolModalConfirm.disabled = false;
+    if (state.activeModal?.type === "database") updateDatabaseDeleteConfirmState();
+    else el.toolModalConfirm.disabled = false;
   }
 }
 
@@ -5079,10 +5122,18 @@ function handleToolModalBodyClick(event) {
   }
 }
 
+function handleToolModalBodyInput(event) {
+  if (state.activeModal?.type === "database" && event.target.matches("#databaseDeleteStart, #databaseDeleteEnd, #databaseDeleteConfirm")) {
+    updateDatabaseDeleteConfirmState();
+  }
+}
+
 function handleToolModalBodyChange(event) {
   if (state.activeModal?.type === "client-notice" && event.target.matches("#clientNoticeWarnType")) {
     syncClientNoticeFields();
     loadClientNoticeEvents();
+  } else if (state.activeModal?.type === "database" && event.target.matches("#databaseDeleteStart, #databaseDeleteEnd, #databaseDeleteConfirm")) {
+    updateDatabaseDeleteConfirmState();
   }
 }
 
@@ -6790,15 +6841,6 @@ function getTotalDeep(payload) {
   return getRecordsDeep(payload).length;
 }
 
-function normalizeDbType(value) {
-  const text = String(value ?? "").trim();
-  if (!text) return "0";
-  const lower = text.toLowerCase();
-  const named = DB_TYPE_OPTIONS.find((item) => item.label.toLowerCase() === lower);
-  if (named) return named.value;
-  return text;
-}
-
 function renderNoticeFilterField(id, label, value, placeholder) {
   return `
     <label class="modal-field">
@@ -6874,6 +6916,13 @@ function toDateTimeLocal(value) {
   if (Number.isNaN(date.getTime())) return "";
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 16);
+}
+
+function toDateInputValue(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
 }
 
 function fromDateTimeLocal(value) {

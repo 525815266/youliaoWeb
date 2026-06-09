@@ -807,12 +807,11 @@ ALTER TABLE `ChatContent_2026_06_08`
 - `public/app.js` added state for:
   - `clientPaused`
   - `clientOptions`
-  - `clientConnectionString`
+  - `databaseDelete`
   - `globalSearch`
   - `clientStats`
   - `clientNotice`
 - Native data shape fixes added in this pass:
-  - `DB_TYPE_OPTIONS`: submit numeric database enum values. Current real `/System/GetConnectionString` returns `databaseType: 0`.
   - `unwrapPayloadData()`, `getRecordsDeep()`, `getTotalDeep()`: use these for nested native panel payloads instead of changing global `getData()`.
   - `normalizeStatsRecords()` now unwraps `/Summary/RealTimeSummary` shape `{ data: { success, data: [...] } }`.
   - Stats rows use real fields `it`, `count`, `fromUser`, `fromUserRedpointCount`, `fromRobot`, `fromKefu`, `contactCount`.
@@ -820,8 +819,7 @@ ALTER TABLE `ChatContent_2026_06_08`
 - Real interfaces wired:
   - `/System/GetOptions`
   - `/System/SetOptions`
-  - `/System/GetConnectionString`
-  - `/System/SetConnectionString`
+  - `/ChatContent/Delete`
   - `/ChatContent/SearchList`
   - `/Summary/RealTimeSummary`
   - `/Notice/GetEvents`
@@ -839,6 +837,11 @@ ALTER TABLE `ChatContent_2026_06_08`
 - `openToolModal(config)` supports `size: "wide" | "large" | "xl"`.
 - `统计后台` opens `/abnormal` on the current API host, e.g. `http://192.168.9.83:18080/abnormal`.
 - `挂起` is currently local Web auto-refresh pause only. No server-side suspend endpoint was found in `YouChatService.xml`.
+- `数据库管理` now matches the native delete-chat-records dialog:
+  - `showDatabaseModal()` renders a `删除聊天记录` tab, date range, and confirm text field.
+  - Required confirm text: `我已知晓删除的聊天记录无法恢复`.
+  - Submit calls `POST /ChatContent/Delete` with `startTime` and `endTime`.
+  - Do not rewire this menu back to `/System/GetConnectionString` or `/System/SetConnectionString` unless the user explicitly asks for database connection editing.
 - `public/styles.css` adds native icon mappings:
   - `client-icon-dashboard`
   - `client-icon-chat-record`
