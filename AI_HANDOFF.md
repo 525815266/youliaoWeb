@@ -216,6 +216,7 @@ User requirement:
 - Long links should render like the original client's WeChat-style card with real title/thumb and a `详情` action.
 - Web enhancement: `详情` opens an in-page floating preview block.
 - If real video/player metadata exists, the overlay should preview it.
+- Chat images should also open in the same in-page overlay when clicked.
 
 Important files/functions:
 
@@ -232,7 +233,9 @@ Important files/functions:
   - `hydrateVisibleLinkCards`
   - `loadLinkPreviewMeta`
   - `showLinkPreview`
+  - `showImagePreview`
   - `renderActiveLinkPreview`
+  - `handlePreviewClickTarget`
   - `getDirectPreviewVideoUrl`
   - `getPreviewPlayerUrl`
 - `public/index.html`
@@ -258,6 +261,9 @@ Rules:
 - Real thumbnails are always preferred: `cardImg`, then preview metadata image.
 - For known major platforms with no real thumbnail, use platform logo fallback. This is intentional platform identification, not fake product imagery.
 - Known platform fallback is configured in `KNOWN_SITE_LOGOS`; update that table instead of adding ad hoc render branches.
+- `renderMessageContent()` renders image messages as `.message-image-button[data-image-preview]`, not a bare `<img>`.
+- Image preview state is `state.activeLinkPreview = { url, type: "image" }`; `renderActiveLinkPreview()` switches the existing overlay into `.is-image-preview`.
+- Main chat, right toolbar, and tool modals should all route preview clicks through `handlePreviewClickTarget()` so image/link behavior stays consistent.
 - App deep links are configured in `APP_DEEP_LINK_PROFILES`; examples include `weishi://feed`, `kwai://`, `snssdk1128://`, `xhsdiscover://`.
 - Deep links should render as cards, not raw long text. Parse nested encoded params such as `feed_info`, use embedded real `http(s)` URL for preview/open, and keep the original app scheme for copy.
 - Logo fallback supports external favicon first and local generated SVG via `imageFallback` on error.

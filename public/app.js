@@ -3930,7 +3930,8 @@ function renderMessageAvatar(message, isOutgoing) {
 function renderMessageContent(message) {
   const content = message.content || "";
   if (message.contentType === 1 || isImageUrl(content)) {
-    return `<img class="message-image" src="${escapeAttr(normalizeImageUrl(content))}" alt="聊天图片">`;
+    const imageUrl = normalizeImageUrl(content);
+    return `<button class="message-image-button" type="button" data-image-preview="${escapeAttr(imageUrl)}" aria-label="预览聊天图片"><img class="message-image" src="${escapeAttr(imageUrl)}" alt="聊天图片"></button>`;
   }
   const fileCard = buildMessageFileCard(message);
   if (fileCard) return renderMessageFileCard(fileCard);
@@ -4661,14 +4662,42 @@ function showLinkPreview(url) {
   }
 }
 
+function showImagePreview(url) {
+  const imageUrl = normalizePreviewImageUrl(url);
+  if (!imageUrl) {
+    toast("图片地址无效。", true);
+    return;
+  }
+  state.activeLinkPreview = { url: imageUrl, type: "image" };
+  renderActiveLinkPreview();
+  el.linkPreviewOverlay.classList.remove("is-hidden");
+}
+
 function renderActiveLinkPreview() {
-  const url = state.activeLinkPreview?.url || "";
+  const activePreview = state.activeLinkPreview || {};
+  const url = activePreview.url || "";
+  const isImagePreview = activePreview.type === "image";
+  el.linkPreviewPanel.classList.toggle("is-image-preview", isImagePreview);
+  el.linkPreviewOpen.textContent = isImagePreview ? "打开原图" : "打开网页";
   const meta = state.linkPreviewCache[url] || {};
   const title = meta.title || getUrlHost(url) || "链接详情";
   el.linkPreviewTitle.textContent = title;
   el.linkPreviewSubtitle.textContent = meta.description || url;
   el.linkPreviewOpen.dataset.openLink = url;
   el.linkPreviewCopy.dataset.copyUrl = url;
+  el.linkPreviewOpen.disabled = false;
+  if (isImagePreview) {
+    const canOpenExternal = Boolean(normalizeLinkUrl(url));
+    el.linkPreviewTitle.textContent = "图片预览";
+    el.linkPreviewSubtitle.textContent = url;
+    el.linkPreviewOpen.disabled = !canOpenExternal;
+    el.linkPreviewBody.innerHTML = `
+      <div class="link-preview-image-wrap">
+        <img class="link-preview-image" src="${escapeAttr(url)}" alt="聊天图片预览">
+      </div>
+    `;
+    return;
+  }
   const videoUrl = getDirectPreviewVideoUrl(meta);
   const playerUrl = getPreviewPlayerUrl(meta);
   const imageUrl = meta.image ? normalizeImageUrl(meta.image) : "";
@@ -4730,6 +4759,8 @@ function isVideoUrl(value) {
 function closeLinkPreview() {
   state.activeLinkPreview = null;
   el.linkPreviewOverlay.classList.add("is-hidden");
+  el.linkPreviewPanel.classList.remove("is-image-preview");
+  el.linkPreviewOpen.disabled = false;
   el.linkPreviewBody.innerHTML = "";
 }
 
@@ -4752,27 +4783,40 @@ function openExternalLink(url) {
   window.open(normalizedUrl, "_blank", "noopener,noreferrer");
 }
 
-function handleMessageListClick(event) {
+function handlePreviewClickTarget(event) {
+  const imageTarget = event.target.closest("[data-image-preview]");
+  if (imageTarget) {
+    event.preventDefault();
+    showImagePreview(imageTarget.dataset.imagePreview || "");
+    return true;
+  }
+
   const previewTarget = event.target.closest("[data-link-preview]");
   if (previewTarget) {
     event.preventDefault();
     showLinkPreview(previewTarget.dataset.linkPreview || "");
-    return;
+    return true;
   }
 
   const openTarget = event.target.closest("[data-open-link]");
   if (openTarget) {
     event.preventDefault();
     openExternalLink(openTarget.dataset.openLink || "");
-    return;
+    return true;
   }
 
   const copyTarget = event.target.closest("[data-copy]");
   if (copyTarget) {
     event.preventDefault();
     copyToClipboard(copyTarget.dataset.copy || "");
-    return;
+    return true;
   }
+
+  return false;
+}
+
+function handleMessageListClick(event) {
+  if (handlePreviewClickTarget(event)) return;
 
   const target = event.target.closest("[data-action]");
   if (!target || target.dataset.action !== "load-more-messages") return;
@@ -5534,25 +5578,7 @@ function renderActiveModalBody() {
 }
 
 function handleToolModalBodyClick(event) {
-  const previewTarget = event.target.closest("[data-link-preview]");
-  if (previewTarget) {
-    event.preventDefault();
-    showLinkPreview(previewTarget.dataset.linkPreview || "");
-    return;
-  }
-
-  const openTarget = event.target.closest("[data-open-link]");
-  if (openTarget) {
-    event.preventDefault();
-    openExternalLink(openTarget.dataset.openLink || "");
-    return;
-  }
-
-  const copyTarget = event.target.closest("[data-copy]");
-  if (copyTarget) {
-    copyToClipboard(copyTarget.dataset.copy || "");
-    return;
-  }
+  if (handlePreviewClickTarget(event)) return;
 
   const target = event.target.closest("[data-client-modal-action]");
   if (!target) return;
@@ -7649,25 +7675,7 @@ function renderAccountDetails() {
 }
 
 function handleToolClick(event) {
-  const previewTarget = event.target.closest("[data-link-preview]");
-  if (previewTarget) {
-    event.preventDefault();
-    showLinkPreview(previewTarget.dataset.linkPreview || "");
-    return;
-  }
-
-  const openTarget = event.target.closest("[data-open-link]");
-  if (openTarget) {
-    event.preventDefault();
-    openExternalLink(openTarget.dataset.openLink || "");
-    return;
-  }
-
-  const copyTarget = event.target.closest("[data-copy]");
-  if (copyTarget) {
-    copyToClipboard(copyTarget.dataset.copy || "");
-    return;
-  }
+  if (handlePreviewClickTarget(event)) return;
 
   const quickSendTarget = event.target.closest("[data-quick-send]");
   if (quickSendTarget) {
@@ -8402,6 +8410,19 @@ function normalizeImageUrl(value) {
   const url = String(value || "");
   if (url.startsWith("//")) return `https:${url}`;
   return url;
+}
+
+function normalizePreviewImageUrl(value) {
+  const url = normalizeImageUrl(value).trim();
+  if (/^https?:\/\//i.test(url) || /^blob:/i.test(url) || /^data:image\//i.test(url)) return url;
+  if (/^(\/(?!\/)|\.{1,2}\/)/.test(url)) {
+    try {
+      return new URL(url, window.location.href).toString();
+    } catch {
+      return "";
+    }
+  }
+  return "";
 }
 
 function isImageUrl(value) {

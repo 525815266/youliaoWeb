@@ -49,6 +49,7 @@
 43. [2026-06-09 小程序卡片微信式大封面](#43-2026-06-09-小程序卡片微信式大封面)
 44. [2026-06-09 客户头像同步](#44-2026-06-09-客户头像同步)
 45. [2026-06-09 CodeBuddy API 支持](#45-2026-06-09-codebuddy-api-支持)
+46. [2026-06-09 聊天图片网页浮层预览](#46-2026-06-09-聊天图片网页浮层预览)
 
 ## 1. 项目目标
 
@@ -2229,3 +2230,27 @@ ORDER BY COUNT(*) DESC;
 - 填入 CodeBuddy 平台给出的 API 端点、访问密钥和模型名。
 - 如果平台给的是完整 `/chat/completions` 地址，可以直接填完整地址；如果只给根地址或 `/v1`，`server.js:getAiChatCompletionsUrl()` 会按 OpenAI 兼容规则补全。
 - 不要把 CodeBuddy 改回 Bearer 鉴权，否则会导致 CodeBuddy 访问密钥请求失败。
+
+## 46. 2026-06-09 聊天图片网页浮层预览
+
+用户反馈：
+
+- 客户发送的图片在聊天里不能点击打开。
+- 希望参考网页/视频预览的处理方式，直接在 Web 页面上用一个浮层框架预览图片。
+
+已修改：
+
+- `public/app.js`
+  - `renderMessageContent()` 对 `contentType=1` 或图片 URL 消息渲染为 `.message-image-button`，保留真实图片地址，不生成假图片。
+  - 新增 `showImagePreview()` 和 `normalizePreviewImageUrl()`，支持 `http(s)`、协议相对 URL、`blob:` 和 `data:image/` 图片预览。
+  - `renderActiveLinkPreview()` 增加 `type: "image"` 模式，复用 `#linkPreviewOverlay`，标题显示“图片预览”，按钮显示“打开原图”，主体展示完整图片。
+  - 新增 `handlePreviewClickTarget()`，主聊天框、右侧工具栏和工具弹层共用同一套图片/链接/复制点击处理，避免右侧聊天记录漏掉图片预览。
+- `public/styles.css`
+  - 新增 `.message-image-button` 的 hover/focus 状态，让聊天图片有明确可点击反馈。
+  - 新增 `.link-preview-panel.is-image-preview`、`.link-preview-image-wrap`、`.link-preview-image`，图片在浮层内居中等比显示，不挤压聊天输入框。
+
+维护规则：
+
+- 聊天图片必须继续使用真实 `message.content` 或真实图片字段，不允许用占位图替代客户图片。
+- 图片预览继续复用 `#linkPreviewOverlay`，不要另做一套与链接/视频割裂的弹窗。
+- 后续如果新增右侧聊天记录、全局搜索结果或数据库管理里的消息渲染，只要使用 `renderMessageBubble()`，图片预览会自动生效；如果手写消息 HTML，必须补 `data-image-preview` 点击目标。
