@@ -778,10 +778,15 @@ ALTER TABLE `ChatContent_2026_06_08`
 - Real enum source: `C:\Program Files\youchat-desktop\bin\YouChatService.xml` `EnumContentType`.
 - Treat message content types as:
   - `5`: URL/web card, use `cardTitle/cardDesc/cardImg/cardUrl`.
-  - `6`: mini-program card, use `miniProTitle/miniProName/miniProDesc/miniProImg/miniProUrl`.
+  - `6`: mini-program card, use `miniProTitle/miniProName/miniProDesc/miniProImg/miniImgUrl/miniProUrl`.
   - `8`: file card. Current real sample stores JSON in `content`, e.g. `{"Title":"...pdf","Type":74,"TypeStr":"[应用消息]"}`.
 - `public/app.js` now renders in this order:
   - image -> file card -> mini-program card -> link/web card -> text.
+- Mini-program card specifics:
+  - The original packaged client component uses `miniProTitle` and `miniImgUrl`, a large cover area, and a footer label `小程序`.
+  - Real capture sample has `contentType=6`, `miniProTitle="绑定一下吧！"`, `miniProName="阿秘优选"`, and often no `miniProImg`.
+  - `buildMessageMiniProgramCard()` parses both `message.content` and `message.ext` and supports JSON/XML fields such as `appid`, `ghid`, `username`, `pagepath`, `miniimgurl`, `thumburl`, `cover`, and `hdheadimg`.
+  - Missing cover means generated local SVG type placeholder only. Do not fake product screenshots or mini-program business imagery.
 - Important helpers:
   - `shouldRenderRichMessageCard`
   - `buildMessageMiniProgramCard`

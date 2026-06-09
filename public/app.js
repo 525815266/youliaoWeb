@@ -3503,8 +3503,9 @@ function normalizeMessage(item, index) {
     content: contentText,
     cardTitle: firstValue(item.cardTitle, item.miniProTitle, item.title, item.name, ""),
     cardDesc: firstValue(item.cardDesc, item.miniProDesc, item.description, item.desc, ""),
-    cardImg: firstValue(item.cardImg, item.miniProImg, item.imageUrl, item.img, item.icon, ""),
-    cardUrl: firstValue(item.cardUrl, item.miniProUrl, item.url, item.link, "")
+    cardImg: firstValue(item.cardImg, item.miniProImg, item.miniImgUrl, item.miniProCover, item.imageUrl, item.img, item.icon, ""),
+    cardUrl: firstValue(item.cardUrl, item.miniProUrl, item.url, item.link, ""),
+    miniImgUrl: firstValue(item.miniImgUrl, item.miniImgURL, item.miniProImg, item.miniProCover, "")
   };
 }
 
@@ -3962,35 +3963,122 @@ function renderMessageLinkCard(card, message) {
 }
 
 function buildMessageMiniProgramCard(message) {
-  const parsed = parseMessagePayload(message.content);
-  const isMini = Number(message.contentType) === 6 || Boolean(message.miniProTitle || message.miniProName || message.miniProImg || message.miniProUrl);
+  const parsedContent = parseMessagePayload(message.content);
+  const parsedExt = parseMessagePayload(message.ext);
+  const isMini = Number(message.contentType) === 6 || Boolean(message.miniProTitle || message.miniProName || message.miniProImg || message.miniImgUrl || message.miniProUrl);
   if (!isMini) return null;
-  const title = firstValue(message.miniProTitle, parsed.title, parsed.Title, message.cardTitle, "小程序");
-  const appName = firstValue(message.miniProName, parsed.appName, parsed.AppName, parsed.source, "小程序");
-  const desc = firstValue(message.miniProDesc, parsed.description, parsed.desc, parsed.des, message.cardDesc, title);
-  const image = firstValue(message.miniProImg, parsed.image, parsed.thumbUrl, parsed.icon, message.cardImg, "");
-  const url = normalizeLinkUrl(firstValue(message.miniProUrl, parsed.url, parsed.pagePath, message.cardUrl, ""));
-  return { title, appName, desc, image, url };
+  const title = firstValue(
+    message.miniProTitle,
+    parsedContent.miniProTitle,
+    parsedContent.title,
+    parsedContent.Title,
+    parsedExt.miniProTitle,
+    parsedExt.title,
+    parsedExt.Title,
+    message.cardTitle,
+    message.cardDesc,
+    "小程序"
+  );
+  const appName = firstValue(
+    message.miniProName,
+    parsedContent.miniProName,
+    parsedContent.appName,
+    parsedContent.AppName,
+    parsedContent.source,
+    parsedContent.displayName,
+    parsedExt.miniProName,
+    parsedExt.appName,
+    parsedExt.AppName,
+    parsedExt.source,
+    parsedExt.displayName,
+    message.displayName,
+    "小程序"
+  );
+  const desc = firstValue(message.miniProDesc, parsedContent.description, parsedContent.desc, parsedContent.des, parsedExt.description, parsedExt.desc, parsedExt.des, message.cardDesc, title);
+  const image = firstValue(
+    message.miniProImg,
+    message.miniImgUrl,
+    message.miniProCover,
+    parsedContent.miniProImg,
+    parsedContent.miniImgUrl,
+    parsedContent.image,
+    parsedContent.thumbUrl,
+    parsedContent.cover,
+    parsedContent.icon,
+    parsedExt.miniProImg,
+    parsedExt.miniImgUrl,
+    parsedExt.image,
+    parsedExt.thumbUrl,
+    parsedExt.cover,
+    parsedExt.icon,
+    message.cardImg,
+    ""
+  );
+  const appIcon = firstValue(message.miniProIcon, message.miniProLogo, parsedContent.appIcon, parsedContent.iconUrl, parsedContent.icon, parsedExt.appIcon, parsedExt.iconUrl, parsedExt.icon, "");
+  const url = normalizeLinkUrl(firstValue(message.miniProUrl, parsedContent.url, parsedExt.url, message.cardUrl, ""));
+  const pagePath = firstValue(message.pagePath, message.miniProPagePath, parsedContent.pagePath, parsedContent.path, parsedExt.pagePath, parsedExt.path, "");
+  const appId = firstValue(message.miniProAppId, parsedContent.appId, parsedContent.appid, parsedExt.appId, parsedExt.appid, "");
+  const ghId = firstValue(message.miniProGhId, parsedContent.ghId, parsedContent.username, parsedExt.ghId, parsedExt.username, "");
+  const placeholder = getMiniProgramPlaceholderDataUrl(appName, title);
+  return {
+    title,
+    appName,
+    desc,
+    image: image || placeholder,
+    imageFallback: placeholder,
+    imagePlaceholder: !image,
+    appIcon,
+    url,
+    pagePath,
+    appId,
+    ghId
+  };
 }
 
 function renderMessageMiniProgramCard(card) {
   return `
     <article class="message-mini-card">
-      <div class="mini-card-title">
-        <strong>${escapeHtml(card.title || "小程序")}</strong>
-        ${card.url ? `<button class="link-card-detail" type="button" data-open-link="${escapeAttr(card.url)}">打开</button>` : ""}
+      <div class="mini-card-app">
+        ${card.appIcon ? `<img src="${escapeAttr(normalizeImageUrl(card.appIcon))}" alt="">` : '<span class="mini-card-app-mark" aria-hidden="true"></span>'}
+        <span>${escapeHtml(card.appName || "小程序")}</span>
       </div>
-      <div class="mini-card-main">
-        <span>${escapeHtml(card.desc || card.title || "小程序消息")}</span>
-        ${card.image ? `<img class="mini-card-image" src="${escapeAttr(normalizeImageUrl(card.image))}" alt="">` : '<span class="mini-card-icon" aria-hidden="true"></span>'}
+      <strong class="mini-card-heading">${escapeHtml(card.title || card.desc || "小程序")}</strong>
+      <div class="mini-card-cover${card.imagePlaceholder ? " is-placeholder" : ""}">
+        <img src="${escapeAttr(normalizeImageUrl(card.image))}" alt=""${card.imageFallback ? ` onerror="this.onerror=null;this.src='${escapeAttr(card.imageFallback)}';"` : ""}>
       </div>
       <div class="mini-card-footer">
         <span class="mini-card-mark" aria-hidden="true"></span>
-        <span>${escapeHtml(card.appName || "小程序")}</span>
+        <span>小程序</span>
+        ${card.url ? `<button class="mini-action ghost" type="button" data-open-link="${escapeAttr(card.url)}">打开</button>` : ""}
         ${card.url ? `<button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.url)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>` : ""}
+        ${!card.url && card.pagePath ? `<button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.pagePath)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>` : ""}
       </div>
     </article>
   `;
+}
+
+function getMiniProgramPlaceholderDataUrl(appName = "小程序", title = "") {
+  const label = String(appName || "小程序").slice(0, 6);
+  const headline = String(title || "小程序").slice(0, 12);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="480" height="270" viewBox="0 0 480 270">
+      <defs>
+        <linearGradient id="mini-bg" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0" stop-color="#eefbf4"/>
+          <stop offset="1" stop-color="#eaf3ff"/>
+        </linearGradient>
+      </defs>
+      <rect width="480" height="270" rx="8" fill="url(#mini-bg)"/>
+      <rect x="42" y="36" width="396" height="198" rx="10" fill="#ffffff" stroke="#d7e3ef"/>
+      <circle cx="240" cy="112" r="34" fill="#22c55e"/>
+      <circle cx="225" cy="108" r="8" fill="#ffffff"/>
+      <circle cx="255" cy="108" r="8" fill="#ffffff"/>
+      <path d="M224 132c12 10 24 10 36 0" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="7"/>
+      <text x="240" y="176" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Arial, sans-serif" font-size="28" font-weight="700" fill="#1f2937">${escapeSvgText(headline)}</text>
+      <text x="240" y="209" text-anchor="middle" font-family="Microsoft YaHei, PingFang SC, Arial, sans-serif" font-size="17" fill="#68758a">${escapeSvgText(label)}</text>
+    </svg>
+  `.trim();
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 function buildMessageFileCard(message) {
@@ -4080,18 +4168,28 @@ function parseMessagePayload(content) {
   if (!text.includes("<")) return {};
   const getXmlValue = (name) => {
     const match = text.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`, "i"));
-    return match ? decodeHtmlEntities(match[1].trim()) : "";
+    return match ? cleanXmlValue(match[1]) : "";
   };
   return {
     title: getXmlValue("title"),
     description: getXmlValue("des") || getXmlValue("desc"),
     appName: getXmlValue("sourcedisplayname") || getXmlValue("appname"),
     url: getXmlValue("url"),
+    appId: getXmlValue("appid"),
+    ghId: getXmlValue("ghid"),
+    username: getXmlValue("username"),
+    pagePath: getXmlValue("pagepath") || getXmlValue("path"),
+    appIcon: getXmlValue("appicon") || getXmlValue("iconurl"),
+    miniImgUrl: getXmlValue("miniimgurl") || getXmlValue("cover") || getXmlValue("hdheadimg"),
     fileName: getXmlValue("filename") || getXmlValue("title"),
     fileSize: getXmlValue("totallen") || getXmlValue("filesize"),
     fileUrl: getXmlValue("cdnattachurl") || getXmlValue("url"),
     thumbUrl: getXmlValue("thumburl") || getXmlValue("cdnthumburl")
   };
+}
+
+function cleanXmlValue(value) {
+  return decodeHtmlEntities(String(value || "").trim().replace(/^<!\[CDATA\[([\s\S]*?)\]\]>$/i, "$1").trim());
 }
 
 function extractFirstAppDeepLink(text) {

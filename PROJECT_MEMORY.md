@@ -2098,3 +2098,57 @@ ORDER BY COUNT(*) DESC;
 - deep link 中解析出的 `http(s)` 才能用于详情预览和打开；`weishi://`、`kwai://` 这类原始 scheme 只复制，不当作网页打开。
 - 不伪造视频标题、封面或视频地址。没有真实字段时只展示平台名、应用 logo 和“应用深链/视频深链”。
 - 新增应用平台时优先扩展 `APP_DEEP_LINK_PROFILES`，不要在 `renderMessageLinkCard()` 写一次性分支。
+
+## 43. 2026-06-09 小程序卡片微信式大封面
+
+用户反馈：
+
+- 小程序卡片和链接卡片区分还不明显。
+- 微信里的小程序消息是顶部应用名、中间标题、大封面、底部“小程序”标识；如果拿不到图片，也应该有替代封面。
+
+已修改：
+
+- `public/app.js`
+  - `buildMessageMiniProgramCard()` 扩展字段读取：
+    - 标题：`miniProTitle/miniProTitle in JSON/title/Title/cardTitle/cardDesc`
+    - 应用名：`miniProName/appName/AppName/source/displayName`
+    - 封面：`miniProImg/miniImgUrl/miniProCover/image/thumbUrl/cover/icon/cardImg`
+    - 应用图标：`miniProIcon/miniProLogo/appIcon/iconUrl/icon`
+    - 路径：`miniProUrl/url/cardUrl/pagePath/path`
+    - 标识：`miniProAppId/miniProGhId/appId/appid/ghId/username`
+  - `parseMessagePayload()` 增强：
+    - 兼容微信 XML 的 `appid/ghid/username/pagepath/appicon/iconurl/miniimgurl/cover/hdheadimg`。
+    - 新增 `cleanXmlValue()` 去掉 `<![CDATA[]]>` 外壳后再解实体。
+  - 同时解析 `message.content` 和 `message.ext`，避免小程序字段藏在扩展字段里时被漏掉。
+  - 新增 `getMiniProgramPlaceholderDataUrl(appName, title)`：
+    - 没有真实封面时生成本地 SVG 占位封面。
+    - 占位封面只表达“小程序卡片类型”，不伪造真实商品图或真实小程序截图。
+  - `renderMessageMiniProgramCard()` 改为微信式结构：
+    - 顶部 `.mini-card-app` 显示真实应用头像；没有头像时用绿色小程序类型图标。
+    - 中间 `.mini-card-heading` 显示标题。
+    - `.mini-card-cover` 显示真实封面或本地占位封面。
+    - 底部固定显示“小程序”，并保留打开/复制按钮。
+- `public/styles.css`
+  - `.message-mini-card` 改为白底、浅边框、轻阴影，更接近原客户端和微信卡片。
+  - 新增 `.mini-card-app`、`.mini-card-app-mark`、`.mini-card-heading`、`.mini-card-cover`。
+  - `.mini-card-app-mark` 用 CSS 画绿色小程序类型图标，替代原先黑色首字母。
+  - 删除旧的右侧 38px 小图标布局，改成 16:9 大封面。
+
+真实依据：
+
+- 原客户端打包代码里小程序组件使用 `miniProTitle` 和 `miniImgUrl`，底部显示“小程序”。
+- `logs/api-capture.ndjson` 里真实 `contentType=6` 样本：
+  - `miniProTitle`: `绑定一下吧！`
+  - `miniProName`: `阿秘优选`
+  - `miniProImg`: `null`
+  - 所以无真实封面时必须展示类型占位图，而不是伪造封面。
+
+验证结果：
+
+- `npm run check` 通过。
+
+维护规则：
+
+- 小程序 `contentType=6` 必须优先走 `buildMessageMiniProgramCard()`，不要交给普通链接卡片。
+- 真实封面永远优先；只有没有 `miniProImg/miniImgUrl/thumbUrl/cardImg` 等真实字段时才用本地占位 SVG。
+- 新增小程序字段时优先扩展 `normalizeMessage()`、`buildMessageMiniProgramCard()` 和 `parseMessagePayload()`，不要在 render 里临时拆字符串。
