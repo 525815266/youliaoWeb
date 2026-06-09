@@ -83,6 +83,21 @@ const KNOWN_SITE_LOGOS = [
   { name: "饿了么", label: "饿了么", domains: ["ele.me", "eleme.cn"], logoUrl: "https://www.ele.me/favicon.ico", bg: "#0089dc", fg: "#ffffff" }
 ];
 const knownSiteLogoCache = {};
+const APP_DEEP_LINK_PROFILES = [
+  { name: "微视", label: "微视", schemes: ["weishi"], bg: "#1677ff", fg: "#ffffff", mediaKind: "video", status: "视频深链" },
+  { name: "微信", label: "微信", schemes: ["weixin", "wx"], bg: "#21bf60", fg: "#ffffff", status: "应用深链" },
+  { name: "企业微信", label: "企微", schemes: ["wxwork"], bg: "#168df2", fg: "#ffffff", status: "应用深链" },
+  { name: "小红书", label: "小红书", schemes: ["xhsdiscover", "xhs"], bg: "#ff2442", fg: "#ffffff", status: "应用深链" },
+  { name: "快手", label: "快手", schemes: ["kwai", "kuaishou"], bg: "#ff5c00", fg: "#ffffff", mediaKind: "video", status: "视频深链" },
+  { name: "抖音", label: "抖音", schemes: ["snssdk1128", "aweme"], bg: "#111111", fg: "#ffffff", mediaKind: "video", status: "视频深链" },
+  { name: "淘宝", label: "淘宝", schemes: ["tbopen", "taobao"], bg: "#ff5000", fg: "#ffffff", status: "应用深链" },
+  { name: "天猫", label: "天猫", schemes: ["tmall"], bg: "#dd2727", fg: "#ffffff", status: "应用深链" },
+  { name: "京东", label: "京东", schemes: ["openapp.jdmobile", "jdlogin"], bg: "#e1251b", fg: "#ffffff", status: "应用深链" },
+  { name: "拼多多", label: "拼多多", schemes: ["pinduoduo"], bg: "#e02e24", fg: "#ffffff", status: "应用深链" },
+  { name: "得物", label: "得物", schemes: ["dewuapp"], bg: "#111827", fg: "#ffffff", status: "应用深链" },
+  { name: "美团", label: "美团", schemes: ["imeituan"], bg: "#ffd100", fg: "#222222", status: "应用深链" },
+  { name: "饿了么", label: "饿了么", schemes: ["eleme"], bg: "#0089dc", fg: "#ffffff", status: "应用深链" }
+];
 
 const MESSAGE_PAGE_SIZE = 30;
 const HISTORY_PAGE_SIZE = 20;
@@ -3815,6 +3830,8 @@ function shouldRenderMessageLinkCard(message) {
 
 function buildMessageLinkCard(message) {
   if (buildMessageFileCard(message) || buildMessageMiniProgramCard(message)) return null;
+  const deepLinkCard = buildAppDeepLinkCard(message);
+  if (deepLinkCard) return deepLinkCard;
   const nativeUrl = firstValue(
     message.cardUrl,
     message.url
@@ -3846,21 +3863,89 @@ function buildMessageLinkCard(message) {
   };
 }
 
+function buildAppDeepLinkCard(message) {
+  const rawDeepLink = extractFirstAppDeepLink(firstValue(message.cardUrl, message.url, message.content, ""));
+  if (!rawDeepLink) return null;
+  const parsed = parseAppDeepLink(rawDeepLink);
+  if (!parsed) return null;
+  const profile = getAppDeepLinkProfile(parsed.scheme);
+  const nested = getDeepLinkNestedData(parsed);
+  const embeddedUrl = getDeepLinkEmbeddedUrl(rawDeepLink, parsed);
+  const cached = state.linkPreviewCache[embeddedUrl] || {};
+  const knownSite = getKnownSiteMeta(embeddedUrl) || null;
+  const title = firstValue(
+    message.cardTitle,
+    nested.title,
+    nested.video_title,
+    nested.nickname,
+    cached.title,
+    parsed.params.title,
+    parsed.params.title_id,
+    parsed.params.topic,
+    knownSite?.name,
+    profile?.mediaKind === "video" ? `${profile.name}视频` : `${profile?.name || parsed.scheme}链接`
+  );
+  const desc = firstValue(
+    message.cardDesc,
+    nested.video_des,
+    nested.desc,
+    nested.description,
+    cached.description,
+    parsed.params.desc,
+    parsed.params.description,
+    parsed.params.video_des,
+    embeddedUrl ? getUrlHost(embeddedUrl) : "来自客户端分享的应用深链，已折叠显示"
+  );
+  const image = firstValue(
+    message.cardImg,
+    nested.cover,
+    nested.cover_url,
+    nested.pic_url,
+    nested.thumb_url,
+    cached.image,
+    parsed.params.cover,
+    parsed.params.cover_url,
+    parsed.params.thumb_url,
+    parsed.params.pic_url,
+    knownSite?.logoUrl,
+    getAppDeepLinkLogoDataUrl(profile, parsed.scheme),
+    ""
+  );
+  const generatedLogo = getAppDeepLinkLogoDataUrl(profile, parsed.scheme);
+  return {
+    url: embeddedUrl,
+    rawUrl: rawDeepLink,
+    title,
+    desc,
+    image,
+    imageKind: firstValue(message.cardImg, nested.cover, nested.cover_url, nested.pic_url, nested.thumb_url, cached.image, parsed.params.cover, parsed.params.cover_url, parsed.params.thumb_url, parsed.params.pic_url, "") ? "image" : "site-logo",
+    imageFallback: generatedLogo,
+    video: firstValue(cached.video, cached.player, cached.videoSecureUrl, ""),
+    videoType: firstValue(cached.videoType, cached.contentType, ""),
+    siteName: profile?.name || knownSite?.name || parsed.scheme,
+    siteBrand: profile?.name || knownSite?.name || parsed.scheme,
+    status: profile?.status || "应用深链",
+    isDeepLink: true,
+    contentType: message.contentType
+  };
+}
+
 function renderMessageLinkCard(card, message) {
   const hasImage = Boolean(card.image);
-  const status = card.url && state.linkPreviewCache[card.url]?.loading ? "正在获取预览" : card.video ? "可预览视频" : "网页预览";
-  const host = getUrlHost(card.url);
+  const previewUrl = card.url || "";
+  const status = card.status || (card.url && state.linkPreviewCache[card.url]?.loading ? "正在获取预览" : card.video ? "可预览视频" : "网页预览");
+  const host = getUrlHost(card.url) || getDeepLinkDisplayHost(card.rawUrl);
   const fallbackText = (host || "LINK").slice(0, 4).toUpperCase();
   const cardAttrs = card.url
     ? ` data-link-card="${escapeAttr(card.url)}" data-message-id="${escapeAttr(message.id || "")}"`
     : ` data-message-id="${escapeAttr(message.id || "")}"`;
   return `
-    <article class="message-link-card is-web-card"${cardAttrs}>
-      ${card.url ? `<button class="link-card-detail" type="button" data-link-preview="${escapeAttr(card.url)}">详情</button>` : ""}
+    <article class="message-link-card ${card.isDeepLink ? "is-deep-link" : "is-web-card"}"${cardAttrs}>
+      ${previewUrl ? `<button class="link-card-detail" type="button" data-link-preview="${escapeAttr(previewUrl)}">详情</button>` : ""}
       <div class="link-card-main">
         <div class="link-card-copy">
           <strong>${escapeHtml(card.title || getUrlHost(card.url) || "链接卡片")}</strong>
-          ${card.desc ? `<p>${escapeHtml(card.desc)}</p>` : card.url ? `<p>${escapeHtml(card.url)}</p>` : ""}
+          ${card.desc ? `<p>${escapeHtml(card.desc)}</p>` : previewUrl ? `<p>${escapeHtml(previewUrl)}</p>` : card.rawUrl ? `<p>${escapeHtml(card.rawUrl)}</p>` : ""}
           <span>${escapeHtml(card.siteName || host || status)}</span>
         </div>
         <div class="link-card-thumb ${hasImage ? "" : "is-empty"} ${card.imageKind === "site-logo" ? "is-site-logo" : ""}">
@@ -3870,7 +3955,7 @@ function renderMessageLinkCard(card, message) {
       <div class="link-card-actions">
         <span>${escapeHtml(status)}</span>
         ${card.url ? `<button class="mini-action ghost" type="button" data-open-link="${escapeAttr(card.url)}">打开</button>` : ""}
-        ${card.url ? `<button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.url)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>` : ""}
+        ${card.rawUrl || card.url ? `<button class="mini-action ghost" type="button" data-copy="${escapeAttr(card.rawUrl || card.url)}"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>` : ""}
       </div>
     </article>
   `;
@@ -4009,6 +4094,134 @@ function parseMessagePayload(content) {
   };
 }
 
+function extractFirstAppDeepLink(text) {
+  const matches = String(text || "").match(/[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi) || [];
+  const match = matches.find((url) => {
+    const scheme = getUrlScheme(url);
+    return scheme && !["http", "https"].includes(scheme);
+  });
+  return match ? trimTrailingUrlPunctuation(match) : "";
+}
+
+function parseAppDeepLink(value) {
+  const raw = String(value || "").trim();
+  const scheme = getUrlScheme(raw);
+  if (!scheme || ["http", "https"].includes(scheme)) return null;
+  const queryIndex = raw.indexOf("?");
+  const queryText = queryIndex >= 0 ? raw.slice(queryIndex + 1) : "";
+  const params = {};
+  if (queryText) {
+    new URLSearchParams(queryText).forEach((value, key) => {
+      params[key] = decodeUrlValue(value);
+    });
+  }
+  return { raw, scheme, params };
+}
+
+function getDeepLinkNestedData(parsed) {
+  const keys = ["feed_info", "feedInfo", "data", "extra", "params", "info", "share_info", "shareInfo"];
+  for (const key of keys) {
+    const value = parsed?.params?.[key];
+    const data = parseNestedObject(value);
+    if (Object.keys(data).length) return data;
+  }
+  return {};
+}
+
+function parseNestedObject(value) {
+  const text = decodeUrlValue(value).trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function getUrlScheme(value) {
+  const match = String(value || "").trim().match(/^([a-z][a-z0-9+.-]*):\/\//i);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function decodeUrlValue(value) {
+  let text = String(value || "");
+  for (let index = 0; index < 2; index += 1) {
+    try {
+      const decoded = decodeURIComponent(text);
+      if (decoded === text) break;
+      text = decoded;
+    } catch {
+      break;
+    }
+  }
+  return text;
+}
+
+function getDeepLinkEmbeddedUrl(rawDeepLink, parsed = parseAppDeepLink(rawDeepLink)) {
+  const nested = getDeepLinkNestedData(parsed);
+  const candidates = [
+    parsed?.params?.url,
+    parsed?.params?.target_url,
+    parsed?.params?.link,
+    parsed?.params?.web_url,
+    parsed?.params?.share_url,
+    parsed?.params?.h5_url,
+    parsed?.params?.page_url,
+    parsed?.params?.jump_url,
+    nested.url,
+    nested.target_url,
+    nested.link,
+    nested.web_url,
+    nested.share_url,
+    nested.h5_url,
+    nested.page_url
+  ];
+  for (const candidate of candidates) {
+    const url = normalizeLinkUrl(candidate);
+    if (url) return url;
+  }
+
+  const text = decodeUrlValue(rawDeepLink);
+  const embedded = extractFirstWebUrl(text);
+  return embedded ? normalizeLinkUrl(embedded) : "";
+}
+
+function getAppDeepLinkProfile(scheme) {
+  const normalized = String(scheme || "").toLowerCase();
+  return APP_DEEP_LINK_PROFILES.find((profile) => profile.schemes.includes(normalized)) || {
+    name: normalized || "应用",
+    label: normalized ? normalized.slice(0, 4).toUpperCase() : "APP",
+    bg: "#64748b",
+    fg: "#ffffff",
+    status: "应用深链"
+  };
+}
+
+function getAppDeepLinkLogoDataUrl(profile, scheme = "") {
+  const site = profile || getAppDeepLinkProfile(scheme);
+  const cacheKey = `deep:${site.name || scheme}`;
+  if (knownSiteLogoCache[cacheKey]) return knownSiteLogoCache[cacheKey];
+  const label = String(site.label || site.name || scheme || "APP").slice(0, 4);
+  const fontSize = label.length >= 4 ? 18 : label.length >= 3 ? 22 : 24;
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+      <rect width="144" height="144" rx="22" fill="${site.bg || "#64748b"}"/>
+      <text x="72" y="78" text-anchor="middle" dominant-baseline="middle"
+        font-family="Microsoft YaHei, PingFang SC, Arial, sans-serif"
+        font-size="${fontSize}" font-weight="700" fill="${site.fg || "#ffffff"}">${escapeSvgText(label)}</text>
+    </svg>
+  `.trim();
+  const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  knownSiteLogoCache[cacheKey] = dataUrl;
+  return dataUrl;
+}
+
+function getDeepLinkDisplayHost(rawDeepLink) {
+  const scheme = getUrlScheme(rawDeepLink);
+  return getAppDeepLinkProfile(scheme)?.name || scheme || "";
+}
+
 function decodeHtmlEntities(value) {
   return String(value || "")
     .replace(/&lt;/g, "<")
@@ -4099,13 +4312,21 @@ function escapeSvgText(value) {
 }
 
 function extractFirstUrl(text) {
-  const match = String(text || "").match(/https?:\/\/[^\s<>"']+/i) || String(text || "").match(/\/\/[^\s<>"']+/i);
-  return match ? trimTrailingUrlPunctuation(match[0]) : "";
+  const match = extractFirstWebUrl(text);
+  return match ? trimTrailingUrlPunctuation(match) : "";
 }
 
 function extractUrls(text) {
-  const matches = String(text || "").match(/https?:\/\/[^\s<>"']+|\/\/[^\s<>"']+/gi) || [];
+  const matches = extractWebUrls(text);
   return [...new Set(matches.map(trimTrailingUrlPunctuation).map(normalizeLinkUrl).filter(Boolean))];
+}
+
+function extractFirstWebUrl(text) {
+  return extractWebUrls(text)[0] || "";
+}
+
+function extractWebUrls(text) {
+  return String(text || "").match(/https?:\/\/[^\s<>"']+|\/\/[^\s<>"']+/gi) || [];
 }
 
 function trimTrailingUrlPunctuation(url) {
@@ -4178,7 +4399,7 @@ async function loadLinkPreviewMeta(url) {
 function refreshRenderedLinkCard(url) {
   const rerender = (messages, root) => {
     if (!root) return;
-    const message = messages.find((item) => normalizeLinkUrl(firstValue(item.cardUrl, item.miniProUrl, extractFirstUrl(item.content))) === url);
+    const message = messages.find((item) => getMessagePreviewUrl(item) === url);
     if (!message) return;
     root.querySelectorAll("[data-link-card]").forEach((node) => {
       if (node.dataset.linkCard !== url) return;
@@ -4188,6 +4409,11 @@ function refreshRenderedLinkCard(url) {
   };
   rerender(state.messages, el.messageList);
   rerender(state.historyMessages, el.toolContent);
+}
+
+function getMessagePreviewUrl(message) {
+  const card = buildMessageLinkCard(message);
+  return card?.url || normalizeLinkUrl(firstValue(message.cardUrl, message.miniProUrl, extractFirstUrl(message.content)));
 }
 
 function showLinkPreview(url) {
@@ -4314,6 +4540,13 @@ function handleMessageListClick(event) {
   if (openTarget) {
     event.preventDefault();
     openExternalLink(openTarget.dataset.openLink || "");
+    return;
+  }
+
+  const copyTarget = event.target.closest("[data-copy]");
+  if (copyTarget) {
+    event.preventDefault();
+    copyToClipboard(copyTarget.dataset.copy || "");
     return;
   }
 

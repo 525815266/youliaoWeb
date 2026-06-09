@@ -203,6 +203,7 @@ Important files/functions:
   - `renderMessageContent`
   - `shouldRenderMessageLinkCard`
   - `buildMessageLinkCard`
+  - `buildAppDeepLinkCard`
   - `renderMessageLinkCard`
   - `linkifyMessageText`
   - `hydrateVisibleLinkCards`
@@ -234,6 +235,8 @@ Rules:
 - Real thumbnails are always preferred: `cardImg`, then preview metadata image.
 - For known major platforms with no real thumbnail, use platform logo fallback. This is intentional platform identification, not fake product imagery.
 - Known platform fallback is configured in `KNOWN_SITE_LOGOS`; update that table instead of adding ad hoc render branches.
+- App deep links are configured in `APP_DEEP_LINK_PROFILES`; examples include `weishi://feed`, `kwai://`, `snssdk1128://`, `xhsdiscover://`.
+- Deep links should render as cards, not raw long text. Parse nested encoded params such as `feed_info`, use embedded real `http(s)` URL for preview/open, and keep the original app scheme for copy.
 - Logo fallback supports external favicon first and local generated SVG via `imageFallback` on error.
 - Unknown sites with no thumbnail still show a domain abbreviation fallback.
 - Direct `video/*` or video file URLs use `<video>`.

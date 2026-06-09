@@ -2042,3 +2042,59 @@ ORDER BY COUNT(*) DESC;
 - `/System/GetOptions` 里的 `dataBaseOptions` 仍可在“设置”弹窗查看和保存，但那属于客户端设置，不等于“数据库管理”截图里的删除记录功能。
 - 删除类接口必须保留强确认文案，不要为了省一步把确认按钮默认打开。
 - 如果后续客户端新增更多数据库管理页签，再在 `.database-delete-tabs` 扩展，不要把危险功能混到同一个确认按钮里。
+
+## 42. 2026-06-09 应用深链长链接卡片
+
+用户反馈：
+
+- 类似截图里的 `weishi://feed?...` 超长链接不应该原样铺满聊天气泡。
+- 这类长连接也应该参考之前的网页卡片、小程序卡片和视频预览方式处理。
+
+问题原因：
+
+- 旧 `extractFirstUrl()` 只识别 `http(s)://` 和 `//`。
+- `weishi://feed` 属于应用 deep link，里面的 `feed_info` 参数还会二次编码 JSON，包含标题、描述和真实网页/视频 URL。
+- 因为没有识别为卡片，消息只能作为普通文本显示，导致中间聊天框出现巨大长文本块。
+
+已修改：
+
+- `public/app.js`
+  - 新增 `APP_DEEP_LINK_PROFILES`，覆盖微视、微信、企微、小红书、快手、抖音、淘宝、天猫、京东、拼多多、得物、美团、饿了么等常见应用 scheme。
+  - `buildMessageLinkCard()` 优先调用 `buildAppDeepLinkCard()`，文件和小程序仍然优先于链接卡片。
+  - 新增 deep link 解析辅助：
+    - `extractFirstAppDeepLink()`
+    - `parseAppDeepLink()`
+    - `getDeepLinkNestedData()`
+    - `parseNestedObject()`
+    - `decodeUrlValue()`
+    - `getDeepLinkEmbeddedUrl()`
+    - `getAppDeepLinkProfile()`
+    - `getAppDeepLinkLogoDataUrl()`
+    - `getDeepLinkDisplayHost()`
+  - `weishi://feed?...feed_info=...` 会解析 `feed_info` 中的 `nickname/video_des/url/cover` 等字段：
+    - 标题优先真实消息字段，再用嵌套 JSON 标题/昵称。
+    - 描述优先真实消息字段，再用嵌套 JSON 描述。
+    - 可解析到真实 `http(s)` URL 时，`详情` 和 `打开` 走真实网页/视频地址。
+    - 复制按钮保留原始 `weishi://...` 深链。
+  - `refreshRenderedLinkCard()` 改用 `getMessagePreviewUrl()`，让 deep link 中真实视频/网页 URL 的预览元信息回来后也能刷新原卡片。
+  - 主聊天框 `handleMessageListClick()` 补齐 `[data-copy]` 处理，保证中间消息卡片里的复制按钮可用。
+- `public/styles.css`
+  - 新增 `.message-link-card.is-deep-link` 样式。
+  - 给 deep link 缩略图加视频/播放角标，使它和普通网页卡片有轻微区分，但仍保持原客户端蓝白风格。
+
+验证结果：
+
+- `npm run check` 通过。
+- `git diff --check` 通过，仅有 Windows CRLF 换行提示。
+- 用截图同类 `weishi://feed?...feed_info=...` 样本做本地解析验证，能拿到：
+  - `scheme: weishi`
+  - `nickname: 中国经营报`
+  - `video_des: 事关你的存款利息！央行又出招，下一步是`
+  - 内嵌真实 `http://q.weishi.qq.com/...mp4?...` 地址
+
+维护规则：
+
+- 不要把应用 deep link 原样当普通文本渲染。优先折叠成卡片，完整原文通过复制按钮保留。
+- deep link 中解析出的 `http(s)` 才能用于详情预览和打开；`weishi://`、`kwai://` 这类原始 scheme 只复制，不当作网页打开。
+- 不伪造视频标题、封面或视频地址。没有真实字段时只展示平台名、应用 logo 和“应用深链/视频深链”。
+- 新增应用平台时优先扩展 `APP_DEEP_LINK_PROFILES`，不要在 `renderMessageLinkCard()` 写一次性分支。

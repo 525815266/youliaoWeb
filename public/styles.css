@@ -1551,6 +1551,11 @@ textarea:focus-visible {
   box-shadow: 0 6px 18px rgba(27, 73, 126, 0.08);
 }
 
+.message-link-card.is-deep-link {
+  border-color: #cfe3f8;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
 .message-mini-card,
 .message-file-card {
   display: grid;
@@ -1638,6 +1643,25 @@ textarea:focus-visible {
 .link-card-thumb.is-empty {
   color: #168df2;
   background: #f3f8ff;
+}
+
+.message-link-card.is-deep-link .link-card-thumb {
+  position: relative;
+}
+
+.message-link-card.is-deep-link .link-card-thumb::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background:
+    linear-gradient(90deg, transparent 0 38%, #fff 39% 62%, transparent 63%),
+    #168df2;
+  box-shadow: 0 3px 8px rgba(15, 64, 119, 0.2);
 }
 
 .link-card-thumb span {
