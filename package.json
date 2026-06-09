@@ -10,5 +10,8 @@
     "client:audit": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/audit-client-update.ps1",
     "client:audit:compare": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/compare-client-audits.ps1",
     "fnos:health": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-fnos-youchat-health.ps1"
+  },
+  "dependencies": {
+    "@microsoft/signalr": "^10.0.0"
   }
 }

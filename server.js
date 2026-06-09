@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
+const signalR = require("@microsoft/signalr");
 
 const PORT = Number(process.env.PORT || 5177);
 const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "http://192.168.9.83:18080/api";
@@ -10,6 +11,7 @@ const DEFAULT_AI_BASE = process.env.YOUCHAT_AI_BASE || "https://sub2.sn55.cn/";
 const DEFAULT_AI_MODEL = process.env.YOUCHAT_AI_MODEL || "gpt-5.4-mini";
 const PUBLIC_DIR = path.join(__dirname, "public");
 const CLIENT_WWWROOT = process.env.YOUCHAT_DESKTOP_WWWROOT || "C:\\Program Files\\youchat-desktop\\wwwroot";
+const SIGNALR_BROWSER_FILE = path.join(__dirname, "node_modules", "@microsoft", "signalr", "dist", "browser", "signalr.min.js");
 const LOG_DIR = path.join(__dirname, "logs");
 const DATA_DIR = path.join(__dirname, "data");
 const REPLY_SKILLS_FILE = path.join(DATA_DIR, "reply-skills.json");
@@ -19,7 +21,10 @@ const MAX_LINK_PREVIEW_BYTES = 900000;
 const API_PROXY_TIMEOUT_MS = 60000;
 const OSS_UPLOAD_TIMEOUT_MS = 70000;
 const AI_PROXY_TIMEOUT_MS = 90000;
+const SIGNALR_START_TIMEOUT_MS = 12000;
+const SIGNALR_KEEP_ALIVE_MS = 120000;
 const DIRECT_VIDEO_EXTENSIONS = /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8)(?:$|\?)/i;
+const signalRHubConnections = new Map();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -108,6 +113,21 @@ function sendClientStaticAsset(res, relativePath, contentType) {
     }
     res.writeHead(200, {
       "Content-Type": contentType,
+      "Cache-Control": "public, max-age=86400"
+    });
+    res.end(content);
+  });
+}
+
+function sendSignalRBrowserClient(res) {
+  fs.readFile(SIGNALR_BROWSER_FILE, (error, content) => {
+    if (error) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("@microsoft/signalr browser bundle not found. Run npm install in the project root.");
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/javascript; charset=utf-8",
       "Cache-Control": "public, max-age=86400"
     });
     res.end(content);
@@ -618,6 +638,18 @@ function parseMaybeJson(text) {
   }
 }
 
+function parseRequestPayload(buffer, req) {
+  const text = Buffer.isBuffer(buffer) ? buffer.toString("utf8") : String(buffer || "");
+  const contentType = String(req.headers["content-type"] || "");
+  if (!text) return {};
+  if (contentType.includes("application/json")) {
+    const parsed = parseMaybeJson(text);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  }
+  const params = new URLSearchParams(text);
+  return Object.fromEntries(params.entries());
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -794,6 +826,166 @@ async function handleLinkPreview(req, res) {
       message: "Link preview request failed",
       url,
       error: error.message
+    });
+  }
+}
+
+function normalizeApiBase(value) {
+  const raw = String(value || DEFAULT_API_BASE).trim().replace(/\/+$/, "");
+  if (!raw) return DEFAULT_API_BASE;
+  return (/^https?:\/\//i.test(raw) ? raw : `http://${raw}`).replace(/\/+$/, "");
+}
+
+function getSignalRBaseUrl(apiBase) {
+  try {
+    const url = new URL(normalizeApiBase(apiBase));
+    const apiPath = url.pathname.replace(/\/+$/, "");
+    if (apiPath.toLowerCase().endsWith("/api")) {
+      url.pathname = apiPath.slice(0, -4) || "/";
+    }
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return normalizeApiBase(apiBase).replace(/\/api\/?$/i, "").replace(/\/+$/, "");
+  }
+}
+
+function buildSignalRHubUrl(apiBase, accountId) {
+  const userName = encodeURIComponent(String(accountId || "").trim());
+  return `${getSignalRBaseUrl(apiBase)}/chathub?mode=client&userName=${userName}`;
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+    })
+  ]).finally(() => clearTimeout(timer));
+}
+
+function getSignalRConnectionKey(apiBase, accountId) {
+  return `${getSignalRBaseUrl(apiBase)}::${String(accountId || "").trim()}`;
+}
+
+async function ensureServerSignalRConnection(apiBase, accountId) {
+  const normalizedAccountId = String(accountId || "").trim();
+  if (!normalizedAccountId) throw new Error("SignalR accountId is required");
+
+  const key = getSignalRConnectionKey(apiBase, normalizedAccountId);
+  const cached = signalRHubConnections.get(key);
+  if (cached?.connection?.state === signalR.HubConnectionState.Connected) {
+    cached.lastUsedAt = Date.now();
+    return cached.connection;
+  }
+  if (cached?.connecting) return cached.connecting;
+
+  const hubUrl = buildSignalRHubUrl(apiBase, normalizedAccountId);
+  const connecting = (async () => {
+    if (cached?.connection && cached.connection.state !== signalR.HubConnectionState.Disconnected) {
+      try {
+        await cached.connection.stop();
+      } catch (error) {
+        console.warn(`SignalR bridge stop before reconnect failed: ${error.message}`);
+      }
+    }
+
+    const connection = new signalR.HubConnectionBuilder()
+      .withUrl(hubUrl)
+      .withKeepAliveInterval(SIGNALR_KEEP_ALIVE_MS)
+      .withAutomaticReconnect()
+      .configureLogging(signalR.LogLevel.Warning)
+      .build();
+
+    connection.onclose((error) => {
+      const current = signalRHubConnections.get(key);
+      if (current?.connection === connection) {
+        signalRHubConnections.delete(key);
+      }
+      if (error) console.warn(`SignalR bridge closed: ${error.message}`);
+    });
+
+    await withTimeout(connection.start(), SIGNALR_START_TIMEOUT_MS, "SignalR bridge start");
+    await connection.invoke("RegisterUser", normalizedAccountId, false, false, 0);
+    signalRHubConnections.set(key, {
+      connection,
+      connecting: null,
+      hubUrl,
+      accountId: normalizedAccountId,
+      lastUsedAt: Date.now()
+    });
+    return connection;
+  })();
+
+  signalRHubConnections.set(key, {
+    connection: cached?.connection || null,
+    connecting,
+    hubUrl,
+    accountId: normalizedAccountId,
+    lastUsedAt: Date.now()
+  });
+
+  try {
+    return await connecting;
+  } catch (error) {
+    signalRHubConnections.delete(key);
+    throw error;
+  }
+}
+
+async function handleSignalRConsume(req, res) {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { success: false, message: "Method not allowed" });
+    return;
+  }
+
+  const body = await readBody(req);
+  const payload = parseRequestPayload(body, req);
+  const apiBase = normalizeApiBase(payload.apiBase || DEFAULT_API_BASE);
+  const accountId = String(payload.accountId || "").trim();
+  const contactId = Number(payload.contactId || 0);
+  const msgId = Number(payload.msgId || 0);
+
+  if (!accountId) {
+    sendJson(res, 400, { success: false, message: "SignalR accountId is required" });
+    return;
+  }
+  if (!Number.isFinite(contactId)) {
+    sendJson(res, 400, { success: false, message: "SignalR contactId is invalid" });
+    return;
+  }
+
+  try {
+    const connection = await ensureServerSignalRConnection(apiBase, accountId);
+    await withTimeout(
+      connection.invoke("ConsumeMessage", contactId, Number.isFinite(msgId) ? msgId : 0),
+      SIGNALR_START_TIMEOUT_MS,
+      "SignalR ConsumeMessage"
+    );
+    const key = getSignalRConnectionKey(apiBase, accountId);
+    const cached = signalRHubConnections.get(key);
+    if (cached) cached.lastUsedAt = Date.now();
+    sendJson(res, 200, {
+      success: true,
+      source: "node-signalr",
+      apiBase,
+      hubUrl: buildSignalRHubUrl(apiBase, accountId),
+      accountId,
+      contactId,
+      msgId: Number.isFinite(msgId) ? msgId : 0
+    });
+  } catch (error) {
+    sendJson(res, 502, {
+      success: false,
+      message: "SignalR ConsumeMessage failed",
+      error: error.message,
+      apiBase,
+      hubUrl: buildSignalRHubUrl(apiBase, accountId),
+      accountId,
+      contactId,
+      msgId: Number.isFinite(msgId) ? msgId : 0
     });
   }
 }
@@ -1030,6 +1222,12 @@ function serveStatic(req, res) {
   });
 }
 
+async function stopSignalRHubConnections() {
+  const connections = [...signalRHubConnections.values()].map((entry) => entry.connection).filter(Boolean);
+  signalRHubConnections.clear();
+  await Promise.allSettled(connections.map((connection) => connection.stop()));
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
@@ -1071,6 +1269,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.url.startsWith("/local/signalr/consume")) {
+    await handleSignalRConsume(req, res);
+    return;
+  }
+
   if (req.url.startsWith("/health")) {
     sendJson(res, 200, {
       ok: true,
@@ -1087,6 +1290,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.url.startsWith("/vendor/signalr.min.js")) {
+    sendSignalRBrowserClient(res);
+    return;
+  }
+
   if (req.url.startsWith("/static/emojiSource.cdbf96da.png")) {
     sendClientStaticAsset(res, "static\\emojiSource.cdbf96da.png", "image/png");
     return;
@@ -1098,4 +1306,12 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`YouChat dev web: http://localhost:${PORT}`);
   console.log(`Proxy target: ${DEFAULT_API_BASE}`);
+});
+
+process.on("SIGINT", () => {
+  stopSignalRHubConnections().finally(() => process.exit(0));
+});
+
+process.on("SIGTERM", () => {
+  stopSignalRHubConnections().finally(() => process.exit(0));
 });

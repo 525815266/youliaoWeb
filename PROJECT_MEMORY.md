@@ -53,6 +53,7 @@
 47. [2026-06-09 发送快捷键、skill 图片与预览头部修复](#47-2026-06-09-发送快捷键skill-图片与预览头部修复)
 48. [2026-06-09 飞牛服务误切 SQLite 修复](#48-2026-06-09-飞牛服务误切-sqlite-修复)
 49. [2026-06-09 图片发送卡在发送中修复](#49-2026-06-09-图片发送卡在发送中修复)
+50. [2026-06-09 SignalR 清红点桥接](#50-2026-06-09-signalr-清红点桥接)
 
 ## 1. 项目目标
 
@@ -2435,3 +2436,87 @@ npm run fnos:health
 - 不要再把粘贴图片原始名 `image.png` 作为 OSS key。必须使用唯一 key 或服务端明确返回的 key。
 - 不要在 `/local/oss-upload` 抓包里记录完整 `qnToken`，只记录 `hasQnToken=true/false`。
 - 导出迁移 patch 前确认 zip 内不包含 `payload/data/reply-skills.json` 或 `payload/logs/api-capture.ndjson`。
+
+## 50. 2026-06-09 SignalR 清红点桥接
+
+用户反馈：
+
+- 在 Web 页面点击左侧会话后，Web 会话列表里的红点/小数字消失。
+- 但官方 Windows 客户端里同一个会话仍显示未读，说明之前只是 Web 本地清状态，没有可靠同步服务端已读。
+
+排查结论：
+
+- 原 Electron 客户端主窗口源码里，点开会话调用的是 SignalR hub 方法：
+  - `signalRConnection.invoke("ConsumeMessage", contactId, 0)`
+  - 全部已读调用 `ConsumeMessage(0, 0)`
+- SignalR hub 地址由 API 地址推导：
+  - API: `http://192.168.9.83:18080/api`
+  - Hub: `http://192.168.9.83:18080/chathub?mode=client&userName=<客服短id>`
+- 注册方法：
+  - `RegisterUser(accountId, false, false, 0)`
+  - 当前飞牛健康检查里 `Boom666 / 客服-王` 的短客服 id 为 `2`。
+- HTTP `/ChatContent/ConsumeMessage(contactId, 0)` 当前也会返回成功，但官方客户端的实时已读语义以 SignalR 为准。浏览器直连 SignalR 可能受 CORS/协商限制影响，所以不能只依赖浏览器端 hub。
+
+已修改：
+
+- `package.json`
+  - 新增依赖 `@microsoft/signalr`，本地 Node 服务可直接连接悠聊 hub。
+- `server.js`
+  - 新增 `/vendor/signalr.min.js`，供浏览器兜底直连 SignalR 使用。
+  - 新增 `/local/signalr/consume`。
+  - `handleSignalRConsume()` 会读取 `apiBase/accountId/contactId/msgId`，由本地 Node 服务连接 `/chathub`，注册用户后调用 `ConsumeMessage(contactId, msgId)`。
+  - SignalR 连接按 `hubBase + accountId` 复用，避免每次点击会话都重新握手。
+  - Node 进程收到 `SIGINT/SIGTERM` 时会停止已缓存的 SignalR 连接。
+- `public/index.html`
+  - 加载 `/vendor/signalr.min.js`。
+- `public/app.js`
+  - 新增 SignalR 地址推导、注册、停止、浏览器直连兜底函数。
+  - `syncConsumedMessages()`、`syncAllConsumedMessages()`、`syncConsumedMessageIds()` 改为顺序兜底：
+    1. `/local/signalr/consume` 本地 Node SignalR 桥。
+    2. 浏览器 SignalR。
+    3. HTTP `/ChatContent/ConsumeMessage`。
+  - 本地桥成功后不再重复调用后续兜底，避免一次点击打多次已读。
+  - Web 本地已读状态只保留 30 秒宽限期，避免接口刷新失败时长期假装已读。
+
+真实验证：
+
+- 重启 `http://localhost:5177` 本地 Web 服务后，直接调用：
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
+  -Method Post `
+  -ContentType 'application/json' `
+  -Body '{"apiBase":"http://192.168.9.83:18080/api","accountId":"2","contactId":7052,"msgId":0}'
+```
+
+- 返回：
+
+```json
+{
+  "success": true,
+  "source": "node-signalr",
+  "hubUrl": "http://192.168.9.83:18080/chathub?mode=client&userName=2",
+  "accountId": "2",
+  "contactId": 7052,
+  "msgId": 0
+}
+```
+
+- 随后查询 `/Contact/GetContactList(accountId=2)`，真实会话 `contactId=7052` 的 `unRead` 从 `1` 变为 `0`。
+- `npm run check` 通过。
+- `npm run fnos:health` 通过：
+  - `databaseType=0 (mysql)`
+  - `totalContacts=8043`
+  - `historyContacts=5710`
+  - `currentAccount2=5`
+- `/vendor/signalr.min.js` 和 `/app.js` 均返回 200。
+
+以后排查规则：
+
+- 如果 Web 红点消了但官方客户端不消，先看 Web 日志里 `consume message synced` 的 `source`。
+  - 理想值：`node-signalr`。
+  - 如果是 `browser-signalr` 或 `http`，说明本地桥失败过，继续看 `consume message fallback used` 的错误。
+- 不能只把前端 `unread=0` 当成清红点完成；必须确认 `/local/signalr/consume` 或 SignalR `ConsumeMessage` 成功。
+- 不要再把单条长 `msgId` HTTP 消费作为主路径。之前 probe 过部分长 id 会返回服务端异常。
+- `accountId` 必须是客服短 id，例如当前 `2`，不是登录名 `Boom666`，也不是后台长账号号 `1556504756803862529`。
+- 如果官方客户端和 Web 同时数量异常，仍先跑 `npm run fnos:health` 排除飞牛服务端读库问题。

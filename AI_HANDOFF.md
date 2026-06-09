@@ -27,6 +27,7 @@ Path note:
 - `public/styles.css`: blue/white compact client UI.
 - `public/index.html`: app shell, AI settings, workbench layout.
 - `server.js`: static server, `/api` proxy, `/ai/chat/completions`, OSS upload proxy, `/local/link-preview`, local skill endpoints.
+- `server.js`: also owns `/local/signalr/consume`, the local Node SignalR bridge used to sync conversation read/unread state with the real YouChat hub.
 - `PROJECT_MEMORY.md`: full readable project memory.
 - `AI_HANDOFF.md`: this handoff map. Update it after meaningful changes.
 
@@ -135,6 +136,8 @@ Important functions:
 - `markContactRead`
 - `syncConsumedMessages`
 - `syncAllConsumedMessages`
+- `consumeMessageWithFallback`
+- `consumeMessageViaLocalSignalR`
 
 Behavior rules:
 
@@ -142,12 +145,21 @@ Behavior rules:
 - Current tab must not clear `state.contacts` or `state.listCounts.current` just because `/Contact/GetContactList` with `accountId` returns bare `data:0`.
 - If current data is ambiguous and there is an existing real list, preserve it and log the source internally.
 - Preserve active right toolbar tab when switching contacts.
-- Selected unread conversation should clear local badge and call consume API.
+- Selected unread conversation should clear the local badge and sync server read state. The main path is `/local/signalr/consume` -> Node `@microsoft/signalr` -> hub `ConsumeMessage(contactId, 0)`. Browser SignalR and HTTP `/ChatContent/ConsumeMessage` are fallback only.
 - Keyboard up/down switches conversations when focus is in list.
 - Auto refresh should preserve scroll.
 - History tab visible count must use the backend history count only, like the client `历史(5700)`.
 - History list contents must also come from the backend history endpoint only. Do not merge Web local clear-list caches into the visible history list.
 - Recent real captures showed `isHistory=true&pageSize=1` returning `data:0`; use `pageSize=20` for count probes and keep investigating with real client captures.
+
+Read-state SignalR facts:
+
+- Original Electron invokes `ConsumeMessage(contactId, 0)` over SignalR and `ConsumeMessage(0, 0)` for all-read.
+- Hub URL is derived from API base: `http://192.168.9.83:18080/api` -> `http://192.168.9.83:18080/chathub?mode=client&userName=<shortAccountId>`.
+- Register call is `RegisterUser(accountId, false, false, 0)`.
+- Current verified short account id for `Boom666 / 客服-王` is `2`.
+- Do not use username `Boom666` or merchant long id `1556504756803862529` for SignalR registration.
+- Verified on 2026-06-09: `/local/signalr/consume` for `contactId=7052` returned `source=node-signalr`, then `/Contact/GetContactList(accountId=2)` showed `unRead: 0` after previously being `1`.
 
 Clear-list behavior:
 

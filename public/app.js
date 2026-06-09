@@ -12,6 +12,8 @@ const DEFAULT_AI_AUTH_TYPE = "bearer";
 const API_REQUEST_TIMEOUT_MS = 45000;
 const IMAGE_UPLOAD_TIMEOUT_MS = 15000;
 const LOCAL_IMAGE_UPLOAD_TIMEOUT_MS = 70000;
+const SIGNALR_KEEP_ALIVE_MS = 120000;
+const SIGNALR_START_TIMEOUT_MS = 12000;
 const AI_PRESETS = {
   sub2: {
     label: "sub2 中转",
@@ -119,6 +121,7 @@ const CLEARED_CONTACTS_STORAGE_KEY = "youchat.clearedContactState";
 const CONTACT_LIST_ACCOUNT_IDS_STORAGE_KEY = "youchat.contactListAccountIds";
 const CLIENT_PAUSED_STORAGE_KEY = "youchat.client.paused";
 const SEND_MODE_STORAGE_KEY = "youchat.composer.sendMode";
+const READ_STATE_GRACE_MS = 30000;
 const CLEAR_LIST_GRACE_MS = 30000;
 const CONTACT_LIST_ACCOUNT_ID_PATTERN = /^[1-9]\d{0,9}$/;
 const GLOBAL_SEARCH_PAGE_SIZE = 20;
@@ -321,6 +324,10 @@ const state = {
   friendRequestLoading: false,
   friendRequestDialogOpen: false,
   apiStatus: "未连接",
+  signalRConnection: null,
+  signalRConnecting: null,
+  signalRStatus: "idle",
+  signalRUrl: "",
   readContactState: loadReadContactState(),
   logLines: []
 };
@@ -663,6 +670,7 @@ function handleClientSettingsMenuClick(event) {
   } else if (action === "pause") {
     toggleClientPause();
   } else if (action === "logout") {
+    stopSignalRConnection().catch((error) => log("SignalR logout stop failed", { error: error.message }));
     showLogin();
     toast("已退出当前 Web 工作台。");
   } else if (action === "close") {
@@ -675,9 +683,11 @@ function toggleClientPause() {
   localStorage.setItem(CLIENT_PAUSED_STORAGE_KEY, String(state.clientPaused));
   if (state.clientPaused) {
     stopAutoRefresh();
+    stopSignalRConnection().catch((error) => log("SignalR pause stop failed", { error: error.message }));
     toast("已挂起：自动刷新已暂停。");
   } else {
     startAutoRefresh();
+    ensureSignalRConnection().catch((error) => log("SignalR resume failed", { error: error.message }));
     toast("已恢复：自动刷新重新开启。");
   }
   updateClientChromeState();
@@ -1688,6 +1698,134 @@ function normalizeApiBase(value) {
   return (/^https?:\/\//i.test(raw) ? raw : `http://${raw}`).replace(/\/+$/, "");
 }
 
+function getSignalRBaseUrl() {
+  try {
+    const url = new URL(state.apiBase || DEFAULT_API_BASE);
+    const apiPath = url.pathname.replace(/\/+$/, "");
+    if (apiPath.toLowerCase().endsWith("/api")) {
+      url.pathname = apiPath.slice(0, -4) || "/";
+    }
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return String(state.apiBase || DEFAULT_API_BASE).replace(/\/api\/?$/i, "").replace(/\/+$/, "");
+  }
+}
+
+function getSignalRAccountId() {
+  return String(firstValue(state.accountId, getContactListAccountId(), state.account, "") || "").trim();
+}
+
+function buildSignalRUrl() {
+  const base = getSignalRBaseUrl();
+  const userName = encodeURIComponent(getSignalRAccountId());
+  return `${base}/chathub?mode=client&userName=${userName}`;
+}
+
+function isSignalRConnected() {
+  return Boolean(state.signalRConnection && state.signalRConnection.state === "Connected");
+}
+
+async function ensureSignalRConnection() {
+  if (!window.signalR?.HubConnectionBuilder) {
+    throw new Error("SignalR browser client is not loaded");
+  }
+  const accountId = getSignalRAccountId();
+  if (!accountId) {
+    throw new Error("missing account id for SignalR registration");
+  }
+  const targetUrl = buildSignalRUrl();
+  if (isSignalRConnected() && state.signalRUrl === targetUrl) {
+    return state.signalRConnection;
+  }
+  if (state.signalRConnecting) return state.signalRConnecting;
+
+  state.signalRConnecting = (async () => {
+    if (state.signalRConnection && state.signalRConnection.state !== "Disconnected") {
+      try {
+        await state.signalRConnection.stop();
+      } catch (error) {
+        log("SignalR stop before reconnect failed", { error: error.message });
+      }
+    }
+
+    const builder = new window.signalR.HubConnectionBuilder()
+      .withUrl(targetUrl)
+      .withKeepAliveInterval(SIGNALR_KEEP_ALIVE_MS)
+      .withAutomaticReconnect();
+    if (window.signalR.LogLevel) builder.configureLogging(window.signalR.LogLevel.Warning);
+    const connection = builder.build();
+    connection.onclose((error) => {
+      state.signalRStatus = "closed";
+      log("SignalR closed", { error: error?.message || "" });
+    });
+    connection.onreconnected((connectionId) => {
+      state.signalRStatus = "connected";
+      log("SignalR reconnected", { connectionId });
+      registerSignalRUser(connection).catch((error) => log("SignalR register after reconnect failed", { error: error.message }));
+    });
+
+    state.signalRStatus = "connecting";
+    await withTimeout(connection.start(), SIGNALR_START_TIMEOUT_MS, "SignalR start");
+    state.signalRConnection = connection;
+    state.signalRUrl = targetUrl;
+    await registerSignalRUser(connection);
+    state.signalRStatus = "connected";
+    log("SignalR connected", { url: targetUrl, accountId });
+    return connection;
+  })();
+
+  try {
+    return await state.signalRConnecting;
+  } finally {
+    state.signalRConnecting = null;
+  }
+}
+
+async function registerSignalRUser(connection = state.signalRConnection) {
+  if (!connection || connection.state !== "Connected") return;
+  const accountId = getSignalRAccountId();
+  if (!accountId) return;
+  await connection.invoke("RegisterUser", accountId, false, false, 0);
+  log("SignalR user registered", { accountId, mode: 0 });
+}
+
+async function stopSignalRConnection() {
+  state.signalRConnecting = null;
+  const connection = state.signalRConnection;
+  state.signalRConnection = null;
+  state.signalRUrl = "";
+  if (!connection) return;
+  try {
+    if (connection.state === "Connected") {
+      const accountId = getSignalRAccountId();
+      if (accountId) {
+        try {
+          await connection.invoke("UnRegisterUser", accountId);
+        } catch (error) {
+          log("SignalR unregister failed", { error: error.message });
+        }
+      }
+    }
+    await connection.stop();
+  } catch (error) {
+    log("SignalR stop failed", { error: error.message });
+  } finally {
+    state.signalRStatus = "idle";
+  }
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = window.setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+    })
+  ]).finally(() => window.clearTimeout(timer));
+}
+
 function persistLoginConfig() {
   state.apiBase = buildApiBase().replace(/\/+$/, "");
   const previousAccount = state.account;
@@ -1729,6 +1867,7 @@ async function connect(event) {
     await loginIfPossible();
     state.accountIdResolved = false;
     await ensureContactListAccountId();
+    ensureSignalRConnection().catch((error) => log("SignalR connect failed", { error: error.message, url: buildSignalRUrl() }));
     showWorkbench();
     await Promise.all([loadContacts(), loadFaq(), loadFriendRequestBadgeTotals(), loadClientNoticeBadge()]);
     await Promise.all([loadMessages(1, "replace", { forceBottom: true }), loadContactInfo(), loadToolDataForActiveTab()]);
@@ -1796,6 +1935,7 @@ function showWorkbench() {
 
 function showLogin() {
   stopAutoRefresh();
+  stopSignalRConnection().catch((error) => log("SignalR stop on login view failed", { error: error.message }));
   el.workbenchView.classList.add("is-hidden");
   el.loginView.classList.remove("is-hidden");
 }
@@ -3049,9 +3189,12 @@ function loadReadContactState() {
 }
 
 function persistReadContactState() {
+  const now = Date.now();
   const entries = Object.entries(state.readContactState || {})
+    .filter(([, value]) => Number(value?.expiresAt || 0) > now)
     .sort((a, b) => Number(b[1]?.readAt || 0) - Number(a[1]?.readAt || 0))
     .slice(0, 500);
+  state.readContactState = Object.fromEntries(entries);
   localStorage.setItem(READ_STATE_STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
 }
 
@@ -3068,6 +3211,8 @@ function applyReadStateToContact(contact) {
   const contactSortTime = Number(contact.sortTime || 0);
   const readAt = Number(readState.readAt || 0);
   const readSortTime = Number(readState.sortTime || 0);
+  const expiresAt = Number(readState.expiresAt || 0);
+  if (!expiresAt || expiresAt <= Date.now()) return contact;
   const shouldKeepRead = readAt && (!contactSortTime || contactSortTime <= readSortTime || contactSortTime <= readAt);
   if (!shouldKeepRead) return contact;
 
@@ -3086,7 +3231,7 @@ function markContactRead(contact, options = {}) {
 
   const readAt = Date.now();
   const sortTime = Math.max(Number(contact?.sortTime || 0), readAt);
-  state.readContactState[key] = { readAt, sortTime };
+  state.readContactState[key] = { readAt, sortTime, expiresAt: readAt + READ_STATE_GRACE_MS };
   persistReadContactState();
 
   state.contacts = state.contacts.map((item) => (
@@ -3115,7 +3260,8 @@ function markVisibleContactsRead() {
     if (!key) return contact;
     state.readContactState[key] = {
       readAt,
-      sortTime: Math.max(Number(contact.sortTime || 0), readAt)
+      sortTime: Math.max(Number(contact.sortTime || 0), readAt),
+      expiresAt: readAt + READ_STATE_GRACE_MS
     };
     return applyReadStateToContact({ ...contact, unread: 0, unRead: 0, redDot: 0, unReadCount: 0 });
   });
@@ -3131,26 +3277,22 @@ async function syncConsumedMessages(contact) {
   const contactId = getContactId(contact);
   if (!contactId) return;
 
-  await api("/ChatContent/ConsumeMessage", {
-    contactId,
-    msgId: 0
-  });
+  const result = await consumeMessageWithFallback(contactId, 0);
   log("consume message synced", {
     contactId,
     msgId: 0,
-    source: "electron-compatible"
+    source: result.source,
+    failedFallbacks: result.failedFallbacks
   });
 }
 
 async function syncAllConsumedMessages() {
-  await api("/ChatContent/ConsumeMessage", {
-    contactId: 0,
-    msgId: 0
-  });
+  const result = await consumeMessageWithFallback(0, 0);
   log("consume all messages synced", {
     contactId: 0,
     msgId: 0,
-    source: "electron-compatible"
+    source: result.source,
+    failedFallbacks: result.failedFallbacks
   });
 }
 
@@ -3158,38 +3300,103 @@ async function syncConsumedMessageIds(contact) {
   const contactId = getContactId(contact);
   if (!contactId) return;
 
+  await consumeMessageWithFallback(contactId, 0);
+}
+
+async function consumeMessageWithFallback(contactId, msgId = 0) {
+  const attempts = [
+    { source: "node-signalr", run: consumeMessageViaLocalSignalR },
+    { source: "browser-signalr", run: consumeMessageViaSignalR },
+    { source: "http", run: consumeMessageViaHttp }
+  ];
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const result = await attempt.run(contactId, msgId);
+      if (errors.length) {
+        log("consume message fallback used", {
+          contactId,
+          msgId,
+          source: result.source || attempt.source,
+          previousErrors: errors
+        });
+      }
+      return {
+        ...(result || {}),
+        source: result?.source || attempt.source,
+        failedFallbacks: errors.length
+      };
+    } catch (error) {
+      errors.push({ source: attempt.source, error: error.message });
+    }
+  }
+  throw new Error(errors.map((item) => `${item.source}: ${item.error}`).join("; ") || "会话红点同步失败");
+}
+
+async function consumeMessageViaLocalSignalR(contactId, msgId = 0) {
+  const accountId = getSignalRAccountId();
+  if (!accountId) throw new Error("missing account id for local SignalR bridge");
+  const response = await fetchWithTimeout("/local/signalr/consume", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      apiBase: state.apiBase,
+      accountId,
+      contactId: Number(contactId || 0),
+      msgId: Number(msgId || 0)
+    })
+  }, SIGNALR_START_TIMEOUT_MS + 3000, "local SignalR consume");
+  const payload = parsePayload(await response.text());
+  if (!response.ok || payload?.success === false) {
+    throw new Error(getMessage(payload) || payload?.error || `HTTP ${response.status}`);
+  }
+  return { source: payload?.source || "node-signalr", contactId, msgId };
+}
+
+async function consumeMessageViaSignalR(contactId, msgId = 0) {
+  const connection = await ensureSignalRConnection();
+  await connection.invoke("ConsumeMessage", Number(contactId || 0), Number(msgId || 0));
+  return { source: "signalr", contactId, msgId };
+}
+
+async function consumeMessageViaHttp(contactId, msgId = 0) {
+  await api("/ChatContent/ConsumeMessage", {
+    contactId,
+    msgId
+  });
+  return { source: "http", contactId, msgId };
+}
+
+function getConsumableMessageIds(contact) {
   const candidates = [
     ...(Array.isArray(contact?.records) ? contact.records : []),
     ...state.messages
-  ].filter((message) => (
-    message && (message.direction === "incoming" || message.isRedPoint || message.isRedpoint)
-  ));
+  ].filter(isConsumableRedPointMessage);
 
-  const messageIds = [...new Set(candidates.map(getConsumableMessageId).filter(Boolean))].slice(-10);
-  if (!messageIds.length) {
-    log("consume message skipped", {
-      contactId,
-      reason: "no message id in current contact records"
-    });
-    return;
-  }
-
-  await Promise.allSettled(messageIds.map((msgId) => api("/ChatContent/ConsumeMessage", {
-    contactId,
-    msgId
-  })));
+  return [...new Set(candidates.flatMap(getConsumableMessageIdCandidates).filter(Boolean))].slice(-30);
 }
 
-function getConsumableMessageId(message) {
-  const value = firstValue(
+function isConsumableRedPointMessage(message) {
+  if (!message) return false;
+  const redPoint = Boolean(message.isRedPoint || message.isRedpoint || message.redPoint || message.redpoint);
+  if (!redPoint) return false;
+  const consumeTime = Number(message.consumeTime || message.consumedTime || message.readTime || 0);
+  return !consumeTime;
+}
+
+function getConsumableMessageIdCandidates(message) {
+  const values = [
     message?.msgId,
     message?.messageId,
     message?.chatContentId,
     message?.contentId,
     message?.rawId,
     message?.id
-  );
-  return String(value || "").startsWith("message-") ? "" : value;
+  ];
+  return values.filter((value) => {
+    const text = String(value || "");
+    return text && !text.startsWith("message-") && /^\d+$/.test(text);
+  });
 }
 
 async function selectContactById(id) {
