@@ -30,6 +30,8 @@
 - 好友请求：`/Contact/GetNewFirend`、`/Contact/NewFirendAccept`、`/Contact/NewFirendIgnor`
 - 本地 skill 回复库：`/local/reply-skills`、`/local/reply-skills/learn`
 
+客户头像会同时读取会话列表和 `/Contact/GetContactInfo` 的真实头像字段。左侧会话列表、会话顶部和客户消息气泡共用同一套头像渲染；如果真实头像 URL 加载失败，只回退为文字头像，不使用假图片。
+
 ## 输入区快捷工具栏
 
 聊天输入框上方已按原客户端补齐一排常用按钮：

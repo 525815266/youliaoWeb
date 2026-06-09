@@ -164,6 +164,29 @@ Recent contact-count functions:
 - `state.listServerCounts`
 - `state.listCountSources`
 
+## Contact Avatars
+
+Real captures show customer avatars in both `/Contact/GetContactList` and `/Contact/GetContactInfo` as `avatar` URLs, often `wx.qlogo.cn`.
+
+Important functions:
+
+- `CONTACT_AVATAR_FIELDS`
+- `getAvatarFromRecord`
+- `getContactAvatar`
+- `renderContactAvatar`
+- `handleAvatarImageError`
+- `syncActiveContactFromInfo`
+- `renderActiveAvatar`
+- `renderMessageAvatar`
+
+Rules:
+
+- All customer avatar UI must go through `renderContactAvatar()` or `getContactAvatar()`.
+- Do not hand-roll `contact.avatar ? <img ...>` in new UI.
+- `/Contact/GetContactInfo` can return a fresher avatar than the list; `loadContactInfo()` must sync that avatar into both `state.activeContact` and matching `state.contacts`.
+- If the avatar URL fails to load, fall back to the customer initial. Do not substitute fake profile images.
+- When auto-refresh changes the active contact avatar, re-render message avatars with `renderMessagesPreservingScroll()`, so chat scroll is not pushed to the bottom or reset to the top.
+
 ## Chat
 
 Important functions:

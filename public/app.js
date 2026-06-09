@@ -111,6 +111,19 @@ const CONTACT_LIST_ACCOUNT_ID_PATTERN = /^[1-9]\d{0,9}$/;
 const GLOBAL_SEARCH_PAGE_SIZE = 20;
 const CLIENT_NOTICE_PAGE_SIZE = 20;
 const DATABASE_DELETE_CONFIRM_TEXT = "我已知晓删除的聊天记录无法恢复";
+const CONTACT_AVATAR_FIELDS = [
+  "avatar",
+  "headImg",
+  "headImgUrl",
+  "headimgurl",
+  "headimg",
+  "headUrl",
+  "avatarUrl",
+  "userAvatar",
+  "photo",
+  "portrait",
+  "faceUrl"
+];
 const EMOJI_SHORTCUTS = [
   "[微笑]",
   "[撇嘴]",
@@ -483,6 +496,7 @@ function bindEvents() {
   el.contactList.addEventListener("click", handleContactListClick);
   el.contactList.addEventListener("keydown", handleContactListKeydown);
   el.contactList.addEventListener("contextmenu", handleContactContextMenu);
+  document.addEventListener("error", handleAvatarImageError, true);
   document.addEventListener("click", closeContextMenu);
   document.addEventListener("click", closeClientSettingsMenuOnOutside);
   document.addEventListener("click", closeEmojiOnOutside);
@@ -2218,12 +2232,18 @@ async function loadContacts(options = {}) {
       : Math.max(contacts.length, serverTotal);
     state.listCounts[state.listTab] = state.totalContacts || state.contacts.length;
     state.listUnreadCounts[state.listTab] = sumContactUnread(state.contacts);
+    const previousActiveAvatar = getContactAvatar(state.activeContact);
     state.activeContact = state.contacts.find((contact) => String(getContactId(contact)) === String(selectedId)) || state.contacts[0] || null;
     const activeChanged = String(selectedId || "") !== String(getContactId(state.activeContact) || "");
+    const activeAvatarChanged = !activeChanged && previousActiveAvatar !== getContactAvatar(state.activeContact);
     renderConversationTabs();
     renderContacts();
     renderActive();
-    if (activeChanged || !state.messages.length) renderMessagesFromContactPreview();
+    if (activeChanged || !state.messages.length) {
+      renderMessagesFromContactPreview();
+    } else if (activeAvatarChanged) {
+      renderMessagesPreservingScroll();
+    }
     renderToolContent();
     if (!options.skipCounts) {
       loadContactCounts().catch((error) => log("contact counts failed", { error: error.message }));
@@ -2835,7 +2855,7 @@ function normalizeContact(item, index) {
     time: formatTime(sortTime || rawTime),
     sortTime,
     isTodo: Boolean(item.isTodo),
-    avatar: item.avatar || item.headImgUrl || item.headimgurl || item.headUrl || "",
+    avatar: getAvatarFromRecord(item),
     tags: [
       item.isTodo ? "待办" : "",
       item.isNotice ? "通知" : "",
@@ -2868,9 +2888,7 @@ function renderContacts() {
     const isPinned = Boolean(contact.isTodo);
     const contactId = getContactId(contact);
     const hoverActions = getContactHoverActions(contact, contactId);
-    const avatar = contact.avatar
-      ? `<img class="contact-photo" src="${escapeAttr(normalizeImageUrl(contact.avatar))}" alt="">`
-      : `<span class="contact-avatar">${escapeHtml(getInitial(contact.userNick))}</span>`;
+    const avatar = renderContactAvatar(contact);
     return `
       <div class="contact-card ${active ? "is-active" : ""} ${isPinned ? "is-pinned" : ""} ${unread ? "has-unread" : ""}" data-contact-id="${escapeAttr(contactId)}" role="button" tabindex="0">
         ${avatar}
@@ -3212,6 +3230,76 @@ function getInitial(name) {
   return String(name || "客").trim().slice(0, 1) || "客";
 }
 
+function getAvatarFromRecord(record) {
+  if (!record || typeof record !== "object") return "";
+  for (const field of CONTACT_AVATAR_FIELDS) {
+    const value = record[field];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return normalizeImageUrl(value);
+    }
+  }
+  return "";
+}
+
+function getContactDisplayName(contact, info = getActiveContactInfo(contact)) {
+  return firstValue(
+    contact?.userNick,
+    contact?.nickName,
+    info?.nickName,
+    info?.userNick,
+    contact?.userRemark,
+    info?.userRemark,
+    contact?.remark,
+    info?.remark,
+    contact?.userName,
+    info?.userName,
+    "客户"
+  );
+}
+
+function getContactAvatar(contact, info = getActiveContactInfo(contact)) {
+  return firstValue(getAvatarFromRecord(info), getAvatarFromRecord(contact), "");
+}
+
+function renderContactAvatar(contact, options = {}) {
+  const avatar = getContactAvatar(contact, options.info);
+  const tagName = avatar ? "img" : "span";
+  const id = options.id ? ` id="${escapeAttr(options.id)}"` : "";
+  const className = options.className || "";
+  const classes = ["contact-photo", className].filter(Boolean).join(" ");
+  const fallbackClasses = ["contact-avatar", className].filter(Boolean).join(" ");
+  const fallbackText = options.fallbackText || getInitial(options.fallbackName || getContactDisplayName(contact, options.info));
+  if (tagName === "img") {
+    return `<img${id} class="${escapeAttr(classes)}" src="${escapeAttr(avatar)}" alt="" data-avatar-fallback="${escapeAttr(fallbackText)}" data-avatar-class="${escapeAttr(fallbackClasses)}">`;
+  }
+  return `<span${id} class="${escapeAttr(fallbackClasses)}">${escapeHtml(fallbackText)}</span>`;
+}
+
+function handleAvatarImageError(event) {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement) || !image.dataset.avatarFallback) return;
+  const fallback = document.createElement("span");
+  fallback.className = image.dataset.avatarClass || image.className.replace("contact-photo", "contact-avatar");
+  fallback.textContent = image.dataset.avatarFallback || "客";
+  if (image.id) fallback.id = image.id;
+  image.replaceWith(fallback);
+  if (fallback.id === "activeAvatar") el.activeAvatar = fallback;
+}
+
+function syncActiveContactFromInfo(info) {
+  const contactId = getContactId(state.activeContact);
+  if (!contactId || !info) return false;
+  const avatar = getContactAvatar(state.activeContact, info);
+  if (!avatar || avatar === state.activeContact.avatar) return false;
+
+  const patch = { avatar };
+  state.activeContact = { ...state.activeContact, ...patch };
+  state.contacts = state.contacts.map((contact) => (
+    String(getContactId(contact)) === String(contactId) ? { ...contact, ...patch } : contact
+  ));
+  return true;
+}
+
 function getContactId(contact) {
   return contact && (contact.id || contact.contactId || contact.userId || contact.contactID);
 }
@@ -3288,9 +3376,10 @@ function renderActive() {
 }
 
 function renderActiveAvatar(contact) {
-  const html = contact.avatar
-    ? `<img id="activeAvatar" class="contact-photo active-photo" src="${escapeAttr(normalizeImageUrl(contact.avatar))}" alt="">`
-    : `<span id="activeAvatar" class="contact-avatar">${escapeHtml(getInitial(contact.userNick))}</span>`;
+  const html = renderContactAvatar(contact, {
+    id: "activeAvatar",
+    className: "active-photo"
+  });
   if (el.activeAvatar.outerHTML !== html) {
     el.activeAvatar.outerHTML = html;
     el.activeAvatar = $("activeAvatar");
@@ -3706,6 +3795,12 @@ function restoreScrollTop(element, previousScrollTop, options = {}) {
   });
 }
 
+function renderMessagesPreservingScroll() {
+  const previousScrollTop = el.messageList.scrollTop;
+  renderMessages("none");
+  restoreScrollTop(el.messageList, previousScrollTop, { watchImages: true });
+}
+
 function buildMessageKey(message, index, stableId = "") {
   const primary = firstValue(
     message.msgId,
@@ -3794,10 +3889,8 @@ function renderSystemNotice(message) {
 }
 
 function renderMessageAvatar(message, isOutgoing) {
-  if (!isOutgoing && state.activeContact?.avatar) {
-    return `<img class="contact-photo" src="${escapeAttr(normalizeImageUrl(state.activeContact.avatar))}" alt="">`;
-  }
-  const avatarText = message.direction === "ai" ? "AI" : isOutgoing ? "服" : getInitial(state.activeContact?.userNick);
+  if (!isOutgoing) return renderContactAvatar(state.activeContact);
+  const avatarText = message.direction === "ai" ? "AI" : "服";
   return `<span class="contact-avatar">${escapeHtml(avatarText)}</span>`;
 }
 
@@ -6650,6 +6743,11 @@ async function loadContactInfo() {
     const payload = await api("/Contact/GetContactInfo", { contactId });
     state.contactInfo = getData(payload) || null;
     state.contactInfoContactId = contactId;
+    const avatarChanged = syncActiveContactFromInfo(state.contactInfo);
+    if (avatarChanged) {
+      renderContacts();
+      renderMessagesPreservingScroll();
+    }
     renderActive();
     renderToolContent();
   } catch (error) {

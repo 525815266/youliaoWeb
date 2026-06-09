@@ -42,7 +42,12 @@
 36. [2026-06-08 聊天消息卡片分类渲染](#36-2026-06-08-聊天消息卡片分类渲染)
 37. [2026-06-08 Skill 优化回写与命中态排序](#37-2026-06-08-skill-优化回写与命中态排序)
 38. [2026-06-08 知名网站链接卡片 Logo 兜底](#38-2026-06-08-知名网站链接卡片-logo-兜底)
-39. [2026-06-08 Skill 图片回写、混合粘贴与发送防重复](#39-2026-06-08-skill-图片回写混合粘贴与发送防重复)
+39. [2026-06-08 原生客户端右上角功能区](#39-2026-06-08-原生客户端右上角功能区)
+40. [2026-06-08 Skill 图片回写、混合粘贴与发送防重复](#40-2026-06-08-skill-图片回写混合粘贴与发送防重复)
+41. [2026-06-09 数据库管理删除聊天记录](#41-2026-06-09-数据库管理删除聊天记录)
+42. [2026-06-09 应用深链长链接卡片](#42-2026-06-09-应用深链长链接卡片)
+43. [2026-06-09 小程序卡片微信式大封面](#43-2026-06-09-小程序卡片微信式大封面)
+44. [2026-06-09 客户头像同步](#44-2026-06-09-客户头像同步)
 
 ## 1. 项目目标
 
@@ -2152,3 +2157,33 @@ ORDER BY COUNT(*) DESC;
 - 小程序 `contentType=6` 必须优先走 `buildMessageMiniProgramCard()`，不要交给普通链接卡片。
 - 真实封面永远优先；只有没有 `miniProImg/miniImgUrl/thumbUrl/cardImg` 等真实字段时才用本地占位 SVG。
 - 新增小程序字段时优先扩展 `normalizeMessage()`、`buildMessageMiniProgramCard()` 和 `parseMessagePayload()`，不要在 render 里临时拆字符串。
+
+## 44. 2026-06-09 客户头像同步
+
+用户反馈：
+
+- 左侧会话列表头像和中间会话框顶部头像不同步。
+- 同一个联系人进入聊天后，消息气泡里的客户头像也可能和左侧列表不一致。
+
+真实依据：
+
+- `logs/api-capture.ndjson` 的真实 `/Contact/GetContactList` 返回联系人字段 `avatar`，例如 Boom 和其他客户的 `wx.qlogo.cn` 头像。
+- 真实 `/Contact/GetContactInfo` 也返回 `avatar`，有时详情接口的头像比列表接口更新。
+
+已修改：
+
+- `public/app.js`
+  - 新增 `CONTACT_AVATAR_FIELDS`，统一兼容 `avatar/headImg/headImgUrl/headimgurl/headimg/headUrl/avatarUrl/userAvatar/photo/portrait/faceUrl` 等真实字段。
+  - `normalizeContact()` 改为通过 `getAvatarFromRecord()` 写入 `contact.avatar`。
+  - 新增 `getContactAvatar()`，优先使用当前联系人详情 `GetContactInfo` 返回的真实头像，再回退联系人列表头像。
+  - 新增 `renderContactAvatar()`，左侧列表、会话顶部、客户消息气泡都走同一套 `<img>` 或文字头像渲染。
+  - 新增 `handleAvatarImageError()`，真实头像 URL 加载失败时回退为文字头像，避免浏览器破图。
+  - `loadContactInfo()` 在详情接口返回后调用 `syncActiveContactFromInfo()`，把详情头像同步回 `state.activeContact` 和 `state.contacts`，再刷新列表、顶部和消息头像。
+  - 新增 `renderMessagesPreservingScroll()`；`loadContacts()` 自动刷新同一联系人但头像变化时，只刷新消息头像并恢复原滚动位置。
+
+维护规则：
+
+- 后续凡是展示客户头像，必须调用 `renderContactAvatar()` 或 `getContactAvatar()`，不要重新拼 `contact.avatar ? <img ...>`。
+- 不伪造头像。没有真实头像或真实 URL 加载失败时，只显示客户昵称/备注首字文字头像。
+- 详情接口头像优先于列表头像，但必须同步回当前会话和列表状态，避免三个区域各自显示不同头像。
+- 刷新头像时不要调用会滚到底部的渲染，必须保留 `messageList.scrollTop`，避免客服正在翻历史时被打断。
