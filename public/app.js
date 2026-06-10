@@ -3066,6 +3066,10 @@ function normalizeContact(item, index) {
     ? item.records.map((record, recordIndex) => normalizeMessage({ contactId: id, ...record }, recordIndex))
     : [];
   const latestRecordTime = records.reduce((max, record) => Math.max(max, Number(record.sortTime || 0)), 0);
+  const lastIncomingTimeFromRecords = records.reduce((max, record) => {
+    if (!record || record.direction === "outgoing" || record.direction === "ai") return max;
+    return Math.max(max, Number(record.sortTime || 0));
+  }, 0);
   const rawTime = firstValue(
     item.updateTime,
     item.lastTime,
@@ -3092,6 +3096,10 @@ function normalizeContact(item, index) {
     unread: item.unRead ?? item.redDot ?? item.unReadCount ?? item.unread ?? 0,
     time: formatTime(sortTime || rawTime),
     sortTime,
+    lastIncomingTime: Math.max(
+      lastIncomingTimeFromRecords,
+      getTimeValue(firstValue(item.lastReceiveTime, item.receiveTime, item.lastUserMsgTime, item.lastReceiveDate, 0))
+    ),
     isTodo: Boolean(item.isTodo),
     avatar: getAvatarFromRecord(item),
     tags: [
@@ -3210,10 +3218,16 @@ function applyReadStateToContact(contact) {
 
   const contactSortTime = Number(contact.sortTime || 0);
   const readAt = Number(readState.readAt || 0);
-  const readSortTime = Number(readState.sortTime || 0);
   const expiresAt = Number(readState.expiresAt || 0);
+  const lastIncomingTime = Number(contact.lastIncomingTime || 0);
+  const lastIncomingReadTime = Number(readState.lastIncomingTime || 0);
   if (!expiresAt || expiresAt <= Date.now()) return contact;
-  const shouldKeepRead = readAt && (!contactSortTime || contactSortTime <= readSortTime || contactSortTime <= readAt);
+  const shouldKeepRead = readAt && (
+    !lastIncomingTime ||
+    lastIncomingTime <= readAt ||
+    lastIncomingTime <= lastIncomingReadTime ||
+    contactSortTime <= readAt
+  );
   if (!shouldKeepRead) return contact;
 
   return {
@@ -3230,8 +3244,13 @@ function markContactRead(contact, options = {}) {
   if (!key) return;
 
   const readAt = Date.now();
-  const sortTime = Math.max(Number(contact?.sortTime || 0), readAt);
-  state.readContactState[key] = { readAt, sortTime, expiresAt: readAt + READ_STATE_GRACE_MS };
+  const lastIncomingTime = getContactLastIncomingTime(contact);
+  state.readContactState[key] = {
+    readAt,
+    sortTime: Math.max(Number(contact?.sortTime || 0), readAt),
+    lastIncomingTime,
+    expiresAt: readAt + READ_STATE_GRACE_MS
+  };
   persistReadContactState();
 
   state.contacts = state.contacts.map((item) => (
@@ -3261,6 +3280,7 @@ function markVisibleContactsRead() {
     state.readContactState[key] = {
       readAt,
       sortTime: Math.max(Number(contact.sortTime || 0), readAt),
+      lastIncomingTime: getContactLastIncomingTime(contact),
       expiresAt: readAt + READ_STATE_GRACE_MS
     };
     return applyReadStateToContact({ ...contact, unread: 0, unRead: 0, redDot: 0, unReadCount: 0 });
@@ -3278,6 +3298,7 @@ async function syncConsumedMessages(contact) {
   if (!contactId) return;
 
   const result = await consumeMessageWithFallback(contactId, 0);
+  refreshLocalReadState(contactId);
   log("consume message synced", {
     contactId,
     msgId: 0,
@@ -3288,6 +3309,7 @@ async function syncConsumedMessages(contact) {
 
 async function syncAllConsumedMessages() {
   const result = await consumeMessageWithFallback(0, 0);
+  state.contacts.forEach((contact) => refreshLocalReadState(getContactId(contact)));
   log("consume all messages synced", {
     contactId: 0,
     msgId: 0,
@@ -3301,6 +3323,36 @@ async function syncConsumedMessageIds(contact) {
   if (!contactId) return;
 
   await consumeMessageWithFallback(contactId, 0);
+  refreshLocalReadState(contactId);
+}
+
+function getContactLastIncomingTime(contact) {
+  const records = Array.isArray(contact?.records) ? contact.records : [];
+  const latestIncomingRecordTime = records.reduce((max, record) => {
+    if (!record || record.direction === "outgoing" || record.direction === "ai") return max;
+    return Math.max(max, Number(record.sortTime || 0));
+  }, 0);
+  return Math.max(
+    latestIncomingRecordTime,
+    Number(contact?.lastIncomingTime || 0),
+    Number(contact?.latestIncomingTime || 0)
+  );
+}
+
+function refreshLocalReadState(contactId) {
+  const key = String(contactId || "");
+  if (!key || !state.readContactState[key]) return;
+  const contact = state.contacts.find((item) => String(getContactId(item)) === key) || state.activeContact;
+  if (!contact) return;
+  const now = Date.now();
+  state.readContactState[key] = {
+    ...state.readContactState[key],
+    readAt: now,
+    sortTime: Math.max(Number(contact.sortTime || 0), now),
+    lastIncomingTime: getContactLastIncomingTime(contact),
+    expiresAt: now + READ_STATE_GRACE_MS
+  };
+  persistReadContactState();
 }
 
 async function consumeMessageWithFallback(contactId, msgId = 0) {
@@ -5227,7 +5279,10 @@ async function sendText() {
       clearDraftImages();
       clearAiSuggestion();
       touchActiveContact(content || (sentImageUrls.length ? "[image]" : ""));
+      markContactRead(state.activeContact);
       await loadMessages(1, "replace", { forceBottom: true });
+      await syncConsumedMessages(state.activeContact);
+      await loadContacts({ preserveScroll: true, skipCounts: true });
       toast(images.length ? "文字和图片已提交到悠聊服务。" : "消息已提交到悠聊服务。");
     } catch (error) {
       if (textSubmitted) el.replyText.value = "";
@@ -5373,7 +5428,10 @@ async function sendImageFile(file, options = {}) {
   await sendChatContent({ content: imageUrl, contentType: file.type === "image/gif" ? 4 : 1 });
   if (!options.silent) {
     touchActiveContact("[image]");
+    markContactRead(state.activeContact);
     await loadMessages(1, "replace", { forceBottom: true });
+    await syncConsumedMessages(state.activeContact);
+    await loadContacts({ preserveScroll: true, skipCounts: true });
     toast("图片已提交到悠聊服务。");
   }
   return imageUrl;

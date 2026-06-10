@@ -2520,3 +2520,23 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
 - 不要再把单条长 `msgId` HTTP 消费作为主路径。之前 probe 过部分长 id 会返回服务端异常。
 - `accountId` 必须是客服短 id，例如当前 `2`，不是登录名 `Boom666`，也不是后台长账号号 `1556504756803862529`。
 - 如果官方客户端和 Web 同时数量异常，仍先跑 `npm run fnos:health` 排除飞牛服务端读库问题。
+
+2026-06-10 追加修复：
+
+- 用户反馈“红点已同步到 Web，但回复完消息后又出现红点”。
+- 根因不是 `ConsumeMessage` 没调用，而是前端本地已读保护之前依赖 `contact.sortTime`。
+- 客服发送消息后，`touchActiveContact()` 会把当前会话 `sortTime` 更新成最新，导致本地已读保护立即失效；随后自动刷新或发送后的联系人刷新把服务端旧 `unRead` 又写回来了。
+- 现已改为按“最后一条客户来消息时间”保护已读：
+  - `normalizeContact()` 增加 `lastIncomingTime`。
+  - `applyReadStateToContact()` 改为比较 `lastIncomingTime`，不再因为客服自己的回复把红点保护冲掉。
+  - `markContactRead()` 和 `markVisibleContactsRead()` 会记录 `lastIncomingTime`。
+  - `syncConsumedMessages()` 成功后会刷新本地已读窗口。
+  - `sendText()`、`sendImageFile()` 成功后会顺序执行：
+    1. `markContactRead(state.activeContact)`
+    2. `loadMessages(1, "replace")`
+    3. `syncConsumedMessages(state.activeContact)`
+    4. `loadContacts({ preserveScroll: true, skipCounts: true })`
+- 后续如果再出现“回复后红点回弹”，优先检查：
+  - 服务端联系人接口是否仍返回旧 `unRead`
+  - 当前联系人的 `lastIncomingTime` 是否被正确提取
+  - 发送成功后的 `syncConsumedMessages()` 是否报错

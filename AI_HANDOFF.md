@@ -160,6 +160,7 @@ Read-state SignalR facts:
 - Current verified short account id for `Boom666 / 客服-王` is `2`.
 - Do not use username `Boom666` or merchant long id `1556504756803862529` for SignalR registration.
 - Verified on 2026-06-09: `/local/signalr/consume` for `contactId=7052` returned `source=node-signalr`, then `/Contact/GetContactList(accountId=2)` showed `unRead: 0` after previously being `1`.
+- 2026-06-10 follow-up fix: do not tie local read-state protection only to `contact.sortTime`. A customer-service reply updates `sortTime` and can make a just-read conversation look unread again after refresh. Use last incoming customer-message time (`lastIncomingTime`) as the main guard, and after successful send run read sync + contact refresh.
 
 Clear-list behavior:
 
