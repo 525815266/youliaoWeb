@@ -1062,3 +1062,120 @@ ALTER TABLE `ChatContent_2026_06_08`
   - inspect `renderEmojiPopover()`
   - inspect `linkifyMessageText()`
   - inspect `.client-emoji-icon`, `.emoji-popover`, `.message-emoji-icon`
+
+## 2026-06-11 Skill Panel + Platform Classification Follow-up
+
+- Latest user request after the toolbar/emoji pass:
+  1. right-side `skill 回复` panel lost usable scroll
+  2. `skill` needed real platform-aware and intent-aware grouping, especially from order/platform cues
+  3. manual reply learning had to include “adopted then edited before send” flows
+
+### Files changed
+
+- `C:\youchat-dev-web\public\app.js`
+- `C:\youchat-dev-web\public\styles.css`
+- `C:\youchat-dev-web\server.js`
+
+### Right-side skill panel layout rule
+
+- `toolContent` now has a third mode:
+  - `is-history-tool`
+  - `is-compact-tool`
+  - `is-skill-tool`
+- `skill` is no longer routed through the compact tool mode.
+- Layout behavior:
+  - `history`: full-height deep scroll
+  - `skill`: full-height internal scroll inside `.skill-panel-scroll`
+  - others: compact content height
+- If scroll breaks again, inspect:
+  - `.tool-content.is-skill-tool`
+  - `.skill-section`
+  - `.skill-panel-scroll`
+
+### Skill categorization now active
+
+- `state.skillCategory` is now real UI state, not dead state.
+- Right toolbar now renders category chips for:
+  - `当前匹配`
+  - `全部`
+  - platform groups such as `淘宝/天猫`, `京东`, `拼多多`, `唯品会`, `美团`, `饿了么`, `抖音`, `快手`
+  - intent groups such as `订单查不到`, `下单后没提示`, `绑定失败`, `提现相关`, `返利状态`, `转人工`, `通用`
+  - `其他`
+- `filterReplySkills()` now returns grouped data, not a flat array.
+- `renderSkillReplyPanel()` now renders:
+  - category chips
+  - category summary
+  - grouped skill sections with headers
+
+### Platform / intent inference
+
+- `public/app.js` added:
+  - `ORDER_TYPE_PLATFORM_KEYS`
+  - `SKILL_PLATFORM_LOOKUP`
+  - `SKILL_INTENT_LOOKUP`
+  - `normalizeOrderNo()`
+  - `collectSkillContextMeta()`
+  - `detectPlatformOrderNo()`
+  - `detectOrderPlatformFromState()`
+  - `detectSkillIntentKey()`
+  - `resolveSkillPlatformKey()`
+  - `resolveSkillIntentKey()`
+- `normalizeOrder()` now stores `platformKey` per order record.
+- `scoreReplySkill()` now scores by:
+  - keyword hits
+  - sample hits
+  - platform consistency
+  - intent consistency
+  - order number match
+  - manual override weight
+
+### Learning behavior changed
+
+- Old bad rule:
+  - `learnFromManualReply()` used to return early when `state.lastSuggestionUsed` was true.
+  - This blocked learning for the exact case the user cares about: “采用后我又改了一下才发”.
+- New rule:
+  - skip learning only when the final reply is effectively identical to the adopted suggestion
+  - learn when the operator edits text, swaps wording, trims sensitive content, or keeps images but rewrites text
+- Added:
+  - `lastAppliedSuggestionFingerprint`
+  - `lastAppliedSuggestionSkillId`
+  - `buildSuggestionFingerprint()`
+  - `isCurrentReplyEffectivelySameAsAppliedSuggestion()`
+  - `resolveManualReplySkillTarget()`
+
+### Important behavior detail
+
+- Manual sends now prefer to learn back into the adopted skill when a suggestion was used and then edited.
+- Without this, learned data would fork into noisy unrelated `learned-*` entries.
+- `findLearnedSkillForPrompt()` now constrains matches by inferred platform/intent before keyword fallback.
+
+### Persistence rule
+
+- `server.js / normalizeLearnedSkill()` now preserves:
+  - `platformKey`
+  - `platformKeys`
+  - `intentKey`
+  - `intentKeys`
+- If these fields disappear after reload, inspect that function first.
+
+### Built-in defaults
+
+- Built-in default skills now include baseline `intentKey` values:
+  - `order-redpacket-not-bound -> order_missing`
+  - `alipay-bind-failed -> bind_failed`
+  - `withdraw-success-no-reply -> withdraw_query`
+  - `system-conversation-event -> general`
+
+### Verification
+
+- `npm run check` passed after the change.
+
+### Do not regress
+
+- Do not push `skill` back into `is-compact-tool`.
+- Do not revert learning logic to “if suggestion was adopted, skip learning entirely”.
+- If future work expands platforms, update all of:
+  - `SKILL_PLATFORM_DEFS`
+  - `ORDER_TYPE_PLATFORM_KEYS`
+  - built-in default skills

@@ -2598,3 +2598,127 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
   - 不要退回纯文字 emoji 按钮。
   - 任何新增 emoji 优先从官方 bundle 抽 token/style/坐标，不要自己编 sprite 坐标。
   - 如果后续用户继续要求“表情更全”，应优先补 `EMOJI_DEFS`，不要改消息发送 token 本身。
+
+2026-06-11 skill 分类与学习补强：
+
+- 用户新反馈两类问题：
+  1. 右侧 `skill 回复` 需要滚动时反而没有滚动条。
+  2. `skill` 只能对订单号做粗匹配，不能依据淘宝/京东/拼多多等平台及提现/绑定失败/下单后没提示等意图做更智能的分类与学习。
+
+- 本次修改文件：
+  - `public/app.js`
+  - `public/styles.css`
+  - `server.js`
+
+- 右侧 `skill` 面板布局修复：
+  - `toolContent` 新增 `is-skill-tool` 模式。
+  - `setToolTab(tab)` 与 `renderToolContent()` 中：
+    - `history` 仍用 `is-history-tool`
+    - `skill` 改为 `is-skill-tool`
+    - 其他页签继续走 `is-compact-tool`
+  - `.skill-section` 改成真正的纵向弹性容器。
+  - 新增 `.skill-panel-scroll` 作为内部滚动区，恢复右侧 skill 列表的滚动条，而不是依赖外层容器。
+  - 新增：
+    - `.skill-tabs`
+    - `.skill-group`
+    - `.skill-group-header`
+    - `.skill-meta-tags`
+  - 现在 `skill` 页签可滚动，且不会再把内容挤成一整块无滚动长板。
+
+- `skill` 分类系统已正式启用：
+  - 之前只有 `state.skillCategory` 和平台/意图常量，未真正接入 UI。
+  - 现已接入：
+    - `当前匹配`
+    - `全部`
+    - 平台分类：`淘宝/天猫`、`京东`、`拼多多`、`唯品会`、`美团`、`饿了么`、`抖音`、`快手`
+    - 意图分类：`订单查不到`、`下单后没提示`、`绑定失败`、`提现相关`、`返利状态`、`转人工`、`通用`
+    - `其他`
+  - 右侧 skill 面板现在按分组渲染，不再只是一个平铺列表。
+  - `当前匹配` 会优先显示：
+    - 当前命中的 skill
+    - 与当前命中相同平台的 skill
+    - 与当前命中相同意图的 skill
+
+- 平台识别逻辑：
+  - `public/app.js` 新增：
+    - `ORDER_TYPE_PLATFORM_KEYS`
+    - `SKILL_PLATFORM_LOOKUP`
+    - `SKILL_INTENT_LOOKUP`
+    - `normalizeOrderNo()`
+    - `collectSkillContextMeta()`
+    - `detectPlatformOrderNo()`
+    - `detectOrderPlatformFromState()`
+    - `detectSkillIntentKey()`
+    - `resolveSkillPlatformKey()`
+    - `resolveSkillIntentKey()`
+  - 订单平台来源优先级：
+    1. 当前消息上下文里能识别出的订单号格式
+    2. 右侧订单接口当前筛选/当前订单数据
+    3. skill 本身历史标签
+  - `normalizeOrder()` 现已给订单补 `platformKey`，不再只保留 `platformName`。
+
+- `skill` 匹配排序增强：
+  - `scoreReplySkill()` 不再只看关键词命中。
+  - 现在会综合：
+    - 关键词/样例命中
+    - 平台一致性
+    - 意图一致性
+    - 当前上下文中的订单号
+    - 手工纠正次数
+    - 命中 skill 优先级
+  - `buildSkillSuggestion()` 已把以下信息带到 suggestion：
+    - `platformKey`
+    - `intentKey`
+    - `matchedOrderNo`
+    - `matchKeywords`
+
+- 学习逻辑修复重点：
+  - 之前 `learnFromManualReply()` 只要发现 `state.lastSuggestionUsed === true` 就直接不学。
+  - 这会误伤“采用后再改一下再发”的真实客服习惯。
+  - 现已改成：
+    - 只有“当前回复与刚采用的建议完全相同”时才跳过学习。
+    - 采用后如果客服改了文字、替换了敏感词、保留图片重新发，都会学习。
+  - 为此新增：
+    - `lastAppliedSuggestionFingerprint`
+    - `lastAppliedSuggestionSkillId`
+    - `buildSuggestionFingerprint()`
+    - `isCurrentReplyEffectivelySameAsAppliedSuggestion()`
+    - `resolveManualReplySkillTarget()`
+  - 现在人工发送时会优先学习回“刚采用并修改过”的那条 skill，而不是新建一个乱的 learned skill。
+
+- 学习后的结构化沉淀：
+  - 新学到的 skill 或修正过的 skill 会一起保存：
+    - `platformKey`
+    - `intentKey`
+  - `findLearnedSkillForPrompt()` 现已先用平台/意图做约束，再匹配关键词，避免不同平台订单号混进同一条 skill。
+  - `learnMatchedSkillOverride()` 写回时，会继承或补齐当前平台/意图标签。
+
+- 服务端持久化修复：
+  - `server.js / normalizeLearnedSkill()` 新增保留字段：
+    - `platformKey`
+    - `platformKeys`
+    - `intentKey`
+    - `intentKeys`
+  - 否则前端学出来的结构化标签刷新后会丢失。
+
+- 内置 skill 补分类：
+  - `defaultReplySkills()` 中内置 skill 已补：
+    - `order-redpacket-not-bound -> intentKey: order_missing`
+    - `alipay-bind-failed -> intentKey: bind_failed`
+    - `withdraw-success-no-reply -> intentKey: withdraw_query`
+    - `system-conversation-event -> intentKey: general`
+
+- 验证结果：
+  - `npm run check` 通过。
+
+- 后续继续改这块时的注意事项：
+  - 不要再把 `skill` tab 塞回 `is-compact-tool`，否则滚动区又会退化。
+  - 后续若要做更多平台区分，优先扩：
+    - `SKILL_PLATFORM_DEFS`
+    - `ORDER_TYPE_PLATFORM_KEYS`
+    - `defaultReplySkills()`
+  - 若要让 `当前匹配` 更智能，优先改：
+    - `collectSkillContextMeta()`
+    - `scoreReplySkill()`
+    - `buildSkillGroupScore()`
+  - 学习逻辑最容易回退的坑是：不要恢复成“采用过推荐就完全不学”。

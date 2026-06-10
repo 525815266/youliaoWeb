@@ -114,9 +114,19 @@ const SKILL_INTENT_DEFS = [
     keywords: ["查不到", "查不出", "没返利", "无返利", "没成功", "订单没有", "不提示", "没绑定", "怎么没绑定"]
   },
   {
+    key: "order_waiting",
+    label: "下单后没提示",
+    keywords: ["还没提示", "怎么还没提示", "还没显示", "怎么还没显示", "没等到订单", "还没跟单", "查了没有", "订单还没出", "怎么还没出"]
+  },
+  {
     key: "bind_failed",
     label: "绑定失败",
     keywords: ["绑定失败", "绑定不了", "怎么绑定", "未绑定", "绑定方法", "支付宝账号", "绑定支付宝"]
+  },
+  {
+    key: "withdraw_query",
+    label: "提现相关",
+    keywords: ["提现", "提取", "怎么提现", "可以提现吗", "余额提现", "提现入口", "提现多久到账", "提现审核", "提现到支付宝"]
   },
   {
     key: "rebate_status",
@@ -134,6 +144,18 @@ const SKILL_INTENT_DEFS = [
     keywords: []
   }
 ];
+const ORDER_TYPE_PLATFORM_KEYS = {
+  0: "taobao",
+  1: "jd",
+  2: "pdd",
+  3: "vip",
+  4: "meituan",
+  5: "eleme",
+  11: "douyin",
+  12: "kuaishou"
+};
+const SKILL_PLATFORM_LOOKUP = new Map(SKILL_PLATFORM_DEFS.map((item) => [item.key, item]));
+const SKILL_INTENT_LOOKUP = new Map(SKILL_INTENT_DEFS.map((item) => [item.key, item]));
 
 const DEFAULT_FAQ_CATEGORIES = [
   { value: "", label: "常用" },
@@ -352,6 +374,8 @@ const state = {
   aiAutoSuggestInFlightKey: "",
   lastAutoAiSuggestionKey: "",
   lastSuggestionUsed: false,
+  lastAppliedSuggestionFingerprint: "",
+  lastAppliedSuggestionSkillId: "",
   lastSkillPromptKey: "",
   replySkills: [],
   replySkillsLoading: false,
@@ -5449,7 +5473,7 @@ async function sendText() {
     const content = el.replyText.value.trim();
     const contactId = getContactId(state.activeContact);
     const images = [...state.draftImages];
-    const matchedSkillBeforeSend = !state.lastSuggestionUsed ? buildSkillSuggestion() : null;
+    const matchedSkillBeforeSend = resolveManualReplySkillTarget();
     if (!contactId || (!content && !images.length)) {
       toast("请先选择会话，并输入回复内容或粘贴图片。", true);
       return;
@@ -5499,6 +5523,18 @@ async function sendText() {
       toast(`发送失败：${error.message}`, true);
     }
   });
+}
+
+function resolveManualReplySkillTarget() {
+  if (state.lastSuggestionUsed && state.aiSuggestion?.skillId) return state.aiSuggestion;
+  if (state.lastAppliedSuggestionSkillId) {
+    return {
+      skillId: state.lastAppliedSuggestionSkillId,
+      platformKey: state.aiSuggestion?.platformKey || "",
+      intentKey: state.aiSuggestion?.intentKey || ""
+    };
+  }
+  return buildSkillSuggestion();
 }
 
 async function sendChatContent({ content, contentType = 0 }) {
@@ -6826,7 +6862,11 @@ function buildSkillSuggestion() {
       noReply: true,
       reason: skill.fallback || "这类消息通常不需要回复。",
       score: match.score,
-      promptKey: latest ? getMessageKey(latest, 0) : ""
+      promptKey: latest ? getMessageKey(latest, 0) : "",
+      platformKey: match.platformKey || skill.platformKey || "",
+      intentKey: match.intentKey || skill.intentKey || "",
+      matchedOrderNo: match.matchedOrderNo || "",
+      matchKeywords: match.matchKeywords || []
     };
   }
 
@@ -6839,7 +6879,11 @@ function buildSkillSuggestion() {
     steps: getSkillSteps(skill),
     score: match.score,
     contactUrl: skill.contactUrl || ONLINE_SERVICE_URL,
-    promptKey: latest ? getMessageKey(latest, 0) : ""
+    promptKey: latest ? getMessageKey(latest, 0) : "",
+    platformKey: match.platformKey || skill.platformKey || "",
+    intentKey: match.intentKey || skill.intentKey || "",
+    matchedOrderNo: match.matchedOrderNo || "",
+    matchKeywords: match.matchKeywords || []
   };
 }
 
@@ -6854,20 +6898,27 @@ function matchReplySkill() {
 function matchReplySkillForMessage(latest, options = {}) {
   const context = getSkillMatchText(latest);
   const normalized = normalizeForMatch(context);
+  const contextMeta = collectSkillContextMeta(latest, context);
   const matches = state.replySkills
     .filter((skill) => skill.enabled !== false && (!options.onlyNoReply || skill.noReply))
-    .map((skill) => ({ skill, score: scoreReplySkill(skill, normalized, latest) }))
+    .map((skill) => ({
+      skill,
+      ...scoreReplySkill(skill, normalized, latest, contextMeta)
+    }))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score || Number(b.skill.priority || 0) - Number(a.skill.priority || 0));
   return matches[0] ? { ...matches[0], latest } : null;
 }
 
-function scoreReplySkill(skill, normalizedContext, triggerMessage) {
+function scoreReplySkill(skill, normalizedContext, triggerMessage, contextMeta = collectSkillContextMeta(triggerMessage, normalizedContext)) {
   const negatives = Array.isArray(skill.negativeKeywords) ? skill.negativeKeywords : [];
-  if (negatives.some((keyword) => keyword && normalizedContext.includes(normalizeForMatch(keyword)))) return 0;
+  if (negatives.some((keyword) => keyword && normalizedContext.includes(normalizeForMatch(keyword)))) {
+    return { score: 0, platformKey: "", intentKey: "", matchedOrderNo: "", matchKeywords: [] };
+  }
 
   const keywords = Array.isArray(skill.keywords) ? skill.keywords : [];
   const samples = Array.isArray(skill.samples) ? skill.samples : [];
+  const matchKeywords = [];
   let score = Number(skill.priority || 0) / 10;
   let hits = 0;
 
@@ -6877,21 +6928,221 @@ function scoreReplySkill(skill, normalizedContext, triggerMessage) {
     if (normalizedContext.includes(normalized)) {
       hits += 1;
       score += Math.min(20, normalized.length * 1.5);
+      if (!matchKeywords.includes(keyword)) matchKeywords.push(keyword);
     }
   });
 
   samples.forEach((sample) => {
     const normalized = normalizeForMatch(sample);
     if (!normalized) return;
-    if (normalizedContext.includes(normalized)) score += 8;
+    if (normalizedContext.includes(normalized)) {
+      score += 8;
+      if (!matchKeywords.includes(sample)) matchKeywords.push(sample);
+    }
   });
 
-  if (skill.systemOnly && !triggerMessage?.isSystemNotice) return 0;
-  return hits ? score : 0;
+  const resolvedPlatformKey = resolveSkillPlatformKey(skill, contextMeta);
+  const resolvedIntentKey = resolveSkillIntentKey(skill, contextMeta);
+
+  if (skill.systemOnly && !triggerMessage?.isSystemNotice) {
+    return { score: 0, platformKey: resolvedPlatformKey, intentKey: resolvedIntentKey, matchedOrderNo: contextMeta.orderNo || "", matchKeywords };
+  }
+
+  if (resolvedPlatformKey) {
+    if (skill.platformKey && skill.platformKey === resolvedPlatformKey) {
+      score += 26;
+      hits += 1;
+    } else if (Array.isArray(skill.platformKeys) && skill.platformKeys.includes(resolvedPlatformKey)) {
+      score += 20;
+      hits += 1;
+    } else if (!skill.platformKey && !Array.isArray(skill.platformKeys)) {
+      score += 4;
+    } else {
+      score = Math.max(0, score - 18);
+    }
+  }
+
+  if (resolvedIntentKey) {
+    if (skill.intentKey && skill.intentKey === resolvedIntentKey) {
+      score += 22;
+      hits += 1;
+    } else if (Array.isArray(skill.intentKeys) && skill.intentKeys.includes(resolvedIntentKey)) {
+      score += 16;
+      hits += 1;
+    } else if (!skill.intentKey && !Array.isArray(skill.intentKeys)) {
+      score += 3;
+    } else {
+      score = Math.max(0, score - 12);
+    }
+  }
+
+  if (contextMeta.orderNo) {
+    const skillHaystack = normalizeForMatch([
+      skill.title,
+      skill.platformKey,
+      skill.intentKey,
+      ...(skill.keywords || []),
+      ...(skill.samples || [])
+    ].join(" "));
+    if (skillHaystack.includes(normalizeForMatch(contextMeta.orderNo))) {
+      score += 18;
+      hits += 1;
+      if (!matchKeywords.includes(contextMeta.orderNo)) matchKeywords.push(contextMeta.orderNo);
+    }
+  }
+
+  return {
+    score: hits ? score : 0,
+    platformKey: resolvedPlatformKey,
+    intentKey: resolvedIntentKey,
+    matchedOrderNo: contextMeta.orderNo || "",
+    matchKeywords
+  };
 }
 
 function normalizeForMatch(value) {
   return String(value || "").toLowerCase().replace(/\s+/g, "");
+}
+
+function normalizeOrderNo(value) {
+  return String(value || "").trim().replace(/[^\dA-Za-z-]/g, "");
+}
+
+function getOrderPlatformKey(orderType) {
+  return ORDER_TYPE_PLATFORM_KEYS[Number(orderType)] || "";
+}
+
+function getPlatformDefByKey(key) {
+  return key ? SKILL_PLATFORM_LOOKUP.get(String(key)) || null : null;
+}
+
+function getIntentDefByKey(key) {
+  return key ? SKILL_INTENT_LOOKUP.get(String(key)) || null : null;
+}
+
+function getPlatformLabelByKey(key) {
+  return getPlatformDefByKey(key)?.label || "";
+}
+
+function getIntentLabelByKey(key) {
+  return getIntentDefByKey(key)?.label || "";
+}
+
+function getSkillPlatformKeys(skill) {
+  const direct = skill?.platformKey ? [String(skill.platformKey)] : [];
+  const extra = Array.isArray(skill?.platformKeys) ? skill.platformKeys.map(String) : [];
+  return [...new Set([...direct, ...extra].filter(Boolean))];
+}
+
+function getSkillIntentKeys(skill) {
+  const direct = skill?.intentKey ? [String(skill.intentKey)] : [];
+  const extra = Array.isArray(skill?.intentKeys) ? skill.intentKeys.map(String) : [];
+  return [...new Set([...direct, ...extra].filter(Boolean))];
+}
+
+function getSkillCategoryToken(skill) {
+  const platformKey = getSkillPlatformKeys(skill)[0];
+  if (platformKey) return `platform:${platformKey}`;
+  const intentKey = getSkillIntentKeys(skill)[0];
+  if (intentKey) return `intent:${intentKey}`;
+  return SKILL_CATEGORY_UNCATEGORIZED;
+}
+
+function collectSkillContextMeta(triggerMessage, contextText = "") {
+  const text = String(contextText || getSkillMatchText(triggerMessage) || "");
+  const orderNo = detectPlatformOrderNo(text);
+  const orderPlatformKey = orderNo.platformKey || detectOrderPlatformFromState();
+  const intentKey = detectSkillIntentKey(text);
+  return {
+    text,
+    normalizedText: normalizeForMatch(text),
+    orderNo: orderNo.orderNo || "",
+    platformKey: orderPlatformKey || "",
+    intentKey: intentKey || "",
+    orderSource: orderNo.source || ""
+  };
+}
+
+function detectPlatformOrderNo(text) {
+  const rawText = String(text || "");
+  const candidates = rawText.match(/[A-Za-z0-9-]{8,24}/g) || [];
+  for (const candidate of candidates) {
+    const orderNo = normalizeOrderNo(candidate);
+    if (!orderNo) continue;
+    for (const platform of SKILL_PLATFORM_DEFS) {
+      if ((platform.orderPatterns || []).some((pattern) => pattern.test(orderNo))) {
+        return { orderNo, platformKey: platform.key, source: "message" };
+      }
+    }
+  }
+  return { orderNo: "", platformKey: "", source: "" };
+}
+
+function detectOrderPlatformFromState() {
+  const activeOrderType = Number(state.orderType);
+  const fromFilter = getOrderPlatformKey(activeOrderType);
+  if (fromFilter) return fromFilter;
+  const firstOrder = Array.isArray(state.orders) ? state.orders[0] : null;
+  if (firstOrder?.platformKey) return firstOrder.platformKey;
+  const byName = normalizeForMatch(firstOrder?.platformName || "");
+  if (!byName) return "";
+  return SKILL_PLATFORM_DEFS.find((platform) => platform.aliases.some((alias) => byName.includes(normalizeForMatch(alias))))?.key || "";
+}
+
+function detectSkillIntentKey(text) {
+  const normalized = normalizeForMatch(text);
+  if (!normalized) return "";
+  const ranked = SKILL_INTENT_DEFS
+    .map((intent) => ({
+      key: intent.key,
+      score: (intent.keywords || []).reduce((sum, keyword) => {
+        const next = normalizeForMatch(keyword);
+        return next && normalized.includes(next) ? sum + Math.max(2, next.length) : sum;
+      }, 0)
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return ranked[0]?.key || "";
+}
+
+function resolveSkillPlatformKey(skill, contextMeta) {
+  const skillKeys = getSkillPlatformKeys(skill);
+  if (skillKeys.length === 1) return skillKeys[0];
+  if (contextMeta?.platformKey && skillKeys.includes(contextMeta.platformKey)) return contextMeta.platformKey;
+  if (contextMeta?.platformKey) return contextMeta.platformKey;
+
+  const haystack = normalizeForMatch([
+    skill?.title,
+    ...(skill?.keywords || []),
+    ...(skill?.samples || [])
+  ].join(" "));
+  return SKILL_PLATFORM_DEFS.find((platform) => (
+    platform.aliases.some((alias) => haystack.includes(normalizeForMatch(alias)))
+  ))?.key || "";
+}
+
+function resolveSkillIntentKey(skill, contextMeta) {
+  const skillKeys = getSkillIntentKeys(skill);
+  if (skillKeys.length === 1) return skillKeys[0];
+  if (contextMeta?.intentKey && skillKeys.includes(contextMeta.intentKey)) return contextMeta.intentKey;
+  if (contextMeta?.intentKey) return contextMeta.intentKey;
+
+  const haystack = normalizeForMatch([
+    skill?.title,
+    ...(skill?.keywords || []),
+    ...(skill?.samples || [])
+  ].join(" "));
+  const ranked = SKILL_INTENT_DEFS
+    .map((intent) => ({
+      key: intent.key,
+      score: (intent.keywords || []).reduce((sum, keyword) => {
+        const next = normalizeForMatch(keyword);
+        return next && haystack.includes(next) ? sum + Math.max(1, Math.ceil(next.length / 2)) : sum;
+      }, 0)
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return ranked[0]?.key || "";
 }
 
 function getSkillMatchText(latest) {
@@ -7050,7 +7301,7 @@ async function autoReplyWithSuggestion(suggestion) {
 }
 
 async function learnFromManualReply(content, imageUrls = [], options = {}) {
-  if (!state.skillAutoLearn || state.lastSuggestionUsed) return;
+  if (!state.skillAutoLearn) return;
   const latest = getLatestActionableInboundMessage();
   if (!latest || latest.isSystemNotice || latest.direction !== "incoming") return;
   const prompt = String(latest.content || "").trim();
@@ -7061,11 +7312,22 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
     reply ? { type: "text", content: reply } : null,
     ...images.map((url, index) => ({ type: "image", url, label: `人工回复图片 ${index + 1}` }))
   ].filter(Boolean);
+  if (isCurrentReplyEffectivelySameAsAppliedSuggestion(reply, images)) return;
 
   const matchedSkillId = options.matchedSkill?.skillId;
   const matchedSkill = matchedSkillId ? getSkillById(matchedSkillId) : null;
+  const detectedPlatformKey = options.matchedSkill?.platformKey || detectPlatformOrderNo(prompt).platformKey || detectOrderPlatformFromState() || "";
+  const detectedIntentKey = options.matchedSkill?.intentKey || detectSkillIntentKey(prompt) || "";
   if (matchedSkill && !matchedSkill.noReply) {
-    await learnMatchedSkillOverride(matchedSkill, { prompt, reply, images, steps, latest });
+    await learnMatchedSkillOverride(matchedSkill, {
+      prompt,
+      reply,
+      images,
+      steps,
+      latest,
+      platformKey: detectedPlatformKey,
+      intentKey: detectedIntentKey
+    });
     return;
   }
 
@@ -7081,6 +7343,8 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
     noReply: false,
     priority: Math.max(Number(existing?.priority || 45), nextHitCount >= 3 ? 70 : 45),
     hitCount: nextHitCount,
+    platformKey: existing?.platformKey || detectedPlatformKey,
+    intentKey: existing?.intentKey || detectedIntentKey,
     keywords: [...new Set([...(existing?.keywords || []), ...extractLearningKeywords(prompt)])].slice(0, 20),
     samples: [...new Set([...(existing?.samples || []), prompt])].slice(0, 10),
     replySteps: steps,
@@ -7103,7 +7367,7 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
   }
 }
 
-async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, latest }) {
+async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, latest, platformKey = "", intentKey = "" }) {
   const overrides = Array.isArray(skill.manualOverrides) ? [...skill.manualOverrides] : [];
   const latestKey = latest ? getMessageKey(latest, 0) : "";
   const duplicateIndex = overrides.findIndex((item) => (
@@ -7136,7 +7400,9 @@ async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, 
     lastManualOverrideAt: override.at,
     samples: [...new Set([...(skill.samples || []), prompt])].slice(0, 14),
     keywords: [...new Set([...(skill.keywords || []), ...extractLearningKeywords(prompt)])].slice(0, 24),
-    revisionCount: Number(skill.revisionCount || 0) + 1
+    revisionCount: Number(skill.revisionCount || 0) + 1,
+    platformKey: skill.platformKey || platformKey,
+    intentKey: skill.intentKey || intentKey
   };
 
   if (totalOverrideCount >= 3) {
@@ -7164,10 +7430,14 @@ async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, 
 }
 
 function findLearnedSkillForPrompt(prompt) {
+  const platformKey = detectPlatformOrderNo(prompt).platformKey || detectOrderPlatformFromState() || "";
+  const intentKey = detectSkillIntentKey(prompt) || "";
   const keywords = extractLearningKeywords(prompt).map(normalizeForMatch).filter(Boolean);
   if (!keywords.length) return null;
   return state.replySkills.find((skill) => {
     if (!["learned", "manual"].includes(String(skill.source || ""))) return false;
+    if (platformKey && getSkillPlatformKeys(skill).length && !getSkillPlatformKeys(skill).includes(platformKey)) return false;
+    if (intentKey && getSkillIntentKeys(skill).length && !getSkillIntentKeys(skill).includes(intentKey)) return false;
     const haystack = normalizeForMatch([
       skill.title,
       ...(skill.keywords || []),
@@ -7182,6 +7452,17 @@ function extractLearningKeywords(text) {
   const pieces = normalized.split(/\s+/).filter((item) => item.length >= 2);
   const fallback = normalized.length > 12 ? [normalized.slice(0, 12), normalized.slice(-8)] : [normalized];
   return [...new Set(pieces.length ? pieces : fallback)].slice(0, 8);
+}
+
+function isCurrentReplyEffectivelySameAsAppliedSuggestion(reply, images = []) {
+  if (!state.lastAppliedSuggestionFingerprint) return false;
+  const currentFingerprint = buildSuggestionFingerprint({
+    steps: [
+      reply ? { type: "text", content: reply } : null,
+      ...images.map((url) => ({ type: "image", url }))
+    ].filter(Boolean)
+  });
+  return Boolean(currentFingerprint) && currentFingerprint === state.lastAppliedSuggestionFingerprint;
 }
 
 function maskAiPayload(payload) {
@@ -7227,6 +7508,17 @@ function normalizeSuggestion(content) {
     };
 }
 
+function buildSuggestionFingerprint(source) {
+  const steps = getSuggestionSteps(source).map((step) => ({
+    type: step.type === "image" ? "image" : "text",
+    value: step.type === "image"
+      ? normalizeImageUrl(step.url || step.content || "")
+      : String(step.content || "").trim()
+  })).filter((step) => step.value);
+  if (!steps.length) return "";
+  return steps.map((step) => `${step.type}:${step.value}`).join("|");
+}
+
 function useAiSuggestion(suggestion = state.aiSuggestion) {
   if (!suggestion) {
     toast("还没有 AI 推荐内容。", true);
@@ -7239,6 +7531,8 @@ function useAiSuggestion(suggestion = state.aiSuggestion) {
   const text = getSuggestionTextForComposer(suggestion);
   el.replyText.value = text.replace(/^建议回复：?/, "");
   state.lastSuggestionUsed = true;
+  state.lastAppliedSuggestionFingerprint = buildSuggestionFingerprint(suggestion);
+  state.lastAppliedSuggestionSkillId = String(suggestion.skillId || "");
   el.replyText.focus();
 }
 
@@ -7246,6 +7540,8 @@ function clearAiSuggestion() {
   state.aiSuggestion = null;
   state.aiSuggestions = [];
   state.lastSuggestionUsed = false;
+  state.lastAppliedSuggestionFingerprint = "";
+  state.lastAppliedSuggestionSkillId = "";
   renderAiSuggestionCard();
 }
 
@@ -7594,6 +7890,7 @@ async function loadHistoryMessages(page = 1, mode = "replace", options = {}) {
 }
 
 function normalizeOrder(item) {
+  const platformKey = getOrderPlatformKey(item.orderType ?? item.type ?? state.orderType) || getOrderPlatformKey(state.orderType);
   return {
     ...item,
     orderNo: item.parentOrderNo || item.orderNo || item.orderId || item.id || "订单",
@@ -7605,7 +7902,8 @@ function normalizeOrder(item) {
     profit: item.profit ?? item.profitAmount ?? "-",
     title: item.title || item.goodsName || item.remark || "",
     imageUrl: item.imageUrl || item.img || "",
-    platformName: orderTypeLabel(state.orderType),
+    platformKey,
+    platformName: orderTypeLabel(item.orderType ?? item.type ?? state.orderType),
     createdAt: formatUnixOrDate(item.createdt || item.createTime || item.createdAt || item.orderTime),
     paidAt: formatUnixOrDate(item.paydt || item.payTime || item.paymentTime),
     flowAt: formatUnixOrDate(item.accountdt || item.unfreezeTime || item.refundFinishTime || item.refundCreateTime),
@@ -7630,7 +7928,8 @@ function setToolTab(tab) {
     button.classList.toggle("is-active", button.dataset.toolTab === tab);
   });
   el.toolContent?.classList.toggle("is-history-tool", tab === "history");
-  el.toolContent?.classList.toggle("is-compact-tool", tab !== "history");
+  el.toolContent?.classList.toggle("is-compact-tool", tab !== "history" && tab !== "skill");
+  el.toolContent?.classList.toggle("is-skill-tool", tab === "skill");
   renderToolContent();
   if (
     tab === "history" &&
@@ -7668,7 +7967,8 @@ function loadToolDataForActiveTab() {
 function renderToolContent() {
   const contact = state.activeContact;
   el.toolContent.classList.toggle("is-history-tool", state.activeTool === "history");
-  el.toolContent.classList.toggle("is-compact-tool", state.activeTool !== "history");
+  el.toolContent.classList.toggle("is-compact-tool", state.activeTool !== "history" && state.activeTool !== "skill");
+  el.toolContent.classList.toggle("is-skill-tool", state.activeTool === "skill");
   if (!contact) {
     el.toolContent.innerHTML = '<div class="empty-state">请选择会话后查看右侧工具。</div>';
     return;
@@ -7799,12 +8099,13 @@ function renderQuickReplyPanel() {
 
 function renderSkillReplyPanel() {
   const suggestion = buildSkillSuggestion();
-  const skills = filterReplySkills(suggestion);
+  const groups = filterReplySkills(suggestion);
   const autoText = state.skillAutoReply ? "自动回复已开" : "仅推荐";
   const learnText = state.skillAutoLearn ? "自动学习已开" : "自动学习已关";
   const matchText = suggestion?.skillId
     ? suggestion.noReply ? "命中无需回复 skill" : "命中可回复 skill"
     : "未命中";
+  const activeCategory = getSkillCategoryMeta(state.skillCategory, suggestion);
   return `
     <section class="tool-section skill-section">
       <h3>
@@ -7823,9 +8124,20 @@ function renderSkillReplyPanel() {
         <span>${escapeHtml(autoText)} / ${escapeHtml(learnText)}</span>
         <span>${escapeHtml(matchText)} / ${state.replySkillsLoading ? "加载中" : `${state.replySkills.length} 个 skill`}</span>
       </div>
+      <div class="skill-tabs" role="group" aria-label="skill 分类">
+        ${buildSkillCategoryTabs(suggestion).map((item) => `
+          <button class="${item.value === state.skillCategory ? "is-active" : ""}" type="button" data-skill-category="${escapeAttr(item.value)}">
+            ${escapeHtml(item.label)}
+          </button>
+        `).join("")}
+      </div>
+      <div class="skill-summary skill-category-summary">
+        <span>${escapeHtml(activeCategory.label)}</span>
+        <span>${escapeHtml(activeCategory.description)}</span>
+      </div>
       ${suggestion ? renderSkillMatchCard(suggestion) : '<div class="skill-match-card muted">当前上下文暂未命中 skill，会交给 AI 结合快捷回复兜底。</div>'}
-      <div class="quick-list skill-list ${suggestion?.skillId ? "has-active-match" : ""}">
-        ${skills.length ? skills.map((skill, index) => renderSkillRow(skill, index, suggestion)).join("") : '<p class="empty-state">没有匹配的 skill。</p>'}
+      <div class="skill-panel-scroll">
+        ${groups.length ? groups.map((group) => renderSkillGroup(group, suggestion)).join("") : '<p class="empty-state skill-empty">没有匹配的 skill。</p>'}
       </div>
     </section>
   `;
@@ -7834,7 +8146,7 @@ function renderSkillReplyPanel() {
 function filterReplySkills(suggestion = null) {
   const keyword = normalizeForMatch(state.skillKeyword);
   const matchedId = suggestion?.skillId ? String(suggestion.skillId) : "";
-  const skills = [...state.replySkills]
+  const ranked = [...state.replySkills]
     .filter((skill) => {
       if (!keyword) return true;
       if (matchedId && String(skill.id) === matchedId) return true;
@@ -7845,13 +8157,130 @@ function filterReplySkills(suggestion = null) {
         getSkillText(skill)
       ].join(" ")).includes(keyword);
     })
+    .map((skill) => ({
+      skill,
+      sortScore: buildSkillGroupScore(skill, suggestion)
+    }))
     .sort((a, b) => {
-      const aMatched = matchedId && String(a.id) === matchedId;
-      const bMatched = matchedId && String(b.id) === matchedId;
+      const aMatched = matchedId && String(a.skill.id) === matchedId;
+      const bMatched = matchedId && String(b.skill.id) === matchedId;
       if (aMatched !== bMatched) return aMatched ? -1 : 1;
-      return Number(b.priority || 0) - Number(a.priority || 0);
+      const scoreDelta = Number(b.sortScore || 0) - Number(a.sortScore || 0);
+      if (scoreDelta) return scoreDelta;
+      return Number(b.skill.priority || 0) - Number(a.skill.priority || 0);
     });
-  return skills;
+  const scoped = ranked.filter(({ skill }) => shouldKeepSkillInActiveCategory(skill, suggestion));
+  if (state.skillCategory === SKILL_CATEGORY_CURRENT) {
+    return scoped.length
+      ? [{ key: SKILL_CATEGORY_CURRENT, label: "当前匹配", skills: scoped.map((item) => item.skill) }]
+      : [];
+  }
+
+  const grouped = [];
+  const byCategory = new Map();
+  scoped.forEach(({ skill }) => {
+    const key = getSkillCategoryToken(skill);
+    if (!byCategory.has(key)) byCategory.set(key, []);
+    byCategory.get(key).push(skill);
+  });
+
+  const orderedKeys = [
+    ...SKILL_PLATFORM_DEFS.map((platform) => `platform:${platform.key}`),
+    ...SKILL_INTENT_DEFS.map((intent) => `intent:${intent.key}`),
+    SKILL_CATEGORY_UNCATEGORIZED
+  ];
+
+  orderedKeys.forEach((key) => {
+    const skills = byCategory.get(key);
+    if (!skills?.length) return;
+    grouped.push({
+      key,
+      label: getSkillCategoryMeta(key, suggestion).label,
+      skills
+    });
+  });
+  return grouped;
+}
+
+function buildSkillCategoryTabs(suggestion = null) {
+  const items = [
+    { value: SKILL_CATEGORY_CURRENT, label: "当前匹配" },
+    { value: SKILL_CATEGORY_ALL, label: "全部" }
+  ];
+  SKILL_PLATFORM_DEFS.forEach((platform) => {
+    items.push({ value: `platform:${platform.key}`, label: platform.label });
+  });
+  SKILL_INTENT_DEFS.forEach((intent) => {
+    items.push({ value: `intent:${intent.key}`, label: intent.label });
+  });
+  items.push({ value: SKILL_CATEGORY_UNCATEGORIZED, label: "其他" });
+  return items.filter((item, index, array) => array.findIndex((entry) => entry.value === item.value) === index);
+}
+
+function getSkillCategoryMeta(value, suggestion = null) {
+  if (value === SKILL_CATEGORY_CURRENT) {
+    if (suggestion?.platformKey || suggestion?.intentKey) {
+      const tags = [getPlatformLabelByKey(suggestion.platformKey), getIntentLabelByKey(suggestion.intentKey)].filter(Boolean).join(" / ");
+      return { label: "当前匹配", description: tags || "按当前上下文相似度排序" };
+    }
+    return { label: "当前匹配", description: "按当前上下文相似度排序" };
+  }
+  if (value === SKILL_CATEGORY_ALL) return { label: "全部", description: "浏览全部 skill" };
+  if (value === SKILL_CATEGORY_UNCATEGORIZED) return { label: "其他", description: "暂未归类的 skill" };
+  if (String(value).startsWith("platform:")) {
+    const key = String(value).split(":")[1];
+    return { label: getPlatformLabelByKey(key) || "平台", description: "按订单平台归类" };
+  }
+  if (String(value).startsWith("intent:")) {
+    const key = String(value).split(":")[1];
+    return { label: getIntentLabelByKey(key) || "意图", description: "按客户问题类型归类" };
+  }
+  return { label: "skill", description: "" };
+}
+
+function shouldKeepSkillInActiveCategory(skill, suggestion = null) {
+  const category = state.skillCategory;
+  if (category === SKILL_CATEGORY_ALL) return true;
+  if (category === SKILL_CATEGORY_CURRENT) {
+    if (!suggestion?.skillId) return false;
+    const targetPlatform = suggestion.platformKey || "";
+    const targetIntent = suggestion.intentKey || "";
+    if (String(skill.id) === String(suggestion.skillId)) return true;
+    if (targetPlatform && getSkillPlatformKeys(skill).includes(targetPlatform)) return true;
+    if (targetIntent && getSkillIntentKeys(skill).includes(targetIntent)) return true;
+    return false;
+  }
+  if (category === SKILL_CATEGORY_UNCATEGORIZED) {
+    return getSkillCategoryToken(skill) === SKILL_CATEGORY_UNCATEGORIZED;
+  }
+  return getSkillCategoryToken(skill) === category;
+}
+
+function buildSkillGroupScore(skill, suggestion = null) {
+  let score = Number(skill.priority || 0);
+  if (suggestion?.skillId && String(skill.id) === String(suggestion.skillId)) score += 1000;
+  if (suggestion?.platformKey && getSkillPlatformKeys(skill).includes(suggestion.platformKey)) score += 180;
+  if (suggestion?.intentKey && getSkillIntentKeys(skill).includes(suggestion.intentKey)) score += 120;
+  const overrideCount = Array.isArray(skill.manualOverrides)
+    ? skill.manualOverrides.reduce((sum, item) => sum + Number(item.count || 1), 0)
+    : 0;
+  score += Math.min(80, overrideCount * 5);
+  score += Math.min(40, Number(skill.hitCount || 0));
+  return score;
+}
+
+function renderSkillGroup(group, suggestion = null) {
+  return `
+    <section class="skill-group">
+      <header class="skill-group-header">
+        <strong>${escapeHtml(group.label)}</strong>
+        <span>${group.skills.length} 条</span>
+      </header>
+      <div class="quick-list skill-list ${suggestion?.skillId ? "has-active-match" : ""}">
+        ${group.skills.map((skill, index) => renderSkillRow(skill, index, suggestion)).join("")}
+      </div>
+    </section>
+  `;
 }
 
 function renderSkillMatchCard(suggestion) {
@@ -7881,12 +8310,16 @@ function renderSkillRow(skill, index, suggestion = null) {
   const overrideCount = Array.isArray(skill.manualOverrides)
     ? skill.manualOverrides.reduce((sum, item) => sum + Number(item.count || 1), 0)
     : 0;
+  const platformLabel = getPlatformLabelByKey(getSkillPlatformKeys(skill)[0]);
+  const intentLabel = getIntentLabelByKey(getSkillIntentKeys(skill)[0]);
+  const metaTags = [platformLabel, intentLabel, skill.source === "learned" ? "已学习" : "", skill.noReply ? "无需回复" : ""].filter(Boolean);
   return `
     <article class="quick-row skill-row ${skill.enabled === false ? "is-disabled" : ""} ${isMatched ? "is-matched" : ""} ${isDimmed ? "is-dimmed" : ""}">
       <span class="quick-index">${isMatched ? "中" : index + 1}</span>
       <button class="quick-copy" type="button" data-copy="${escapeAttr(content)}" title="复制 skill" aria-label="复制 skill"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>
       <div class="quick-main">
         <strong>${escapeHtml(skill.title || "未命名 skill")} <em>${escapeHtml(status)}</em></strong>
+        ${metaTags.length ? `<div class="skill-meta-tags">${metaTags.map((item) => `<span class="skill-meta-tag">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
         <p>${escapeHtml(content || "暂无话术")}</p>
         ${renderSkillImageStrip(skill)}
         <small>关键词：${escapeHtml(keywords)}${imageCount ? ` / 含 ${imageCount} 张图` : ""}${overrideCount ? ` / 人工纠正 ${overrideCount} 次` : ""}</small>
@@ -8397,6 +8830,13 @@ function handleToolClick(event) {
     state.faqCategory = faqCategoryTarget.dataset.faqCategory;
     state.faqPage = 1;
     loadFaq();
+    return;
+  }
+
+  const skillCategoryTarget = event.target.closest("[data-skill-category]");
+  if (skillCategoryTarget) {
+    state.skillCategory = skillCategoryTarget.dataset.skillCategory || SKILL_CATEGORY_CURRENT;
+    renderToolContent();
     return;
   }
 

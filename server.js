@@ -197,6 +197,7 @@ function defaultReplySkills() {
         allowAutoReply: true,
         noReply: false,
         priority: 90,
+        intentKey: "order_missing",
         keywords: [
           "查不到",
           "怎么查不到",
@@ -239,6 +240,7 @@ function defaultReplySkills() {
         allowAutoReply: true,
         noReply: false,
         priority: 88,
+        intentKey: "bind_failed",
         keywords: [
           "绑定支付宝",
           "绑定失败",
@@ -271,6 +273,7 @@ function defaultReplySkills() {
         allowAutoReply: false,
         noReply: true,
         priority: 80,
+        intentKey: "withdraw_query",
         keywords: ["提现成功", "提取成功", "提了成功", "已经处理", "成功到账", "提现已提交", "提取已提交", "正在等待处理", "正在同步处理"],
         negativeKeywords: ["怎么", "为什么", "不到账", "没到账", "多久", "什么时候"],
         samples: ["提现成功", "提取成功", "您的提现已提交系统", "您的提现将尽快处理"],
@@ -286,6 +289,7 @@ function defaultReplySkills() {
         noReply: true,
         systemOnly: true,
         priority: 70,
+        intentKey: "general",
         keywords: ["会话", "结束", "接待客服", "类型：系统关闭", "系统提示"],
         negativeKeywords: [],
         samples: ["会话结束，接待客服，类型：系统关闭"],
@@ -373,6 +377,10 @@ function normalizeLearnedSkill(skill) {
     contactUrl: String(skill.contactUrl || "")
   };
 
+  if (skill.platformKey) normalized.platformKey = String(skill.platformKey);
+  if (Array.isArray(skill.platformKeys)) normalized.platformKeys = skill.platformKeys.map(String).filter(Boolean).slice(0, 6);
+  if (skill.intentKey) normalized.intentKey = String(skill.intentKey);
+  if (Array.isArray(skill.intentKeys)) normalized.intentKeys = skill.intentKeys.map(String).filter(Boolean).slice(0, 8);
   if (Array.isArray(skill.manualOverrides)) normalized.manualOverrides = skill.manualOverrides.slice(0, 12);
   if (Number.isFinite(Number(skill.revisionCount))) normalized.revisionCount = Number(skill.revisionCount);
   if (skill.lastManualOverrideAt) normalized.lastManualOverrideAt = String(skill.lastManualOverrideAt);
