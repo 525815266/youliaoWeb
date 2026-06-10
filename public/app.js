@@ -54,6 +54,87 @@ const ORDER_TYPES = [
   { value: 12, label: "快手" }
 ];
 
+const SKILL_CATEGORY_CURRENT = "__current__";
+const SKILL_CATEGORY_ALL = "__all__";
+const SKILL_CATEGORY_UNCATEGORIZED = "__uncategorized__";
+const SKILL_PLATFORM_DEFS = [
+  {
+    key: "taobao",
+    label: "淘宝/天猫",
+    aliases: ["淘宝", "天猫", "taobao", "tmall", "alicdn", "tbopen"],
+    orderPatterns: [/^\d{16,20}$/]
+  },
+  {
+    key: "jd",
+    label: "京东",
+    aliases: ["京东", "jd", "jdmobile", "openapp.jdmobile"],
+    orderPatterns: [/^\d{10,20}$/]
+  },
+  {
+    key: "pdd",
+    label: "拼多多",
+    aliases: ["拼多多", "pdd", "多多", "yangkeduo", "pinduoduo"],
+    orderPatterns: [/^\d{8}-\d{4,}$/]
+  },
+  {
+    key: "vip",
+    label: "唯品会",
+    aliases: ["唯品会", "vipshop", "vip.com"],
+    orderPatterns: []
+  },
+  {
+    key: "meituan",
+    label: "美团",
+    aliases: ["美团", "meituan", "大众点评"],
+    orderPatterns: []
+  },
+  {
+    key: "eleme",
+    label: "饿了么",
+    aliases: ["饿了么", "eleme", "ele.me"],
+    orderPatterns: []
+  },
+  {
+    key: "douyin",
+    label: "抖音",
+    aliases: ["抖音", "douyin", "iesdouyin", "aweme"],
+    orderPatterns: []
+  },
+  {
+    key: "kuaishou",
+    label: "快手",
+    aliases: ["快手", "kuaishou", "kwai", "gifshow"],
+    orderPatterns: []
+  }
+];
+const SKILL_INTENT_DEFS = [
+  {
+    key: "order_missing",
+    label: "订单查不到",
+    keywords: ["查不到", "查不出", "没返利", "无返利", "没成功", "订单没有", "不提示", "没绑定", "怎么没绑定"]
+  },
+  {
+    key: "bind_failed",
+    label: "绑定失败",
+    keywords: ["绑定失败", "绑定不了", "怎么绑定", "未绑定", "绑定方法", "支付宝账号", "绑定支付宝"]
+  },
+  {
+    key: "rebate_status",
+    label: "返利状态",
+    keywords: ["什么时候到账", "多久到账", "待返利", "已返利", "返利", "到账没", "到帐没"]
+  },
+  {
+    key: "manual_service",
+    label: "转人工",
+    keywords: ["在线客服", "联系客服", "人工客服", "客服链接", "客服在哪"]
+  },
+  {
+    key: "general",
+    label: "通用",
+    keywords: []
+  }
+];
+
 const DEFAULT_FAQ_CATEGORIES = [
   { value: "", label: "常用" },
   { value: "", label: "订单问题" },
@@ -140,46 +221,111 @@ const CONTACT_AVATAR_FIELDS = [
   "portrait",
   "faceUrl"
 ];
-const EMOJI_SHORTCUTS = [
-  "[微笑]",
-  "[撇嘴]",
-  "[色]",
-  "[发呆]",
-  "[得意]",
-  "[流泪]",
-  "[害羞]",
-  "[闭嘴]",
-  "[睡]",
-  "[大哭]",
-  "[尴尬]",
-  "[发怒]",
-  "[调皮]",
-  "[呲牙]",
-  "[惊讶]",
-  "[难过]",
-  "[酷]",
-  "[冷汗]",
-  "[抓狂]",
-  "[吐]",
-  "[偷笑]",
-  "[愉快]",
-  "[白眼]",
-  "[傲慢]",
-  "[饥饿]",
-  "[困]",
-  "[惊恐]",
-  "[流汗]",
-  "[憨笑]",
-  "[悠闲]",
-  "[奋斗]",
-  "[疑问]",
-  "[嘘]",
-  "[晕]",
-  "[红包]",
-  "[福]",
-  "[强]",
-  "[OK]"
+const EMOJI_DEFS = [
+  { token: "[微笑]", label: "微笑", style: "smiley_0", x: -37.125, y: -37.125 },
+  { token: "[撇嘴]", label: "撇嘴", style: "smiley_1", x: -185.625, y: -167.063 },
+  { token: "[色]", label: "色", style: "smiley_2", x: -74.25, y: -55.688 },
+  { token: "[发呆]", label: "发呆", style: "smiley_3", x: -92.813, y: -74.25 },
+  { token: "[得意]", label: "得意", style: "smiley_4", x: -129.938, y: 0 },
+  { token: "[流泪]", label: "流泪", style: "smiley_5", x: -55.688, y: -129.938 },
+  { token: "[害羞]", label: "害羞", style: "smiley_6", x: -148.5, y: -55.688 },
+  { token: "[闭嘴]", label: "闭嘴", style: "smiley_7", x: -92.813, y: -148.5 },
+  { token: "[睡]", label: "睡", style: "smiley_8", x: -167.063, y: -55.688 },
+  { token: "[大哭]", label: "大哭", style: "smiley_9", x: -37.125, y: -167.063 },
+  { token: "[尴尬]", label: "尴尬", style: "smiley_10", x: -55.688, y: -18.563 },
+  { token: "[发怒]", label: "发怒", style: "smiley_11", x: -55.688, y: -37.125 },
+  { token: "[调皮]", label: "调皮", style: "smiley_12", x: 0, y: -55.688 },
+  { token: "[呲牙]", label: "呲牙", style: "smiley_13", x: -18.563, y: -55.688 },
+  { token: "[惊讶]", label: "惊讶", style: "smiley_14", x: -37.125, y: -55.688 },
+  { token: "[难过]", label: "难过", style: "smiley_15", x: -55.688, y: -55.688 },
+  { token: "[冷汗]", label: "冷汗", style: "smiley_17", x: -74.25, y: 0 },
+  { token: "[抓狂]", label: "抓狂", style: "smiley_18", x: -74.25, y: -18.563 },
+  { token: "[吐]", label: "吐", style: "smiley_19", x: -74.25, y: -37.125 },
+  { token: "[偷笑]", label: "偷笑", style: "smiley_20", x: 0, y: -74.25 },
+  { token: "[愉快]", label: "愉快", style: "smiley_21", x: -18.563, y: -74.25 },
+  { token: "[白眼]", label: "白眼", style: "smiley_22", x: -37.125, y: -74.25 },
+  { token: "[傲慢]", label: "傲慢", style: "smiley_23", x: -55.688, y: -74.25 },
+  { token: "[困]", label: "困", style: "smiley_25", x: -74.25, y: -74.25 },
+  { token: "[流汗]", label: "流汗", style: "smiley_27", x: -92.813, y: -18.563 },
+  { token: "[憨笑]", label: "憨笑", style: "smiley_28", x: -92.813, y: -37.125 },
+  { token: "[悠闲]", label: "悠闲", style: "smiley_29", x: -92.813, y: -55.688 },
+  { token: "[奋斗]", label: "奋斗", style: "smiley_30", x: 0, y: -92.813 },
+  { token: "[咒骂]", label: "咒骂", style: "smiley_31", x: -18.563, y: -92.813 },
+  { token: "[疑问]", label: "疑问", style: "smiley_32", x: -111.375, y: -55.688 },
+  { token: "[嘘]", label: "嘘", style: "smiley_33", x: -18.563, y: -111.375 },
+  { token: "[晕]", label: "晕", style: "smiley_34", x: -37.125, y: -111.375 },
+  { token: "[衰]", label: "衰", style: "smiley_36", x: -55.688, y: -111.375 },
+  { token: "[骷髅]", label: "骷髅", style: "smiley_37", x: -74.25, y: -111.375 },
+  { token: "[敲打]", label: "敲打", style: "smiley_38", x: -92.813, y: -111.375 },
+  { token: "[再见]", label: "再见", style: "smiley_39", x: -111.375, y: -111.375 },
+  { token: "[擦汗]", label: "擦汗", style: "smiley_40", x: -129.938, y: -18.563 },
+  { token: "[抠鼻]", label: "抠鼻", style: "smiley_41", x: -129.938, y: -37.125 },
+  { token: "[鼓掌]", label: "鼓掌", style: "smiley_42", x: -129.938, y: -55.688 },
+  { token: "[坏笑]", label: "坏笑", style: "smiley_44", x: -129.938, y: -74.25 },
+  { token: "[左哼哼]", label: "左哼哼", style: "smiley_45", x: -129.938, y: -92.813 },
+  { token: "[鄙视]", label: "鄙视", style: "smiley_48", x: -18.563, y: -129.938 },
+  { token: "[委屈]", label: "委屈", style: "smiley_49", x: -37.125, y: -129.938 },
+  { token: "[快哭了]", label: "快哭了", style: "smiley_50", x: -74.25, y: -129.938 },
+  { token: "[阴险]", label: "阴险", style: "smiley_51", x: -92.813, y: -129.938 },
+  { token: "[亲亲]", label: "亲亲", style: "smiley_52", x: -111.375, y: -129.938 },
+  { token: "[可怜]", label: "可怜", style: "smiley_54", x: -129.938, y: -129.938 },
+  { token: "[西瓜]", label: "西瓜", style: "smiley_56", x: -148.5, y: -18.563 },
+  { token: "[啤酒]", label: "啤酒", style: "smiley_57", x: -148.5, y: -37.125 },
+  { token: "[咖啡]", label: "咖啡", style: "smiley_60", x: -148.5, y: -74.25 },
+  { token: "[饭]", label: "饭", style: "smiley_61", x: -148.5, y: -92.813 },
+  { token: "[猪头]", label: "猪头", style: "smiley_62", x: -148.5, y: -111.375 },
+  { token: "[玫瑰]", label: "玫瑰", style: "smiley_63", x: -148.5, y: -129.938 },
+  { token: "[嘴唇]", label: "嘴唇", style: "smiley_65", x: -18.563, y: -148.5 },
+  { token: "[爱心]", label: "爱心", style: "smiley_66", x: -37.125, y: -148.5 },
+  { token: "[心碎]", label: "心碎", style: "smiley_67", x: -55.688, y: -148.5 },
+  { token: "[蛋糕]", label: "蛋糕", style: "smiley_68", x: -74.25, y: -148.5 },
+  { token: "[炸弹]", label: "炸弹", style: "smiley_70", x: -111.375, y: -148.5 },
+  { token: "[便便]", label: "便便", style: "smiley_74", x: -129.938, y: -148.5 },
+  { token: "[月亮]", label: "月亮", style: "smiley_75", x: -148.5, y: -148.5 },
+  { token: "[拥抱]", label: "拥抱", style: "smiley_78", x: -167.063, y: -18.563 },
+  { token: "[强]", label: "强", style: "smiley_79", x: -167.063, y: -37.125 },
+  { token: "[弱]", label: "弱", style: "smiley_80", x: -167.063, y: -74.25 },
+  { token: "[握手]", label: "握手", style: "smiley_81", x: -167.063, y: -92.813 },
+  { token: "[胜利]", label: "胜利", style: "smiley_82", x: -167.063, y: -111.375 },
+  { token: "[抱拳]", label: "抱拳", style: "smiley_83", x: -167.063, y: -129.938 },
+  { token: "[勾引]", label: "勾引", style: "smiley_84", x: -167.063, y: -148.5 },
+  { token: "[OK]", label: "OK", style: "smiley_89", x: -18.563, y: -167.063 },
+  { token: "[跳跳]", label: "跳跳", style: "smiley_92", x: -55.688, y: -167.063 },
+  { token: "[发抖]", label: "发抖", style: "smiley_93", x: -74.25, y: -167.063 },
+  { token: "[怄火]", label: "怄火", style: "smiley_94", x: -92.813, y: -167.063 },
+  { token: "[转圈]", label: "转圈", style: "smiley_95", x: -111.375, y: -167.063 },
+  { token: "[嘿哈]", label: "嘿哈", style: "e2_04", x: -129.938, y: -111.375 },
+  { token: "[奸笑]", label: "奸笑", style: "e2_02", x: -18.563, y: 0 },
+  { token: "[捂脸]", label: "捂脸", style: "e2_05", x: 0, y: -18.563 },
+  { token: "[机智]", label: "机智", style: "e2_06", x: -18.563, y: -18.563 },
+  { token: "[耶]", label: "耶", style: "e2_11", x: -37.125, y: -18.563 },
+  { token: "[红包]", label: "红包", style: "e2_09", x: -37.125, y: 0 },
+  { token: "[皱眉]", label: "皱眉", style: "e2_12", x: 0, y: -37.125 },
+  { token: "[鸡]", label: "鸡", style: "e2_14", x: -18.563, y: -37.125 },
+  { token: "[笑脸]", label: "笑脸", style: "u1F604", x: -185.625, y: -37.125 },
+  { token: "[生病]", label: "生病", style: "u1F637", x: -55.688, y: 0 },
+  { token: "[破涕为笑]", label: "破涕为笑", style: "u1F602", x: -185.625, y: -18.563 },
+  { token: "[吐舌]", label: "吐舌", style: "u1F61D", x: -185.625, y: -92.813 },
+  { token: "[脸红]", label: "脸红", style: "u1F633", x: -185.625, y: -129.938 },
+  { token: "[恐惧]", label: "恐惧", style: "u1F631", x: -185.625, y: -111.375 },
+  { token: "[失望]", label: "失望", style: "u1F614", x: -185.625, y: -74.25 },
+  { token: "[无语]", label: "无语", style: "u1F612", x: -185.625, y: -55.688 },
+  { token: "[鬼魂]", label: "鬼魂", style: "u1F47B", x: -167.063, y: -167.063 },
+  { token: "[合十]", label: "合十", style: "u1F64F", x: -185.625, y: -148.5 },
+  { token: "[庆祝]", label: "庆祝", style: "u1F389", x: -148.5, y: -167.063 },
+  { token: "[礼物]", label: "礼物", style: "u1F381", x: -129.938, y: -167.063 },
+  { token: "[吃瓜]", label: "吃瓜", style: "smiley_313", x: -37.125, y: -92.813 },
+  { token: "[加油]", label: "加油", style: "smiley_314", x: -55.688, y: -92.813 },
+  { token: "[汗]", label: "汗", style: "smiley_315", x: -74.25, y: -92.813 },
+  { token: "[天啊]", label: "天啊", style: "smiley_316", x: -92.813, y: -92.813 },
+  { token: "[社会社会]", label: "社会社会", style: "smiley_318", x: -111.375, y: -18.563 },
+  { token: "[旺柴]", label: "旺柴", style: "smiley_319", x: -111.375, y: -37.125 },
+  { token: "[好的]", label: "好的", style: "smiley_320", x: -111.375, y: -74.25 },
+  { token: "[打脸]", label: "打脸", style: "smiley_321", x: -111.375, y: -92.813 }
 ];
+const EMOJI_SHORTCUTS = EMOJI_DEFS.map((item) => item.token);
+const EMOJI_LOOKUP = new Map(EMOJI_DEFS.map((item) => [item.token, item]));
+const EMOJI_TOKEN_PATTERN = new RegExp(`(${EMOJI_DEFS.map((item) => escapeRegex(item.token)).join("|")})`, "g");
 
 const state = {
   apiBase: loadStoredApiBase(),
@@ -210,6 +356,7 @@ const state = {
   replySkills: [],
   replySkillsLoading: false,
   skillKeyword: "",
+  skillCategory: SKILL_CATEGORY_CURRENT,
   skillAutoReply: localStorage.getItem("youchat.skill.autoReply") === "true",
   skillAutoLearn: localStorage.getItem("youchat.skill.autoLearn") !== "false",
   skillAutoSending: false,
@@ -245,6 +392,7 @@ const state = {
   orderKeyword: "",
   orderTotal: 0,
   orderPage: 1,
+  orderContactId: null,
   hideRebate: false,
   contactInfo: null,
   contactInfoContactId: null,
@@ -4901,6 +5049,72 @@ function normalizeLinkUrl(value) {
   }
 }
 
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function renderEmojiGlyph(token, options = {}) {
+  const emoji = EMOJI_LOOKUP.get(token);
+  if (!emoji) {
+    return options.fallback === false ? "" : `<span class="emoji-fallback">${escapeHtml(token)}</span>`;
+  }
+  const className = ["client-emoji-icon", options.className || ""].filter(Boolean).join(" ");
+  const sizeStyle = options.size ? `--emoji-size:${Number(options.size)}px;` : "";
+  return `<span class="${escapeAttr(className)}" style="${sizeStyle}--emoji-x:${emoji.x}px;--emoji-y:${emoji.y}px;" data-emoji-token="${escapeAttr(token)}" aria-hidden="true"></span>`;
+}
+
+function renderInlineTextWithEmojiAndLinks(content) {
+  const text = String(content || "");
+  if (!text) return "";
+  const matches = [];
+
+  extractUrls(text).forEach((url) => {
+    const raw = trimTrailingUrlPunctuation(url);
+    if (!raw) return;
+    let start = text.indexOf(raw);
+    while (start !== -1) {
+      matches.push({
+        start,
+        end: start + raw.length,
+        type: "url",
+        raw
+      });
+      start = text.indexOf(raw, start + raw.length);
+    }
+  });
+
+  let emojiMatch;
+  while ((emojiMatch = EMOJI_TOKEN_PATTERN.exec(text))) {
+    matches.push({
+      start: emojiMatch.index,
+      end: emojiMatch.index + emojiMatch[0].length,
+      type: "emoji",
+      raw: emojiMatch[0]
+    });
+  }
+  EMOJI_TOKEN_PATTERN.lastIndex = 0;
+
+  matches.sort((a, b) => a.start - b.start || b.end - a.end);
+  let cursor = 0;
+  let html = "";
+  for (const match of matches) {
+    if (match.start < cursor) continue;
+    html += escapeHtml(text.slice(cursor, match.start));
+    if (match.type === "url") {
+      const normalized = normalizeLinkUrl(match.raw);
+      const label = escapeHtml(match.raw);
+      html += normalized
+        ? `<button class="inline-link-button" type="button" data-link-preview="${escapeAttr(normalized)}">${label}</button>`
+        : label;
+    } else if (match.type === "emoji") {
+      html += renderEmojiGlyph(match.raw, { className: "message-emoji-icon", size: 20 });
+    }
+    cursor = match.end;
+  }
+  html += escapeHtml(text.slice(cursor));
+  return html;
+}
+
 function getUrlHost(url) {
   try {
     return new URL(url).hostname.replace(/^www\./i, "");
@@ -4910,15 +5124,7 @@ function getUrlHost(url) {
 }
 
 function linkifyMessageText(content) {
-  const text = String(content || "");
-  const urls = extractUrls(text);
-  if (!urls.length) return escapeHtml(text);
-  let html = escapeHtml(text);
-  urls.forEach((url) => {
-    const escaped = escapeHtml(url);
-    html = html.replaceAll(escaped, `<button class="inline-link-button" type="button" data-link-preview="${escapeAttr(url)}">${escaped}</button>`);
-  });
-  return html;
+  return renderInlineTextWithEmojiAndLinks(content);
 }
 
 function hydrateVisibleLinkCards(root) {
@@ -5333,9 +5539,10 @@ function renderEmojiPopover() {
   if (!el.emojiPopover) return;
   el.emojiPopover.classList.toggle("is-hidden", !state.emojiOpen);
   if (!state.emojiOpen) return;
-  el.emojiPopover.innerHTML = EMOJI_SHORTCUTS.map((emoji) => `
-    <button type="button" data-emoji="${escapeAttr(emoji)}" title="${escapeAttr(emoji)}">
-      ${escapeHtml(emoji.replace(/^\[|\]$/g, ""))}
+  el.emojiPopover.innerHTML = EMOJI_DEFS.map((emoji) => `
+    <button type="button" data-emoji="${escapeAttr(emoji.token)}" title="${escapeAttr(emoji.label)}" aria-label="${escapeAttr(emoji.label)}">
+      ${renderEmojiGlyph(emoji.token, { className: "emoji-popover-icon", size: 22 })}
+      <span>${escapeHtml(emoji.label)}</span>
     </button>
   `).join("");
 }
@@ -7422,6 +7629,8 @@ function setToolTab(tab) {
   document.querySelectorAll("[data-tool-tab]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.toolTab === tab);
   });
+  el.toolContent?.classList.toggle("is-history-tool", tab === "history");
+  el.toolContent?.classList.toggle("is-compact-tool", tab !== "history");
   renderToolContent();
   if (
     tab === "history" &&
@@ -7458,6 +7667,8 @@ function loadToolDataForActiveTab() {
 
 function renderToolContent() {
   const contact = state.activeContact;
+  el.toolContent.classList.toggle("is-history-tool", state.activeTool === "history");
+  el.toolContent.classList.toggle("is-compact-tool", state.activeTool !== "history");
   if (!contact) {
     el.toolContent.innerHTML = '<div class="empty-state">请选择会话后查看右侧工具。</div>';
     return;

@@ -986,3 +986,79 @@ ALTER TABLE `ChatContent_2026_06_08`
 - Do not overwrite unrelated user changes.
 - Use `apply_patch` for manual edits.
 - Update this file and `PROJECT_MEMORY.md` after meaningful work.
+
+## 2026-06-11 UI Follow-up
+
+- Latest user-facing frontend fix in `C:\youchat-dev-web` focused on:
+  1. right toolbar dynamic sizing
+  2. native-style emoji rendering
+
+### Files changed
+
+- `C:\youchat-dev-web\public\app.js`
+- `C:\youchat-dev-web\public\styles.css`
+
+### Right toolbar sizing rule
+
+- `toolContent` now uses mode classes:
+  - `is-history-tool`
+  - `is-compact-tool`
+- Class toggling happens in:
+  - `setToolTab(tab)`
+  - `renderToolContent()`
+- Intended behavior:
+  - `history` tab fills the full right column and owns the deep scroll area
+  - all other right-side tabs (`user`, `quick`, `skill`, `order`, `detail`) size to content and only scroll when needed
+- Do not revert `.tool-content` back to a universal full-height scrolling box. That was the direct cause of the “large blank area” complaint.
+
+### Emoji implementation rule
+
+- Emoji are no longer plain text buttons.
+- `public/app.js` now contains:
+  - `EMOJI_DEFS`
+  - `EMOJI_LOOKUP`
+  - `EMOJI_TOKEN_PATTERN`
+  - `renderEmojiGlyph()`
+  - `renderInlineTextWithEmojiAndLinks()`
+- `renderEmojiPopover()` now renders icon + label buttons from `EMOJI_DEFS`.
+- `linkifyMessageText()` now routes through `renderInlineTextWithEmojiAndLinks()` so text messages can render both:
+  - clickable URLs
+  - inline emoji sprites from tokens like `[微笑]`, `[红包]`, `[强]`
+
+### Emoji data source
+
+- Do not guess sprite mapping.
+- Current mapping was extracted from native client resources:
+  - `C:\Program Files\youchat-desktop\wwwroot\p__chatHistory__index.1b36184c.async.js`
+  - `C:\Program Files\youchat-desktop\wwwroot\p__chatHistory__index.6848817b.chunk.css`
+- Those native files expose:
+  - token text like `[微笑]`
+  - sprite class like `smiley_0`, `e2_05`, `u1F604`
+  - original background-position
+- Web client stores converted positions directly in `EMOJI_DEFS` using the current 18px sprite scale.
+
+### Current emoji coverage
+
+- High-frequency emoji are covered first.
+- Current mapped set includes:
+  - basic chat emoji such as `[微笑]`, `[撇嘴]`, `[流泪]`, `[呲牙]`, `[疑问]`, `[再见]`, `[OK]`
+  - extended/common support emoji such as `[红包]`, `[捂脸]`, `[奸笑]`, `[机智]`, `[皱眉]`, `[笑脸]`, `[生病]`, `[庆祝]`, `[礼物]`, `[吃瓜]`, `[旺柴]`, `[好的]`, `[打脸]`
+- Some native token ids exist in JS but have no matching CSS sprite position in the inspected chunk files. Do not invent positions for those. If the user asks for more emoji, continue extracting from native bundles first.
+
+### Verification already done
+
+- `npm run check` passed after the change.
+- Local dev service on `http://localhost:5177` was restarted after edits.
+
+### If user reports this area is still wrong
+
+- For right toolbar spacing:
+  - inspect `.tool-content`
+  - inspect `.history-section`
+  - inspect `.history-chat-list`
+  - confirm `is-history-tool` vs `is-compact-tool` is being toggled
+- For emoji:
+  - inspect `EMOJI_DEFS`
+  - inspect `renderEmojiPopover()`
+  - inspect `linkifyMessageText()`
+  - inspect `.client-emoji-icon`, `.emoji-popover`, `.message-emoji-icon`

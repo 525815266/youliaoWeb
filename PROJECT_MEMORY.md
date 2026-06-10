@@ -2540,3 +2540,61 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
   - 服务端联系人接口是否仍返回旧 `unRead`
   - 当前联系人的 `lastIncomingTime` 是否被正确提取
   - 发送成功后的 `syncConsumedMessages()` 是否报错
+
+2026-06-11 前端细修：
+
+- 用户反馈两个直接可见的问题：
+  1. 右侧工具栏除“聊天记录”外，其他 tab 预留了过多固定高度，出现明显空白。
+  2. 基础表情只显示文字标签，没有按客户端原生图标渲染。
+
+- 本次修改文件：
+  - `public/app.js`
+  - `public/styles.css`
+
+- 右侧工具栏高度策略已改为“双模式”：
+  - `toolContent` 在 `state.activeTool === "history"` 时挂 `is-history-tool`
+  - 其他 tab 挂 `is-compact-tool`
+  - `history` 保持整列撑满并由 `.history-section` / `.history-chat-list` 吃满剩余高度
+  - `user / quick / skill / order / detail` 改为按内容自然收起，必要时自身滚动，不再凭空占满整列高度
+
+- 表情已改为真实 sprite 渲染：
+  - 不再只用 `EMOJI_SHORTCUTS` 纯字符串数组直接渲染文字按钮。
+  - `public/app.js` 新增：
+    - `EMOJI_DEFS`
+    - `EMOJI_LOOKUP`
+    - `EMOJI_TOKEN_PATTERN`
+    - `renderEmojiGlyph()`
+    - `renderInlineTextWithEmojiAndLinks()`
+  - `renderEmojiPopover()` 现在渲染“sprite 图标 + 中文名”的网格面板。
+  - 聊天气泡文本路径 `linkifyMessageText()` 已改为支持：
+    1. 原有 URL 识别按钮
+    2. 文本中的 `[微笑]`、`[红包]`、`[强]` 等 token 直接替换成 inline sprite
+
+- emoji 映射来源说明：
+  - 映射不是手写猜的。
+  - 参考官方客户端 bundle：
+    - `C:\Program Files\youchat-desktop\wwwroot\p__chatHistory__index.1b36184c.async.js`
+    - `C:\Program Files\youchat-desktop\wwwroot\p__chatHistory__index.6848817b.chunk.css`
+  - 从官方 bundle 中抽取了：
+    - 中文 token，如 `[微笑]`、`[捂脸]`、`[机智]`
+    - 原生 sprite class，如 `smiley_0`、`e2_05`、`u1F604`
+    - sprite background-position，再换算到当前 Web 端 `18px` 基础尺寸
+
+- 当前策略不是“全量表情百科”，而是“优先覆盖真实客服高频常用表情”：
+  - 基础常用表情已覆盖
+  - 扩展常用表情已覆盖一批：`[红包]`、`[捂脸]`、`[奸笑]`、`[机智]`、`[皱眉]`、`[笑脸]`、`[生病]`、`[庆祝]`、`[礼物]`、`[吃瓜]`、`[旺柴]`、`[好的]`、`[打脸]`
+  - 官方 bundle 里少数 class 在对应 CSS chunk 中本身无坐标定义，这类不要瞎编；如果后续用户继续点名某个表情缺失，继续优先按官方资源补
+
+- 验证结果：
+  - `npm run check` 通过
+  - 本地 `http://localhost:5177` 服务已重启
+  - 源码层确认：
+    - 右侧 tool tab 已有 `history/compact` 模式 class 切换
+    - emoji 面板已改为图标网格
+    - 文本消息渲染已支持 inline emoji sprite
+
+- 后续继续改这块时的注意事项：
+  - 不要把 `history` 的“整列滚动”逻辑再套到其他 tool tab 上。
+  - 不要退回纯文字 emoji 按钮。
+  - 任何新增 emoji 优先从官方 bundle 抽 token/style/坐标，不要自己编 sprite 坐标。
+  - 如果后续用户继续要求“表情更全”，应优先补 `EMOJI_DEFS`，不要改消息发送 token 本身。

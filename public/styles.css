@@ -141,13 +141,16 @@ textarea:focus-visible {
 .client-icon-logout::before { content: "\e60f"; }
 
 .client-emoji-icon {
-  display: block;
-  width: 18px;
-  height: 18px;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: var(--emoji-size, 18px);
+  height: var(--emoji-size, 18px);
   overflow: hidden;
   background-image: url("/static/emojiSource.cdbf96da.png");
   background-repeat: no-repeat;
   background-size: 203.625px 185.0625px;
+  background-position: var(--emoji-x, 0) var(--emoji-y, 0);
+  vertical-align: text-bottom;
   pointer-events: none;
 }
 
@@ -1490,6 +1493,11 @@ textarea:focus-visible {
   background: #fff;
 }
 
+.message-emoji-icon {
+  --emoji-size: 20px;
+  margin: 0 1px;
+}
+
 .outgoing .message-content,
 .ai .message-content {
   align-self: flex-end;
@@ -2012,7 +2020,10 @@ textarea:focus-visible {
 .emoji-popover {
   align-self: start;
   width: min(420px, 100%);
-  max-height: 122px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 6px;
+  max-height: 196px;
   overflow: auto;
   margin: 0 0 7px;
   padding: 8px;
@@ -2023,19 +2034,33 @@ textarea:focus-visible {
 }
 
 .emoji-popover button {
-  width: 46px;
-  height: 28px;
-  margin: 2px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 4px;
+  min-height: 58px;
+  padding: 6px 4px;
   border: 1px solid transparent;
   border-radius: 4px;
   color: #314258;
   background: #f7fbff;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .emoji-popover button:hover {
   border-color: #b9dafc;
   background: #edf6ff;
+}
+
+.emoji-popover button span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emoji-popover-icon {
+  --emoji-size: 22px;
 }
 
 .ai-suggestion-card {
@@ -2397,13 +2422,29 @@ textarea:focus-visible {
 }
 
 .tool-content {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  min-height: 0;
   height: calc(100% - 42px);
-  overflow: auto;
   padding: 12px;
+  overflow: hidden;
+}
+
+.tool-content.is-compact-tool {
+  height: auto;
+  max-height: calc(100% - 42px);
+  overflow: auto;
+  align-self: start;
+}
+
+.tool-content.is-history-tool {
+  overflow: hidden;
 }
 
 .tool-section {
-  margin-bottom: 12px;
+  margin-bottom: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #fff;
@@ -3186,6 +3227,10 @@ textarea:focus-visible {
 }
 
 .history-section {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -3203,8 +3248,9 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: calc(100dvh - 190px);
-  min-height: 260px;
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
   overflow: auto;
   padding: 12px;
   background: #eef3f8;
