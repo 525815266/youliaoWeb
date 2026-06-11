@@ -1578,3 +1578,34 @@ Do not let the generic `.quick-list, .skill-panel-scroll` block be the last word
 
 If user still reports the same old stacked category cloud after these changes, first suspect an old running dev process or stale served bundle before changing layout code again.
 
+## 2026-06-11 Skill Scroll Direction Correction
+
+Important correction from user:
+
+The user does **not** want a horizontal scrollbar for skill categories.
+
+They want:
+
+- one vertical scrollbar for the whole right-side skill panel
+- category chips, match hint/card, and skill groups all living inside that vertical flow
+
+So the temporary horizontal category-rail experiment was reverted.
+
+### What was removed
+
+- `splitSkillCategoryTabs()`
+- `.skill-tabs-pinned`
+- `.skill-tabs-rail`
+
+### Current rule
+
+Use:
+
+- wrapped category chips at the top
+- one shared `.skill-panel-scroll` around:
+  - category chips
+  - match hint/card
+  - skill groups
+
+Do not reintroduce a horizontal category track unless the user explicitly asks for it.
+

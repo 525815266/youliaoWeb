@@ -3237,3 +3237,49 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
 
 那基本说明当前浏览器拿到的还是旧 bundle，需要重启当前 `5177` 对应的 `node server.js` 进程后再看。
 
+## 55. 2026-06-11 Skill 滚动方向理解纠偏
+
+### 1. 纠偏原因
+
+用户明确指出，上一轮把 `skill` 分类改成横向轨道，是理解错需求了。
+
+用户真正要的是：
+
+- 整个 `skill` 面板使用竖向滚动条
+- 分类、命中提示、skill 列表一起顺着这个竖向滚动往下走
+
+而不是：
+
+- 分类自身做一个横向滚动条
+
+### 2. 本次回退与修正
+
+本次把上一轮新增的横向分类轨道逻辑撤回：
+
+- 删除 `splitSkillCategoryTabs()`
+- `renderSkillReplyPanel()` 恢复为：
+  - `skill-tabs`
+  - `skill-inline-hint / skill-match-card`
+  - `skill groups`
+  全部一起放进同一个 `skill-panel-scroll`
+
+### 3. 样式回正
+
+同步移除：
+
+- `skill-tabs-pinned`
+- `skill-tabs-rail`
+- 横向 rail 的滚动条样式
+
+当前策略重新回到：
+
+- `skill-tabs` 允许多行换行
+- 整块 `skill-panel-scroll` 作为唯一有效滚动区
+
+### 4. 后续规则
+
+后面如果继续调这块，先记住这个前提：
+
+- 用户要的是右侧工具栏整体纵向滚动体验
+- 不是顶部分类横向滑动体验
+

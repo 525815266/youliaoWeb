@@ -8717,7 +8717,6 @@ function renderQuickReplyPanel() {
 function renderSkillReplyPanel() {
   const suggestion = buildSkillSuggestion();
   const groups = filterReplySkills(suggestion);
-  const { pinned, rail } = splitSkillCategoryTabs(suggestion);
   const autoText = state.skillAutoReply ? "自动回复已开" : "仅推荐";
   const learnText = state.skillAutoLearn ? "自动学习已开" : "自动学习已关";
   const matchText = suggestion?.skillId
@@ -8741,36 +8740,19 @@ function renderSkillReplyPanel() {
         <span>${escapeHtml(autoText)} / ${escapeHtml(learnText)}</span>
         <span>${escapeHtml(matchText)} / ${state.replySkillsLoading ? "加载中" : `${state.replySkills.length} 个 skill`}</span>
       </div>
-      <div class="skill-tabs" role="group" aria-label="skill 分类">
-        <div class="skill-tabs-pinned">
-          ${pinned.map((item) => `
-            <button class="${item.value === state.skillCategory ? "is-active" : ""}" type="button" data-skill-category="${escapeAttr(item.value)}">
-              ${escapeHtml(item.label)}
-            </button>
-          `).join("")}
-        </div>
-        <div class="skill-tabs-rail" aria-label="更多 skill 分类">
-          ${rail.map((item) => `
-            <button class="${item.value === state.skillCategory ? "is-active" : ""}" type="button" data-skill-category="${escapeAttr(item.value)}">
-              ${escapeHtml(item.label)}
-            </button>
-          `).join("")}
-        </div>
-      </div>
-      ${suggestion ? renderSkillMatchCard(suggestion) : '<div class="skill-inline-hint muted"><strong>当前未命中 skill</strong><span>继续交给 AI 结合快捷回复兜底</span></div>'}
       <div class="skill-panel-scroll">
+        <div class="skill-tabs" role="group" aria-label="skill 分类">
+          ${buildSkillCategoryTabs(suggestion).map((item) => `
+            <button class="${item.value === state.skillCategory ? "is-active" : ""}" type="button" data-skill-category="${escapeAttr(item.value)}">
+              ${escapeHtml(item.label)}
+            </button>
+          `).join("")}
+        </div>
+        ${suggestion ? renderSkillMatchCard(suggestion) : '<div class="skill-inline-hint muted"><strong>当前未命中 skill</strong><span>继续交给 AI 结合快捷回复兜底</span></div>'}
         ${groups.length ? groups.map((group) => renderSkillGroup(group, suggestion)).join("") : '<p class="empty-state skill-empty">没有匹配的 skill。</p>'}
       </div>
     </section>
   `;
-}
-
-function splitSkillCategoryTabs(suggestion = null) {
-  const items = buildSkillCategoryTabs(suggestion);
-  return {
-    pinned: items.filter((item) => item.value === SKILL_CATEGORY_CURRENT || item.value === SKILL_CATEGORY_ALL),
-    rail: items.filter((item) => item.value !== SKILL_CATEGORY_CURRENT && item.value !== SKILL_CATEGORY_ALL)
-  };
 }
 
 function filterReplySkills(suggestion = null) {

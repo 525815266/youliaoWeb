@@ -2931,53 +2931,22 @@ textarea:focus-visible {
 
 .skill-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  border-bottom: 1px solid #edf1f7;
-  background: #fbfdff;
-}
-
-.skill-tabs-pinned {
-  display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.skill-tabs-rail {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 2px;
-  scrollbar-width: thin;
-  scrollbar-color: #bfd7ef transparent;
-}
-
-.skill-tabs-rail::-webkit-scrollbar {
-  height: 6px;
-}
-
-.skill-tabs-rail::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: #bfd7ef;
-}
-
-.skill-tabs-rail::-webkit-scrollbar-track {
-  background: transparent;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid #edf1f7;
+  background: #fbfdff;
 }
 
 .skill-tabs button {
   min-width: 0;
   min-height: 28px;
-  flex: 0 0 auto;
   border: 1px solid #d9e2ef;
   border-radius: 999px;
   padding: 0 10px;
   color: #425066;
   font-size: 12px;
   line-height: 1.2;
-  white-space: nowrap;
   background: #fff;
 }
 
@@ -3082,7 +3051,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin: 0 10px;
+  margin: 0 10px 2px;
   padding: 8px 10px;
   border-bottom: 1px solid #edf1f7;
   color: #607086;
@@ -3102,7 +3071,7 @@ textarea:focus-visible {
 .skill-match-card {
   display: grid;
   gap: 8px;
-  margin: 0 10px;
+  margin: 0 10px 2px;
   padding: 10px;
   border: 1px solid #b9dafc;
   border-radius: var(--radius);
