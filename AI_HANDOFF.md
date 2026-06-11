@@ -1003,13 +1003,18 @@ ALTER TABLE `ChatContent_2026_06_08`
 - `toolContent` now uses mode classes:
   - `is-history-tool`
   - `is-compact-tool`
+  - `is-skill-tool`
+  - `is-quick-tool`
 - Class toggling happens in:
   - `setToolTab(tab)`
   - `renderToolContent()`
 - Intended behavior:
   - `history` tab fills the full right column and owns the deep scroll area
-  - all other right-side tabs (`user`, `quick`, `skill`, `order`, `detail`) size to content and only scroll when needed
+  - `skill` uses internal scroll inside `.skill-panel-scroll`
+  - `quick` uses internal scroll inside `.quick-list`
+  - `user`, `order`, and `detail` stay compact
 - Do not revert `.tool-content` back to a universal full-height scrolling box. That was the direct cause of the “large blank area” complaint.
+- Do not push `quick` back into `is-compact-tool`. That was the reason the right-side quick-reply area could lose a usable scrollbar even though category chips and list markup were still rendered.
 
 ### Emoji implementation rule
 
@@ -1054,9 +1059,14 @@ ALTER TABLE `ChatContent_2026_06_08`
 
 - For right toolbar spacing:
   - inspect `.tool-content`
+  - inspect `.tool-content.is-quick-tool`
+  - inspect `.quick-section`
+  - inspect `.quick-list`
   - inspect `.history-section`
   - inspect `.history-chat-list`
-  - confirm `is-history-tool` vs `is-compact-tool` is being toggled
+  - inspect `.tool-content.is-skill-tool`
+  - inspect `.skill-panel-scroll`
+  - confirm `is-history-tool` / `is-skill-tool` / `is-quick-tool` / `is-compact-tool` are being toggled correctly
 - For emoji:
   - inspect `EMOJI_DEFS`
   - inspect `renderEmojiPopover()`

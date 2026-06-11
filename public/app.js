@@ -8287,14 +8287,20 @@ function normalizeAccountDetail(item) {
   };
 }
 
+function usesInternalToolScroll(tab = state.activeTool) {
+  return tab === "history" || tab === "skill" || tab === "quick";
+}
+
 function setToolTab(tab) {
   state.activeTool = tab;
   document.querySelectorAll("[data-tool-tab]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.toolTab === tab);
   });
+  const usesInternalScroll = usesInternalToolScroll(tab);
   el.toolContent?.classList.toggle("is-history-tool", tab === "history");
-  el.toolContent?.classList.toggle("is-compact-tool", tab !== "history" && tab !== "skill");
+  el.toolContent?.classList.toggle("is-compact-tool", !usesInternalScroll);
   el.toolContent?.classList.toggle("is-skill-tool", tab === "skill");
+  el.toolContent?.classList.toggle("is-quick-tool", tab === "quick");
   renderToolContent();
   if (
     tab === "history" &&
@@ -8331,9 +8337,11 @@ function loadToolDataForActiveTab() {
 
 function renderToolContent() {
   const contact = state.activeContact;
+  const usesInternalScroll = usesInternalToolScroll(state.activeTool);
   el.toolContent.classList.toggle("is-history-tool", state.activeTool === "history");
-  el.toolContent.classList.toggle("is-compact-tool", state.activeTool !== "history" && state.activeTool !== "skill");
+  el.toolContent.classList.toggle("is-compact-tool", !usesInternalScroll);
   el.toolContent.classList.toggle("is-skill-tool", state.activeTool === "skill");
+  el.toolContent.classList.toggle("is-quick-tool", state.activeTool === "quick");
   if (!contact) {
     el.toolContent.innerHTML = '<div class="empty-state">请选择会话后查看右侧工具。</div>';
     return;

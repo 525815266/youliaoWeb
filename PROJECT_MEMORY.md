@@ -2558,6 +2558,30 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
   - `history` 保持整列撑满并由 `.history-section` / `.history-chat-list` 吃满剩余高度
   - `user / quick / skill / order / detail` 改为按内容自然收起，必要时自身滚动，不再凭空占满整列高度
 
+2026-06-11 右侧滚动条补修：
+
+- 用户追加反馈：右侧工具栏不是“下拉框没了”，而是 `skill 回复 / 快捷回复` 的滚动条没了，导致无法浏览全部内容。
+- 本次修改文件：
+  - `public/app.js`
+  - `public/styles.css`
+- 修复策略：
+  - 右侧工具栏内部滚动模式从两类扩展成三类：
+    - `is-history-tool`
+    - `is-skill-tool`
+    - `is-quick-tool`
+  - `quick` 不再继续走 `is-compact-tool`，避免分类按钮和列表内容都堆进一个自然高度容器，出现“内容很多但没有可见滚动条”的退化。
+  - `.tool-pane` 改为稳定的纵向 flex 容器，确保 `tool-tabs` 在上、`toolContent` 在下，不再依赖默认块布局高度碰运气。
+  - `.quick-section` 改为真正的纵向弹性容器，`.quick-list` 自身承担纵向滚动。
+  - `.skill-panel-scroll` 保持内部滚动，并与 `.quick-list` 统一补上显式滚动条样式。
+- 当前规则：
+  - `history`：整列深滚动
+  - `skill`：页签头部固定，`.skill-panel-scroll` 内部滚动
+  - `quick`：页签头部固定，`.quick-list` 内部滚动
+  - `user / order / detail`：继续保持紧凑内容模式
+- 后续注意：
+  - 不要再把 `quick` 塞回 `is-compact-tool`。
+  - 如果以后用户再反馈“右侧分类还在，但翻不到下面”，优先检查 `.tool-pane`、`.tool-content.is-quick-tool`、`.quick-section`、`.quick-list`。
+
 - 表情已改为真实 sprite 渲染：
   - 不再只用 `EMOJI_SHORTCUTS` 纯字符串数组直接渲染文字按钮。
   - `public/app.js` 新增：
