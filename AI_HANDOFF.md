@@ -1245,3 +1245,39 @@ ALTER TABLE `ChatContent_2026_06_08`
 - Do not switch CodeBuddy preset back to `api.codebuddy.ai` unless later verified.
 - Do not default CodeBuddy model to `codebuddy`; current test says that model id is invalid.
 - Keep the stream-to-JSON conversion unless the frontend is later upgraded to consume SSE natively.
+
+## 2026-06-11 AI Provider Split
+
+Latest AI settings work changed the storage model from one shared config to per-provider config.
+
+New files and endpoints:
+
+- `config/ai-providers.json`: committed default provider config
+- `GET /ai/providers`: returns default provider and committed provider presets
+- `POST /ai/models`: fetches model list for current provider, falls back to verified local model list when upstream models route is unavailable
+
+Frontend storage now uses:
+
+- `youchat.ai.provider`
+- `youchat.ai.providers`
+
+Behavior:
+
+- `sub2`, `deepseek`, and `codebuddy` now keep separate `baseUrl`, `apiKey`, `model`, `authType`, `temperature`
+- opening AI settings snapshots current runtime state
+- closing settings without save restores the snapshot, so browsing another provider does not silently switch the live AI source
+- old shared keys (`youchat.ai.baseUrl`, `apiKey`, `model`, `authType`, `temperature`) are migrated once into the `sub2` bucket
+
+Known provider notes:
+
+- CodeBuddy defaults are now committed in both frontend preset state and `config/ai-providers.json`
+- verified CodeBuddy base remains `https://copilot.tencent.com/v2`
+- verified auth is `X-Api-Key`
+- verified working model remains `deepseek-v3.1`
+- `https://copilot.tencent.com/v2/models` currently returns `404 Route Not Found`, so `/ai/models` should fall back to local verified models for CodeBuddy
+
+Verification done:
+
+- `npm run check` passed after the split
+- if `http://localhost:5177` does not show the new provider dropdown / fetch-models button, restart the existing `node server.js` process because an older already-running server instance may still be serving the previous bundle
+

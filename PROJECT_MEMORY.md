@@ -54,6 +54,7 @@
 48. [2026-06-09 飞牛服务误切 SQLite 修复](#48-2026-06-09-飞牛服务误切-sqlite-修复)
 49. [2026-06-09 图片发送卡在发送中修复](#49-2026-06-09-图片发送卡在发送中修复)
 50. [2026-06-09 SignalR 清红点桥接](#50-2026-06-09-signalr-清红点桥接)
+51. [2026-06-11 AI 渠道独立配置与模型拉取](#51-2026-06-11-ai-渠道独立配置与模型拉取)
 
 ## 1. 项目目标
 
@@ -2790,3 +2791,43 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
     - 是否仍走 `copilot.tencent.com/v2/chat/completions`
     - 是否仍要求 `stream=true`
     - 当前账号可用模型是否还是 `deepseek-v3.1 / deepseek-r1`
+
+## 51. 2026-06-11 AI 渠道独立配置与模型拉取
+
+本次把 AI 设置从“全局共用一套字段”改成了“按渠道独立存储”。
+
+新增能力：
+
+- `sub2`、`DeepSeek`、`CodeBuddy` 三个渠道分别保存自己的 `baseUrl / apiKey / model / authType / temperature`。
+- AI 设置弹层新增“当前渠道”下拉框和“获取模型”按钮。
+- 模型输入改为“下拉选择 + 自定义模型名输入框”双轨模式。
+- 服务端新增 `config/ai-providers.json` 作为 AI 渠道默认配置文件。
+- 服务端新增 `/ai/providers`，前端启动时会读取默认渠道配置。
+- 服务端新增 `/ai/models`，优先请求上游模型列表，失败时回退到本地已验证模型列表。
+
+当前默认配置：
+
+- `sub2`：`https://sub2.sn55.cn/`，默认模型 `gpt-5.4-mini`
+- `DeepSeek`：`https://api.deepseek.com`，默认模型 `deepseek-v4-flash`
+- `CodeBuddy`：`https://copilot.tencent.com/v2`，默认模型 `deepseek-v3.1`
+
+实现细节：
+
+- 前端本地存储改为：
+  - `youchat.ai.provider`
+  - `youchat.ai.providers`
+- 旧共享字段 `youchat.ai.baseUrl / apiKey / model / authType / temperature` 会在首次加载时迁移到 `sub2` 渠道配置中。
+- 打开 AI 设置弹层时会记录快照，未保存直接关闭会回滚，不会因为切换查看渠道就偷偷改掉当前运行态。
+- 在弹层内切换渠道前，会先把当前输入框中的临时修改同步到对应渠道草稿，避免切换查看时丢失未保存内容。
+
+注意事项：
+
+- `CodeBuddy` 已验证仍应优先使用 `https://copilot.tencent.com/v2/chat/completions`，认证头为 `X-Api-Key`。
+- `CodeBuddy` 的标准 `/models` 路由当前返回 404，因此 `/ai/models` 会自动回退到本地已验证模型列表，当前至少包括 `deepseek-v3.1`、`deepseek-r1`。
+- `DeepSeek` 和 `sub2` 的模型列表获取已按 OpenAI 兼容接口路径处理，但如上游限制权限或未开放模型接口，也会回退到本地预置列表。
+
+验证：
+
+- `npm run check` 已通过。
+- 如果 `http://localhost:5177` 页面还没出现新的渠道下拉框或“获取模型”按钮，说明旧的 `node server.js` 进程还在运行，需要重启当前开发服务。
+

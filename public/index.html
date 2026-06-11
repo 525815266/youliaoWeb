@@ -37,6 +37,17 @@
               <button class="mini-action" type="button" data-ai-preset="codebuddy">CodeBuddy</button>
             </div>
             <label class="settings-field">
+              <span>当前渠道</span>
+              <div class="settings-inline-field settings-inline-field--with-action">
+                <select id="aiProvider" aria-label="AI 渠道">
+                  <option value="sub2">sub2 中转</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="codebuddy">CodeBuddy</option>
+                </select>
+                <button id="fetchAiModels" class="mini-action settings-fetch-button" type="button">获取模型</button>
+              </div>
+            </label>
+            <label class="settings-field">
               <span>API 端点</span>
               <input id="aiBaseUrl" type="url" autocomplete="off" />
           </label>
@@ -53,7 +64,10 @@
           </label>
           <label class="settings-field">
             <span>模型</span>
-            <input id="aiModel" autocomplete="off" />
+            <div class="settings-stack-field">
+              <select id="aiModel" aria-label="AI 模型"></select>
+              <input id="aiModelCustom" autocomplete="off" placeholder="自定义模型名" />
+            </div>
           </label>
           <label class="settings-field">
             <span>温度</span>

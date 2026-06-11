@@ -1,0 +1,44 @@
+{
+  "defaultProvider": "sub2",
+  "providers": {
+    "sub2": {
+      "label": "sub2 中转",
+      "baseUrl": "https://sub2.sn55.cn/",
+      "apiKey": "sk-b9d9c696d71c86d875a0379dcbc0eca8e5863884022405bb031d95341951485b",
+      "model": "gpt-5.4-mini",
+      "authType": "bearer",
+      "temperature": 0.35,
+      "modelOptions": [
+        "gpt-5.4-mini",
+        "gpt-4.1",
+        "gpt-4o-mini"
+      ]
+    },
+    "deepseek": {
+      "label": "DeepSeek 官方",
+      "baseUrl": "https://api.deepseek.com",
+      "apiKey": "",
+      "model": "deepseek-v4-flash",
+      "authType": "bearer",
+      "temperature": 0.35,
+      "modelOptions": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ]
+    },
+    "codebuddy": {
+      "label": "CodeBuddy",
+      "baseUrl": "https://copilot.tencent.com/v2",
+      "apiKey": "ck_foknyust454w.9e9umAeuAKEGdz0QlSEtyCl8U4AsQUVEp3OUnARhXw0",
+      "model": "deepseek-v3.1",
+      "authType": "x-api-key",
+      "temperature": 0.35,
+      "modelOptions": [
+        "deepseek-v3.1",
+        "deepseek-r1"
+      ]
+    }
+  }
+}

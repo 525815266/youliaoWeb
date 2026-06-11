@@ -7,13 +7,13 @@ const signalR = require("@microsoft/signalr");
 
 const PORT = Number(process.env.PORT || 5177);
 const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "http://192.168.9.83:18080/api";
-const DEFAULT_AI_BASE = process.env.YOUCHAT_AI_BASE || "https://sub2.sn55.cn/";
-const DEFAULT_AI_MODEL = process.env.YOUCHAT_AI_MODEL || "gpt-5.4-mini";
 const PUBLIC_DIR = path.join(__dirname, "public");
 const CLIENT_WWWROOT = process.env.YOUCHAT_DESKTOP_WWWROOT || "C:\\Program Files\\youchat-desktop\\wwwroot";
 const SIGNALR_BROWSER_FILE = path.join(__dirname, "node_modules", "@microsoft", "signalr", "dist", "browser", "signalr.min.js");
 const LOG_DIR = path.join(__dirname, "logs");
 const DATA_DIR = path.join(__dirname, "data");
+const CONFIG_DIR = path.join(__dirname, "config");
+const AI_PROVIDERS_FILE = path.join(CONFIG_DIR, "ai-providers.json");
 const REPLY_SKILLS_FILE = path.join(DATA_DIR, "reply-skills.json");
 const API_CAPTURE_FILE = path.join(LOG_DIR, "api-capture.ndjson");
 const MAX_CAPTURE_TEXT = 8000;
@@ -40,6 +40,25 @@ const mimeTypes = {
   ".woff2": "font/woff2",
   ".ttf": "font/ttf"
 };
+
+function readAiProvidersConfig() {
+  try {
+    const raw = fs.readFileSync(AI_PROVIDERS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+const AI_PROVIDER_CONFIG = readAiProvidersConfig();
+const DEFAULT_AI_PROVIDER = String(AI_PROVIDER_CONFIG.defaultProvider || "sub2").trim() || "sub2";
+const AI_PROVIDER_PRESETS = AI_PROVIDER_CONFIG.providers && typeof AI_PROVIDER_CONFIG.providers === "object"
+  ? AI_PROVIDER_CONFIG.providers
+  : {};
+const DEFAULT_AI_PROVIDER_CONFIG = AI_PROVIDER_PRESETS[DEFAULT_AI_PROVIDER] || {};
+const DEFAULT_AI_BASE = process.env.YOUCHAT_AI_BASE || DEFAULT_AI_PROVIDER_CONFIG.baseUrl || "https://sub2.sn55.cn/";
+const DEFAULT_AI_MODEL = process.env.YOUCHAT_AI_MODEL || DEFAULT_AI_PROVIDER_CONFIG.model || "gpt-5.4-mini";
 
 function sendJson(res, status, payload) {
   res.writeHead(status, {
@@ -646,6 +665,11 @@ function parseMaybeJson(text) {
   }
 }
 
+function getMessage(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  return payload.message || payload.msg || payload.error || payload.error_msg || "";
+}
+
 function parseRequestPayload(buffer, req) {
   const text = Buffer.isBuffer(buffer) ? buffer.toString("utf8") : String(buffer || "");
   const contentType = String(req.headers["content-type"] || "");
@@ -1040,6 +1064,74 @@ function normalizeAiAuthType(value, targetUrl = "") {
   return "bearer";
 }
 
+function normalizeAiBaseUrlForModels(value = "") {
+  const trimmed = String(value || "").trim();
+  return trimmed ? trimmed.replace(/\/+$/, "") : "";
+}
+
+function getAiModelsUrl(baseUrl) {
+  const rawBase = normalizeAiBaseUrlForModels(baseUrl || DEFAULT_AI_BASE);
+  if (!rawBase) throw new Error("AI base URL is empty");
+  const parsedBase = new URL(rawBase);
+  if (/copilot\.tencent\.com$/i.test(parsedBase.hostname)) {
+    if (/\/v2\/models$/i.test(parsedBase.pathname)) return new URL(rawBase);
+    if (/\/v2$/i.test(parsedBase.pathname)) return new URL(`${rawBase}/models`);
+    return new URL(`${parsedBase.origin}/v2/models`);
+  }
+  if (/api\.deepseek\.com$/i.test(parsedBase.hostname)) {
+    if (/\/models$/i.test(parsedBase.pathname)) return new URL(rawBase);
+    if (/\/v1$/i.test(parsedBase.pathname)) return new URL(`${parsedBase.origin}/models`);
+    return new URL(`${parsedBase.origin}/models`);
+  }
+  if (/\/models$/i.test(rawBase)) return new URL(rawBase);
+  if (/\/v1$/i.test(rawBase)) return new URL(`${rawBase}/models`);
+  return new URL(`${rawBase}/v1/models`);
+}
+
+function getProviderPresetById(providerId = "") {
+  const key = String(providerId || "").trim();
+  return (key && AI_PROVIDER_PRESETS[key]) || null;
+}
+
+function findProviderByBaseUrl(baseUrl = "") {
+  const normalized = normalizeAiBaseUrlForModels(baseUrl);
+  if (!normalized) return null;
+  return Object.entries(AI_PROVIDER_PRESETS).find(([, preset]) => (
+    normalizeAiBaseUrlForModels(preset?.baseUrl) === normalized
+  )) || null;
+}
+
+function getFallbackAiModels({ providerId = "", baseUrl = "" } = {}) {
+  const preset = getProviderPresetById(providerId) || findProviderByBaseUrl(baseUrl)?.[1] || {};
+  const options = Array.isArray(preset.modelOptions) ? preset.modelOptions : [];
+  const deduped = [];
+  options.forEach((item) => {
+    const model = String(item || "").trim();
+    if (model && !deduped.includes(model)) deduped.push(model);
+  });
+  if (!deduped.length && preset.model) deduped.push(String(preset.model));
+  return deduped;
+}
+
+function extractModelIds(payload) {
+  if (!payload) return [];
+  const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
+  const ids = [];
+  list.forEach((item) => {
+    const model = String(item?.id || item?.model || item?.name || "").trim();
+    if (model && !ids.includes(model)) ids.push(model);
+  });
+  return ids;
+}
+
+function handleAiProvidersConfig(_req, res) {
+  sendJson(res, 200, {
+    success: true,
+    defaultProvider: DEFAULT_AI_PROVIDER,
+    providers: AI_PROVIDER_PRESETS
+  });
+}
+
 function getAiAuthHeaders(apiKey, authType, targetUrl) {
   if (normalizeAiAuthType(authType, targetUrl) === "x-api-key") {
     return { "X-Api-Key": apiKey };
@@ -1271,6 +1363,102 @@ async function proxyAi(req, res) {
   }
 }
 
+async function handleAiModels(req, res) {
+  if (req.method !== "POST") {
+    sendJson(res, 405, {
+      success: false,
+      message: "AI models endpoint only supports POST"
+    });
+    return;
+  }
+
+  let incoming;
+  try {
+    const body = await readBody(req);
+    incoming = body.length ? JSON.parse(body.toString("utf8")) : {};
+  } catch (error) {
+    sendJson(res, 400, {
+      success: false,
+      message: "Invalid JSON body",
+      error: error.message
+    });
+    return;
+  }
+
+  const providerId = String(incoming.providerId || "").trim();
+  const apiKey = String(incoming.apiKey || "").trim();
+  const baseUrl = String(incoming.baseUrl || "").trim();
+  const authType = normalizeAiAuthType(incoming.authType, baseUrl);
+  const fallbackModels = getFallbackAiModels({ providerId, baseUrl });
+
+  if (!apiKey) {
+    sendJson(res, 200, {
+      success: true,
+      providerId,
+      baseUrl,
+      source: fallbackModels.length ? "fallback-no-key" : "empty-no-key",
+      models: fallbackModels
+    });
+    return;
+  }
+
+  let targetUrl;
+  try {
+    targetUrl = getAiModelsUrl(baseUrl);
+  } catch (error) {
+    sendJson(res, 200, {
+      success: true,
+      providerId,
+      baseUrl,
+      source: fallbackModels.length ? "fallback-invalid-url" : "empty-invalid-url",
+      models: fallbackModels,
+      warning: error.message
+    });
+    return;
+  }
+
+  try {
+    const upstream = await fetchWithTimeout(targetUrl, {
+      method: "GET",
+      headers: {
+        ...getAiAuthHeaders(apiKey, authType, targetUrl.toString())
+      }
+    }, Math.min(AI_PROXY_TIMEOUT_MS, 30000), "AI models");
+    const text = await upstream.text();
+    const parsed = parseMaybeJson(text);
+    const models = extractModelIds(parsed);
+    if (!upstream.ok || !models.length) {
+      sendJson(res, 200, {
+        success: true,
+        providerId,
+        baseUrl,
+        target: targetUrl.toString(),
+        source: fallbackModels.length ? "fallback-upstream" : "empty-upstream",
+        models: fallbackModels,
+        warning: models.length ? "" : getMessage(parsed) || `HTTP ${upstream.status}`
+      });
+      return;
+    }
+    sendJson(res, 200, {
+      success: true,
+      providerId,
+      baseUrl,
+      target: targetUrl.toString(),
+      source: "upstream",
+      models
+    });
+  } catch (error) {
+    sendJson(res, 200, {
+      success: true,
+      providerId,
+      baseUrl,
+      source: fallbackModels.length ? "fallback-error" : "empty-error",
+      models: fallbackModels,
+      warning: error.message
+    });
+  }
+}
+
 function serveStatic(req, res) {
   const requestPath = new URL(req.url, `http://localhost:${PORT}`).pathname;
   const safePath = requestPath === "/" ? "/index.html" : requestPath;
@@ -1324,6 +1512,16 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.url.startsWith("/ai/models")) {
+    await handleAiModels(req, res);
+    return;
+  }
+
+  if (req.url.startsWith("/ai/providers")) {
+    handleAiProvidersConfig(req, res);
+    return;
+  }
+
   if (req.url.startsWith("/local/reply-skills/learn")) {
     await handleReplySkillLearn(req, res);
     return;
@@ -1355,6 +1553,7 @@ const server = http.createServer(async (req, res) => {
       apiBase: DEFAULT_API_BASE,
       aiBase: DEFAULT_AI_BASE,
       aiModel: DEFAULT_AI_MODEL,
+      aiProvider: DEFAULT_AI_PROVIDER,
       port: PORT
     });
     return;

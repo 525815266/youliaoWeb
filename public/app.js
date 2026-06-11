@@ -9,6 +9,9 @@ const DEFAULT_AI_API_KEY = "sk-b9d9c696d71c86d875a0379dcbc0eca8e5863884022405bb0
 const DEFAULT_AI_MODEL = "gpt-5.4-mini";
 const DEFAULT_AI_TEMPERATURE = 0.35;
 const DEFAULT_AI_AUTH_TYPE = "bearer";
+const AI_PROVIDER_STORAGE_KEY = "youchat.ai.provider";
+const AI_PROVIDER_SETTINGS_STORAGE_KEY = "youchat.ai.providers";
+const DEFAULT_AI_PROVIDER = "sub2";
 const API_REQUEST_TIMEOUT_MS = 45000;
 const IMAGE_UPLOAD_TIMEOUT_MS = 15000;
 const LOCAL_IMAGE_UPLOAD_TIMEOUT_MS = 70000;
@@ -18,20 +21,29 @@ const AI_PRESETS = {
   sub2: {
     label: "sub2 中转",
     baseUrl: DEFAULT_AI_BASE_URL,
+    apiKey: DEFAULT_AI_API_KEY,
     model: DEFAULT_AI_MODEL,
-    authType: "bearer"
+    authType: "bearer",
+    temperature: DEFAULT_AI_TEMPERATURE,
+    modelOptions: ["gpt-5.4-mini", "gpt-4.1", "gpt-4o-mini"]
   },
   deepseek: {
     label: "DeepSeek 官方",
     baseUrl: "https://api.deepseek.com",
+    apiKey: "",
     model: "deepseek-v4-flash",
-    authType: "bearer"
+    authType: "bearer",
+    temperature: DEFAULT_AI_TEMPERATURE,
+    modelOptions: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"]
   },
   codebuddy: {
     label: "CodeBuddy",
     baseUrl: "https://copilot.tencent.com/v2",
+    apiKey: "ck_foknyust454w.9e9umAeuAKEGdz0QlSEtyCl8U4AsQUVEp3OUnARhXw0",
     model: "deepseek-v3.1",
-    authType: "x-api-key"
+    authType: "x-api-key",
+    temperature: DEFAULT_AI_TEMPERATURE,
+    modelOptions: ["deepseek-v3.1", "deepseek-r1"]
   }
 };
 const ONLINE_SERVICE_URL = "https://work.weixin.qq.com/kfid/kfcac6535078c49e290";
@@ -358,11 +370,15 @@ const state = {
   accountIdResolved: false,
   remember: localStorage.getItem("youchat.remember") !== "false",
   aiEnabled: localStorage.getItem("youchat.ai.enabled") !== "false",
-  aiBaseUrl: localStorage.getItem("youchat.ai.baseUrl") || DEFAULT_AI_BASE_URL,
-  aiApiKey: localStorage.getItem("youchat.ai.apiKey") || DEFAULT_AI_API_KEY,
-  aiModel: normalizeAiModel(localStorage.getItem("youchat.ai.model") || DEFAULT_AI_MODEL),
-  aiAuthType: normalizeAiAuthType(localStorage.getItem("youchat.ai.authType") || DEFAULT_AI_AUTH_TYPE),
-  aiTemperature: clampAiTemperature(localStorage.getItem("youchat.ai.temperature") || DEFAULT_AI_TEMPERATURE),
+  aiProvider: normalizeAiProviderId(localStorage.getItem(AI_PROVIDER_STORAGE_KEY) || DEFAULT_AI_PROVIDER),
+  aiProvidersConfig: loadAiProviderSettings(),
+  aiBaseUrl: "",
+  aiApiKey: "",
+  aiModel: "",
+  aiAuthType: DEFAULT_AI_AUTH_TYPE,
+  aiTemperature: DEFAULT_AI_TEMPERATURE,
+  aiModelOptions: [],
+  aiFetchingModels: false,
   aiGenerating: false,
   aiSuggestion: null,
   aiSuggestions: [],
@@ -507,6 +523,7 @@ const state = {
 const el = {};
 let refreshTimer = null;
 let scrollRequestId = 0;
+let aiSettingsSnapshot = null;
 const scrollRequestIds = new WeakMap();
 
 function $(id) {
@@ -543,9 +560,12 @@ function boot() {
     "aiEnabled",
     "skillAutoReply",
     "skillAutoLearn",
+    "aiProvider",
     "aiBaseUrl",
     "aiApiKey",
     "aiModel",
+    "aiModelCustom",
+    "fetchAiModels",
     "aiAuthType",
     "aiTemperature",
     "resetAiSettings",
@@ -612,11 +632,13 @@ function boot() {
   });
 
   hydrateLoginFields();
+  applyAiProviderState();
   hydrateAiSettingsFields();
   hydrateComposerFields();
   bindEvents();
   renderAll();
   loadReplySkills();
+  loadAiProviderPresetsFromServer();
 }
 
 function bindEvents() {
@@ -638,6 +660,8 @@ function bindEvents() {
   });
   el.aiSettingsPanel.addEventListener("submit", saveAiSettings);
   el.aiSettingsPanel.addEventListener("click", handleAiPresetClick);
+  el.aiProvider.addEventListener("change", handleAiProviderChange);
+  el.fetchAiModels.addEventListener("click", fetchAiModelsForActiveProvider);
   el.resetAiSettings.addEventListener("click", resetAiSettings);
   el.friendRequests.addEventListener("click", showFriendRequestsDialog);
   el.refreshContacts.addEventListener("click", loadContacts);
@@ -736,9 +760,10 @@ function hydrateAiSettingsFields() {
   el.aiEnabled.checked = state.aiEnabled;
   el.skillAutoReply.checked = state.skillAutoReply;
   el.skillAutoLearn.checked = state.skillAutoLearn;
+  if (el.aiProvider) el.aiProvider.value = state.aiProvider;
   el.aiBaseUrl.value = state.aiBaseUrl;
   el.aiApiKey.value = state.aiApiKey;
-  el.aiModel.value = state.aiModel;
+  syncAiModelSelect();
   el.aiAuthType.value = state.aiAuthType;
   el.aiTemperature.value = state.aiTemperature;
   updateAiButtonState();
@@ -796,12 +821,33 @@ async function withSendingLock(task) {
 }
 
 function showAiSettings() {
+  aiSettingsSnapshot = {
+    aiProvider: state.aiProvider,
+    aiBaseUrl: state.aiBaseUrl,
+    aiApiKey: state.aiApiKey,
+    aiModel: state.aiModel,
+    aiAuthType: state.aiAuthType,
+    aiTemperature: state.aiTemperature,
+    aiModelOptions: [...(state.aiModelOptions || [])],
+    aiProvidersConfig: JSON.parse(JSON.stringify(state.aiProvidersConfig || {}))
+  };
   hydrateAiSettingsFields();
   el.aiSettingsOverlay.classList.remove("is-hidden");
-  window.setTimeout(() => el.aiBaseUrl.focus(), 0);
+  window.setTimeout(() => (el.aiProvider || el.aiBaseUrl).focus(), 0);
 }
 
 function hideAiSettings() {
+  if (aiSettingsSnapshot) {
+    state.aiProvider = aiSettingsSnapshot.aiProvider;
+    state.aiBaseUrl = aiSettingsSnapshot.aiBaseUrl;
+    state.aiApiKey = aiSettingsSnapshot.aiApiKey;
+    state.aiModel = aiSettingsSnapshot.aiModel;
+    state.aiAuthType = aiSettingsSnapshot.aiAuthType;
+    state.aiTemperature = aiSettingsSnapshot.aiTemperature;
+    state.aiModelOptions = [...(aiSettingsSnapshot.aiModelOptions || [])];
+    state.aiProvidersConfig = JSON.parse(JSON.stringify(aiSettingsSnapshot.aiProvidersConfig || {}));
+    aiSettingsSnapshot = null;
+  }
   el.aiSettingsOverlay.classList.add("is-hidden");
 }
 
@@ -1719,12 +1765,15 @@ function saveAiSettings(event) {
   state.aiEnabled = el.aiEnabled.checked;
   state.skillAutoReply = el.skillAutoReply.checked;
   state.skillAutoLearn = el.skillAutoLearn.checked;
+  state.aiProvider = normalizeAiProviderId(el.aiProvider?.value || state.aiProvider);
   state.aiBaseUrl = normalizeAiBaseUrl(el.aiBaseUrl.value);
   state.aiApiKey = el.aiApiKey.value.trim();
-  state.aiModel = normalizeAiModel(el.aiModel.value);
+  state.aiModel = normalizeAiModel(getAiModelFieldValue());
   state.aiAuthType = normalizeAiAuthType(el.aiAuthType.value);
   state.aiTemperature = clampAiTemperature(el.aiTemperature.value);
+  persistActiveAiProviderDraft();
   persistAiSettings();
+  aiSettingsSnapshot = null;
   hydrateAiSettingsFields();
   hideAiSettings();
   toast("AI 设置已保存。");
@@ -1734,11 +1783,8 @@ function resetAiSettings() {
   state.aiEnabled = true;
   state.skillAutoReply = false;
   state.skillAutoLearn = true;
-  state.aiBaseUrl = DEFAULT_AI_BASE_URL;
-  state.aiApiKey = DEFAULT_AI_API_KEY;
-  state.aiModel = DEFAULT_AI_MODEL;
-  state.aiAuthType = DEFAULT_AI_AUTH_TYPE;
-  state.aiTemperature = DEFAULT_AI_TEMPERATURE;
+  state.aiProvidersConfig = loadAiProviderSettings(true);
+  applyAiProviderState(state.aiProvider);
   persistAiSettings();
   hydrateAiSettingsFields();
   toast("AI 设置已恢复默认。");
@@ -1747,14 +1793,15 @@ function resetAiSettings() {
 function handleAiPresetClick(event) {
   const target = event.target.closest("[data-ai-preset]");
   if (!target) return;
-  const preset = AI_PRESETS[target.dataset.aiPreset];
-  if (!preset) return;
-  el.aiBaseUrl.value = preset.baseUrl;
-  el.aiModel.value = preset.model;
-  el.aiAuthType.value = preset.authType || DEFAULT_AI_AUTH_TYPE;
-  if (target.dataset.aiPreset === "deepseek") {
+  const providerId = normalizeAiProviderId(target.dataset.aiPreset);
+  if (!AI_PRESETS[providerId]) return;
+  persistActiveAiProviderDraft();
+  state.aiProvider = providerId;
+  applyAiProviderState(providerId);
+  hydrateAiSettingsFields();
+  if (providerId === "deepseek") {
     toast("已填入 DeepSeek 官方端点和模型，请填写 DeepSeek 平台的 API Key。");
-  } else if (target.dataset.aiPreset === "codebuddy") {
+  } else if (providerId === "codebuddy") {
     toast("已切换 CodeBuddy：请填写访问密钥、确认平台给出的 API 端点和模型。");
   } else {
     toast("已填入 sub2 中转端点和模型。");
@@ -1765,17 +1812,45 @@ function persistAiSettings() {
   localStorage.setItem("youchat.ai.enabled", String(state.aiEnabled));
   localStorage.setItem("youchat.skill.autoReply", String(state.skillAutoReply));
   localStorage.setItem("youchat.skill.autoLearn", String(state.skillAutoLearn));
-  localStorage.setItem("youchat.ai.baseUrl", state.aiBaseUrl);
-  localStorage.setItem("youchat.ai.apiKey", state.aiApiKey);
-  localStorage.setItem("youchat.ai.model", state.aiModel);
-  localStorage.setItem("youchat.ai.authType", state.aiAuthType);
-  localStorage.setItem("youchat.ai.temperature", String(state.aiTemperature));
+  localStorage.setItem(AI_PROVIDER_STORAGE_KEY, state.aiProvider);
+  localStorage.setItem(AI_PROVIDER_SETTINGS_STORAGE_KEY, JSON.stringify(state.aiProvidersConfig));
   updateAiButtonState();
+}
+
+async function loadAiProviderPresetsFromServer() {
+  try {
+    const response = await fetch("/ai/providers", { cache: "no-store" });
+    const payload = parsePayload(await response.text());
+    if (!response.ok || payload?.success === false) {
+      throw new Error(getMessage(payload) || `HTTP ${response.status}`);
+    }
+    const providers = payload?.providers;
+    if (providers && typeof providers === "object") {
+      Object.entries(providers).forEach(([providerId, preset]) => {
+        if (!AI_PRESETS[providerId] || !preset || typeof preset !== "object") return;
+        AI_PRESETS[providerId] = {
+          ...AI_PRESETS[providerId],
+          ...preset
+        };
+      });
+      state.aiProvidersConfig = hydrateAiProviderConfigMap(state.aiProvidersConfig || {});
+      state.aiProvider = normalizeAiProviderId(payload?.defaultProvider || state.aiProvider);
+      applyAiProviderState(state.aiProvider);
+      hydrateAiSettingsFields();
+    }
+  } catch (error) {
+    log("load ai providers", { error: error.message });
+  }
 }
 
 function normalizeAiBaseUrl(value) {
   const trimmed = String(value || "").trim() || DEFAULT_AI_BASE_URL;
   return trimmed.replace(/\/+$/, "/");
+}
+
+function normalizeAiProviderId(value) {
+  const key = String(value || DEFAULT_AI_PROVIDER).trim().toLowerCase();
+  return AI_PRESETS[key] ? key : DEFAULT_AI_PROVIDER;
 }
 
 function normalizeAiModel(value) {
@@ -1786,6 +1861,208 @@ function normalizeAiModel(value) {
 function normalizeAiAuthType(value) {
   const normalized = String(value || DEFAULT_AI_AUTH_TYPE).trim().toLowerCase();
   return normalized === "x-api-key" ? "x-api-key" : DEFAULT_AI_AUTH_TYPE;
+}
+
+function cloneAiPresetConfig(providerId) {
+  const preset = AI_PRESETS[normalizeAiProviderId(providerId)] || AI_PRESETS[DEFAULT_AI_PROVIDER];
+  return {
+    label: preset.label,
+    baseUrl: normalizeAiBaseUrl(preset.baseUrl || DEFAULT_AI_BASE_URL),
+    apiKey: String(preset.apiKey || ""),
+    model: normalizeAiModel(preset.model || DEFAULT_AI_MODEL),
+    authType: normalizeAiAuthType(preset.authType || DEFAULT_AI_AUTH_TYPE),
+    temperature: clampAiTemperature(preset.temperature ?? DEFAULT_AI_TEMPERATURE),
+    modelOptions: normalizeAiModelOptions(preset.modelOptions || [preset.model || DEFAULT_AI_MODEL], preset.model || DEFAULT_AI_MODEL)
+  };
+}
+
+function normalizeAiModelOptions(options, currentModel = "") {
+  const list = [];
+  const source = Array.isArray(options) ? options : [];
+  source.forEach((item) => {
+    const model = String(item || "").trim();
+    if (model && !list.includes(model)) list.push(model);
+  });
+  const current = String(currentModel || "").trim();
+  if (current && !list.includes(current)) list.unshift(current);
+  return list;
+}
+
+function loadAiProviderSettings(forceReset = false) {
+  if (!forceReset) {
+    try {
+      const raw = localStorage.getItem(AI_PROVIDER_SETTINGS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          return hydrateAiProviderConfigMap(parsed);
+        }
+      }
+    } catch {
+      // Ignore broken local storage and fall back to defaults.
+    }
+
+    const legacyBaseUrl = localStorage.getItem("youchat.ai.baseUrl");
+    const legacyApiKey = localStorage.getItem("youchat.ai.apiKey");
+    const legacyModel = localStorage.getItem("youchat.ai.model");
+    const legacyAuthType = localStorage.getItem("youchat.ai.authType");
+    const legacyTemperature = localStorage.getItem("youchat.ai.temperature");
+    if (legacyBaseUrl || legacyApiKey || legacyModel || legacyAuthType || legacyTemperature) {
+      const migrated = hydrateAiProviderConfigMap({
+        sub2: {
+          baseUrl: legacyBaseUrl || DEFAULT_AI_BASE_URL,
+          apiKey: legacyApiKey || DEFAULT_AI_API_KEY,
+          model: legacyModel || DEFAULT_AI_MODEL,
+          authType: legacyAuthType || DEFAULT_AI_AUTH_TYPE,
+          temperature: legacyTemperature ?? DEFAULT_AI_TEMPERATURE
+        }
+      });
+      localStorage.removeItem("youchat.ai.baseUrl");
+      localStorage.removeItem("youchat.ai.apiKey");
+      localStorage.removeItem("youchat.ai.model");
+      localStorage.removeItem("youchat.ai.authType");
+      localStorage.removeItem("youchat.ai.temperature");
+      localStorage.setItem(AI_PROVIDER_SETTINGS_STORAGE_KEY, JSON.stringify(migrated));
+      return migrated;
+    }
+  }
+  return hydrateAiProviderConfigMap({});
+}
+
+function hydrateAiProviderConfigMap(source = {}) {
+  const config = {};
+  Object.keys(AI_PRESETS).forEach((providerId) => {
+    const preset = cloneAiPresetConfig(providerId);
+    const stored = source && typeof source === "object" ? source[providerId] : null;
+    const storedModel = String(stored?.model || "").trim();
+    config[providerId] = {
+      label: preset.label,
+      baseUrl: normalizeAiBaseUrl(stored?.baseUrl || preset.baseUrl),
+      apiKey: String(stored?.apiKey ?? preset.apiKey ?? ""),
+      model: normalizeAiModel(storedModel || preset.model),
+      authType: normalizeAiAuthType(stored?.authType || preset.authType),
+      temperature: clampAiTemperature(stored?.temperature ?? preset.temperature),
+      modelOptions: normalizeAiModelOptions(stored?.modelOptions || preset.modelOptions, storedModel || preset.model)
+    };
+  });
+  return config;
+}
+
+function getActiveAiProviderConfig(providerId = state.aiProvider) {
+  const key = normalizeAiProviderId(providerId);
+  if (!state.aiProvidersConfig || typeof state.aiProvidersConfig !== "object") {
+    state.aiProvidersConfig = hydrateAiProviderConfigMap({});
+  }
+  if (!state.aiProvidersConfig[key]) {
+    state.aiProvidersConfig[key] = cloneAiPresetConfig(key);
+  }
+  return state.aiProvidersConfig[key];
+}
+
+function applyAiProviderState(providerId = state.aiProvider) {
+  const key = normalizeAiProviderId(providerId);
+  const config = getActiveAiProviderConfig(key);
+  state.aiProvider = key;
+  state.aiBaseUrl = normalizeAiBaseUrl(config.baseUrl);
+  state.aiApiKey = String(config.apiKey || "");
+  state.aiModel = normalizeAiModel(config.model);
+  state.aiAuthType = normalizeAiAuthType(config.authType);
+  state.aiTemperature = clampAiTemperature(config.temperature);
+  state.aiModelOptions = normalizeAiModelOptions(config.modelOptions, state.aiModel);
+}
+
+function persistActiveAiProviderDraft() {
+  const key = normalizeAiProviderId(state.aiProvider);
+  const config = getActiveAiProviderConfig(key);
+  config.baseUrl = normalizeAiBaseUrl(state.aiBaseUrl);
+  config.apiKey = String(state.aiApiKey || "");
+  config.model = normalizeAiModel(state.aiModel);
+  config.authType = normalizeAiAuthType(state.aiAuthType);
+  config.temperature = clampAiTemperature(state.aiTemperature);
+  config.modelOptions = normalizeAiModelOptions(config.modelOptions, config.model);
+  state.aiProvidersConfig[key] = config;
+}
+
+function syncAiModelSelect() {
+  if (!el.aiModel) return;
+  const options = normalizeAiModelOptions(state.aiModelOptions, state.aiModel);
+  state.aiModelOptions = options;
+  if (!options.length) {
+    el.aiModel.innerHTML = `<option value="${escapeAttr(state.aiModel || DEFAULT_AI_MODEL)}">${escapeHtml(state.aiModel || DEFAULT_AI_MODEL)}</option>`;
+    el.aiModel.value = state.aiModel || DEFAULT_AI_MODEL;
+    if (el.aiModelCustom) el.aiModelCustom.value = "";
+    return;
+  }
+  el.aiModel.innerHTML = options.map((model) => (
+    `<option value="${escapeAttr(model)}"${model === state.aiModel ? " selected" : ""}>${escapeHtml(model)}</option>`
+  )).join("");
+  if (options.includes(state.aiModel)) {
+    el.aiModel.value = state.aiModel;
+    if (el.aiModelCustom) el.aiModelCustom.value = "";
+  } else {
+    if (options.length) el.aiModel.value = options[0];
+    if (el.aiModelCustom) el.aiModelCustom.value = state.aiModel;
+  }
+}
+
+function getAiModelFieldValue() {
+  const custom = String(el.aiModelCustom?.value || "").trim();
+  if (custom) return custom;
+  return String(el.aiModel?.value || state.aiModel || DEFAULT_AI_MODEL).trim();
+}
+
+function syncAiSettingsDraftFromFields() {
+  state.aiProvider = normalizeAiProviderId(el.aiProvider?.value || state.aiProvider);
+  state.aiBaseUrl = normalizeAiBaseUrl(el.aiBaseUrl?.value || state.aiBaseUrl);
+  state.aiApiKey = String(el.aiApiKey?.value || state.aiApiKey || "").trim();
+  state.aiModel = normalizeAiModel(getAiModelFieldValue());
+  state.aiAuthType = normalizeAiAuthType(el.aiAuthType?.value || state.aiAuthType);
+  state.aiTemperature = clampAiTemperature(el.aiTemperature?.value ?? state.aiTemperature);
+}
+
+function handleAiProviderChange(event) {
+  syncAiSettingsDraftFromFields();
+  persistActiveAiProviderDraft();
+  state.aiProvider = normalizeAiProviderId(event.target.value);
+  applyAiProviderState(state.aiProvider);
+  hydrateAiSettingsFields();
+}
+
+async function fetchAiModelsForActiveProvider() {
+  if (state.aiFetchingModels) return;
+  state.aiProvider = normalizeAiProviderId(el.aiProvider?.value || state.aiProvider);
+  state.aiBaseUrl = normalizeAiBaseUrl(el.aiBaseUrl.value);
+  state.aiApiKey = el.aiApiKey.value.trim();
+  state.aiAuthType = normalizeAiAuthType(el.aiAuthType.value);
+  state.aiModel = normalizeAiModel(getAiModelFieldValue());
+  state.aiFetchingModels = true;
+  updateAiButtonState();
+  try {
+    const response = await fetch("/ai/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        providerId: state.aiProvider,
+        baseUrl: state.aiBaseUrl,
+        apiKey: state.aiApiKey,
+        authType: state.aiAuthType
+      })
+    });
+    const payload = parsePayload(await response.text());
+    const models = Array.isArray(payload?.models) ? payload.models : [];
+    if (!response.ok) throw new Error(getMessage(payload) || `HTTP ${response.status}`);
+    if (!models.length) throw new Error(payload?.warning || "链幏鍙栧埌妯″瀷鍒楄〃");
+    state.aiModelOptions = normalizeAiModelOptions(models, state.aiModel);
+    if (!state.aiModelOptions.includes(state.aiModel)) state.aiModel = state.aiModelOptions[0] || state.aiModel;
+    persistActiveAiProviderDraft();
+    syncAiModelSelect();
+    toast(payload?.source === "upstream" ? "妯″瀷鍒楄〃宸叉洿鏂?" : "宸蹭娇鐢ㄥ凡楠岃瘉妯″瀷鍒楄〃");
+  } catch (error) {
+    toast(`鑾峰彇妯″瀷澶辫触锛?{error.message}`, true);
+  } finally {
+    state.aiFetchingModels = false;
+    updateAiButtonState();
+  }
 }
 
 function getAiRelayBasePayload(temperature = state.aiTemperature) {
@@ -1809,16 +2086,25 @@ function clampAiTemperature(value) {
 }
 
 function updateAiButtonState() {
-  if (!el.aiSuggest) return;
-  el.aiSuggest.disabled = state.aiGenerating || !state.aiEnabled;
-  el.aiSuggest.textContent = state.aiGenerating ? "AI 生成中" : "AI 推荐";
-  el.aiSuggest.title = state.aiEnabled ? "" : "AI 推荐已在设置中关闭";
+  if (el.aiSuggest) {
+    el.aiSuggest.disabled = state.aiGenerating || !state.aiEnabled;
+    el.aiSuggest.textContent = state.aiGenerating ? "AI 生成中" : "AI 推荐";
+    el.aiSuggest.title = state.aiEnabled ? "" : "AI 推荐已在设置中关闭";
+  }
+  if (el.fetchAiModels) {
+    el.fetchAiModels.disabled = state.aiFetchingModels;
+    el.fetchAiModels.textContent = state.aiFetchingModels ? "获取中" : "获取模型";
+  }
   if (el.refreshAiSuggestion) {
     el.refreshAiSuggestion.disabled = state.aiGenerating || !state.aiEnabled || !state.aiSuggestion;
     el.refreshAiSuggestion.textContent = state.aiGenerating ? "生成中" : "换一换";
   }
   renderAiSuggestionCard();
 }
+
+Object.assign(AI_PRESETS.sub2, cloneAiPresetConfig("sub2"));
+Object.assign(AI_PRESETS.deepseek, cloneAiPresetConfig("deepseek"));
+Object.assign(AI_PRESETS.codebuddy, cloneAiPresetConfig("codebuddy"));
 
 function loadStoredApiBase() {
   const stored = localStorage.getItem("youchat.apiBase");

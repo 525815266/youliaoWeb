@@ -3638,6 +3638,35 @@ textarea:focus-visible {
   gap: 6px;
 }
 
+.settings-inline-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-inline-field--with-action {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.settings-stack-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.settings-inline-field > input,
+.settings-inline-field > select,
+.settings-stack-field > input,
+.settings-stack-field > select {
+  min-width: 0;
+}
+
+.settings-fetch-button {
+  min-width: 78px;
+  justify-self: end;
+}
+
 .settings-field span {
   color: #536276;
   font-size: 12px;
@@ -3661,6 +3690,7 @@ textarea:focus-visible {
 .settings-field input[type="password"] {
   font-family: "Segoe UI", Arial, sans-serif;
 }
+
 
 .settings-actions {
   display: flex;
