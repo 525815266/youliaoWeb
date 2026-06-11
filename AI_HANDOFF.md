@@ -1512,3 +1512,69 @@ If you later touch the right toolbar skill panel:
 2. keep learned override selection centralized in `getSkillReplyProfile()`
 3. panel actions must use context-aware learned text, not raw fallback text
 
+## 2026-06-11 Skill Panel Height Compression Follow-up
+
+User reported the previous skill-panel cleanup still looked cramped:
+
+- top category area stacked too tall
+- list felt folded/collapsed
+- scrollbar still did not feel obvious
+
+### Files changed
+
+- `public/app.js`
+- `public/styles.css`
+
+### New rule for category tabs
+
+Do not render the full category set as one wrapping multi-line chip cloud.
+
+Current structure:
+
+- pinned row:
+  - `当前匹配`
+  - `全部`
+- horizontal rail:
+  - remaining platform and intent categories
+
+Implementation helper:
+
+- `splitSkillCategoryTabs()`
+
+### Why this matters
+
+The old fully wrapped chip layout was consuming too much fixed vertical space in the right rail.
+That made the list below look visually collapsed even when the scroll container technically existed.
+
+### Unmatched-state rule
+
+When there is no current skill match, do not use the full `skill-match-card` block.
+
+Use the compact inline hint instead:
+
+- `.skill-inline-hint`
+
+This gives more height back to the actual list.
+
+### Density tuning
+
+The follow-up also tightened:
+
+- skill group header padding
+- row padding
+- row internal gaps
+- action gap
+- tag margin
+- image-strip top margin
+
+And increased preview clamp from 3 lines to 4 lines so rows feel less abruptly cut off.
+
+### Scrollbar detail
+
+The skill list scrollbar style must remain the explicit blue version on `.skill-panel-scroll`.
+Do not let the generic `.quick-list, .skill-panel-scroll` block be the last word on `scrollbar-width` / `scrollbar-color`.
+
+### Regression check
+
+If user still reports the same old stacked category cloud after these changes, first suspect an old running dev process or stale served bundle before changing layout code again.
+

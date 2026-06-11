@@ -3136,3 +3136,104 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
    - `scoreSkillOverride()`
 3. 如果要做更细的“当前命中分类”排序，不要只改 CSS，要同时调整 `buildSkillGroupScore()` 和 override 匹配打分。
 
+## 54. 2026-06-11 Skill 分类折叠与滚动条二次收口
+
+### 1. 用户反馈
+
+在上一轮 skill 面板重构后，用户继续反馈：
+
+- 上方分类标签区还是太高，像“折叠的折叠”
+- 真正的 skill 列表可视高度不足
+- 右侧滚动条不明显，体感上像没有
+
+### 2. 这次的处理原则
+
+继续压缩 skill 顶部固定区，把高度尽量还给真正的 skill 列表：
+
+- 固定保留最常用的两个分类：
+  - `当前匹配`
+  - `全部`
+- 其他分类不再往下换行堆高，而是改成横向滚动轨道
+- 未命中时，不再占一大块卡片，改成一行轻提示
+
+### 3. 代码改动
+
+涉及文件：
+
+- `public/app.js`
+- `public/styles.css`
+
+新增：
+
+- `splitSkillCategoryTabs()`
+
+行为调整：
+
+1. `renderSkillReplyPanel()` 不再直接把所有分类按钮一次性平铺换行。
+2. `buildSkillCategoryTabs()` 的结果被拆成：
+   - `pinned`
+   - `rail`
+3. `pinned` 只显示：
+   - `当前匹配`
+   - `全部`
+4. 其余平台 / 意图分类进入横向可滚的 `skill-tabs-rail`
+
+### 4. 样式调整
+
+#### 顶部分类区
+
+- `skill-tabs` 改成纵向双层结构
+- `skill-tabs-pinned` 负责固定分类
+- `skill-tabs-rail` 负责横向滚动分类
+- 轨道本身也带细滚动条，避免看起来像一排被截断的按钮
+
+#### 列表滚动区
+
+- 重新确认 `skill-panel-scroll` 的滚动条样式不再被通用 `.quick-list` 覆盖
+- 保持：
+  - 更亮的 thumb
+  - 更浅的轨道
+  - `12px` 宽度
+
+#### 列表内容密度
+
+为了把空间还给列表，又压了一轮这些区块：
+
+- group header
+- row padding
+- row gap
+- actions gap
+- meta tag margin
+- image strip margin
+
+同时把正文预览从 3 行放宽到 4 行，避免“内容刚展开一点就被截断”的感觉。
+
+### 5. 未命中提示收口
+
+原来未命中时，会占一整块 `skill-match-card`。
+
+现在未命中时改成：
+
+- `skill-inline-hint`
+
+只保留轻提示：
+
+- 当前未命中 skill
+- 继续交给 AI 结合快捷回复兜底
+
+这样 skill 列表能多露出一整截。
+
+### 6. 验证
+
+- `npm run check` 已通过。
+
+### 7. 当前判断
+
+如果用户刷新后仍看到：
+
+- 分类大面积换行堆叠
+- 没有横向分类轨道
+- 未命中还是大块卡片
+
+那基本说明当前浏览器拿到的还是旧 bundle，需要重启当前 `5177` 对应的 `node server.js` 进程后再看。
+
