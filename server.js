@@ -1113,6 +1113,46 @@ function getFallbackAiModels({ providerId = "", baseUrl = "" } = {}) {
   return deduped;
 }
 
+async function probeCodeBuddyModels({ apiKey, authType, baseUrl, providerId }) {
+  const fallbackModels = getFallbackAiModels({ providerId, baseUrl });
+  const target = getAiChatCompletionsUrl(baseUrl).toString();
+  const models = [];
+  const warnings = [];
+
+  for (const model of fallbackModels) {
+    try {
+      const upstream = await fetchWithTimeout(target, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAiAuthHeaders(apiKey, authType, target)
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "ping" }],
+          stream: true,
+          max_tokens: 8
+        })
+      }, Math.min(AI_PROXY_TIMEOUT_MS, 30000), `CodeBuddy model probe: ${model}`);
+      const text = await upstream.text();
+      if (upstream.ok && /data:\s*\{/.test(text)) {
+        models.push(model);
+      } else {
+        warnings.push(`${model}: ${trimCaptureText(text, 180) || `HTTP ${upstream.status}`}`);
+      }
+    } catch (error) {
+      warnings.push(`${model}: ${error.message}`);
+    }
+  }
+
+  return {
+    target,
+    models,
+    fallbackModels,
+    warning: warnings.join(" | ")
+  };
+}
+
 function extractModelIds(payload) {
   if (!payload) return [];
   const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
@@ -1414,6 +1454,31 @@ async function handleAiModels(req, res) {
       models: fallbackModels,
       warning: error.message
     });
+    return;
+  }
+
+  if (providerId === "codebuddy" || isCodeBuddyTarget(baseUrl)) {
+    try {
+      const probe = await probeCodeBuddyModels({ apiKey, authType, baseUrl, providerId });
+      sendJson(res, 200, {
+        success: true,
+        providerId,
+        baseUrl,
+        target: probe.target,
+        source: probe.models.length ? "probe" : "fallback-probe",
+        models: probe.models.length ? probe.models : probe.fallbackModels,
+        warning: probe.models.length ? "" : probe.warning
+      });
+    } catch (error) {
+      sendJson(res, 200, {
+        success: true,
+        providerId,
+        baseUrl,
+        source: fallbackModels.length ? "fallback-probe-error" : "empty-probe-error",
+        models: fallbackModels,
+        warning: error.message
+      });
+    }
     return;
   }
 

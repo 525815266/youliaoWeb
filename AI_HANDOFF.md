@@ -1281,3 +1281,111 @@ Verification done:
 - `npm run check` passed after the split
 - if `http://localhost:5177` does not show the new provider dropdown / fetch-models button, restart the existing `node server.js` process because an older already-running server instance may still be serving the previous bundle
 
+## 2026-06-11 CodeBuddy Probe + Skill Send Learning
+
+Latest follow-up work added three concrete behaviors:
+
+1. CodeBuddy model loading now probes real models instead of only falling back after `/models` 404
+2. sending a reply from the `skill` panel now learns from that sent result
+3. AI recommendations now combine matched skill + FAQ + learned manual patterns + AI output
+
+### Server
+
+File:
+
+- `server.js`
+
+Added:
+
+- `probeCodeBuddyModels({ apiKey, authType, baseUrl, providerId })`
+
+Behavior:
+
+- takes CodeBuddy fallback candidates from `config/ai-providers.json`
+- probes each candidate against:
+  - `https://copilot.tencent.com/v2/chat/completions`
+- uses:
+  - `stream: true`
+  - tiny prompt `ping`
+- marks models valid when upstream returns `200` and SSE payload starts with `data: {`
+
+`handleAiModels()` now:
+
+- routes `providerId === "codebuddy"` or CodeBuddy hostname directly into the probe path
+- returns:
+  - `source: "probe"` when at least one model is verified
+  - `target: https://copilot.tencent.com/v2/chat/completions`
+
+Verified result on local new-port run:
+
+- `POST http://127.0.0.1:5180/ai/models`
+- response:
+  - `models = ["deepseek-v3.1", "deepseek-r1"]`
+  - `source = "probe"`
+
+### Frontend
+
+File:
+
+- `public/app.js`
+
+Added send-time skill rewrite / learning:
+
+- `getSuggestionStepsForSend()`
+- `rewriteSkillSendText()`
+- `pickSkillVariant()`
+- `applySkillToneVariant()`
+- `learnFromSentSuggestion()`
+
+Current rewrite rules:
+
+- `返利` -> one of `反L / 饭力 / 返点 / 回馈`
+- `返佣` -> one of `反Y / 返点 / 回馈`
+- `红包` -> one of `红宝 / 鸿包 / 红补 / 优惠包`
+
+`sendSuggestionSteps()` now:
+
+- rewrites `skill` text steps before send
+- records:
+  - `lastAppliedSuggestionFingerprint`
+  - `lastAppliedSuggestionSkillId`
+- calls `learnFromSentSuggestion()` after successful send
+
+Learning behavior:
+
+- if sent suggestion has `skillId`, it learns into that matched skill via `learnMatchedSkillOverride()`
+- otherwise it falls back into `learnFromManualReply()`
+
+Added AI merge behavior at file end as function overrides:
+
+- `getLearnedSkillPromptContext()`
+- `buildAiConversationContextWithReferences()`
+- `mergeAiSuggestions()`
+- overridden `requestAiRelaySuggestions()`
+- overridden `generateAutoAiSuggestion()`
+
+New AI behavior:
+
+- no longer exits early on first `skill` hit
+- AI prompt now includes:
+  - matched skill
+  - FAQ prompt context
+  - learned manual reply patterns
+- merged candidates are:
+  - matched skill first
+  - top 2 FAQ items
+  - AI replies
+  - deduped to top 3
+
+### Verification
+
+- `npm run check` passed after this work
+- `http://127.0.0.1:5180/` served normally in local verification
+
+### Important current nuance
+
+- old process on `5177` may still serve older code
+- new local verification port used in this round:
+  - `5180`
+- if user reports “CodeBuddy still only shows fallback-upstream 404 behavior”, confirm they are not hitting an old dev process
+

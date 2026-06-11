@@ -2831,3 +2831,110 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
 - `npm run check` 已通过。
 - 如果 `http://localhost:5177` 页面还没出现新的渠道下拉框或“获取模型”按钮，说明旧的 `node server.js` 进程还在运行，需要重启当前开发服务。
 
+## 52. 2026-06-11 CodeBuddy 探活 + skill 发送学习 + AI 推荐合并
+
+本次继续收口了三件事：
+
+1. `CodeBuddy` 的“获取模型”不再只是看到 `/models` 404 后静态回退。
+2. 从 `skill` 面板点击“发送”后，系统会把实际发出的内容也学进去。
+3. AI 推荐不再因为命中一个 `skill` 就提前结束，而是把 `skill / 快捷回复 / 已学习的人工作答习惯 / AI 结果` 组合成候选。
+
+### 1. CodeBuddy 模型拉取修复
+
+- 服务端新增 `probeCodeBuddyModels()`：
+  - 不再依赖 `https://copilot.tencent.com/v2/models`
+  - 改为对候选模型逐个发起真实 `chat/completions` 探活
+  - 使用 `stream: true`
+  - 当前通过实测可用的模型：
+    - `deepseek-v3.1`
+    - `deepseek-r1`
+- `handleAiModels()` 在 `providerId === codebuddy` 或命中 CodeBuddy 域名时，直接走探活分支。
+- 新进程验证结果：
+  - 本地新端口 `http://127.0.0.1:5180`
+  - `POST /ai/models`
+  - 返回：
+    - `source: "probe"`
+    - `target: "https://copilot.tencent.com/v2/chat/completions"`
+    - `models: ["deepseek-v3.1", "deepseek-r1"]`
+
+### 2. skill 发送后的学习补齐
+
+- `sendSuggestionSteps()` 现在会：
+  - 记录本次发送后的 `lastAppliedSuggestionFingerprint`
+  - 记录本次发送的 `lastAppliedSuggestionSkillId`
+  - 在发送成功后调用 `learnFromSentSuggestion()`
+- `learnFromSentSuggestion()` 会：
+  - 读取最近一条真实客户消息作为 `prompt`
+  - 读取这次真正发出去的文字和图片作为 `replySteps`
+  - 命中已有 `skill` 时，走 `learnMatchedSkillOverride()`
+  - 未命中时，回退到 `learnFromManualReply()` 的自动学习逻辑
+
+这意味着：
+
+- 你从 `skill` 面板直接点击“发送”，也会反哺学习。
+- 后续你手工继续修正的风格，会更容易累积回对应 `skill`。
+
+### 3. skill 发送改写：敏感词规避 + 轻微变体
+
+- 新增：
+  - `getSuggestionStepsForSend()`
+  - `rewriteSkillSendText()`
+  - `pickSkillVariant()`
+  - `applySkillToneVariant()`
+- 当前只对 `skill` 类型发送做发送前改写，不影响普通手输和图片本身。
+- 现阶段规则：
+  - `返利` -> `反L / 饭力 / 返点 / 回馈`
+  - `返佣` -> `反Y / 返点 / 回馈`
+  - `红包` -> `红宝 / 鸿包 / 红补 / 优惠包`
+- 另外会根据 seed 自动加轻微前缀/尾缀，让相同 `skill` 的文案每次发出去不完全一样，但意思保持一致。
+
+### 4. AI 推荐不再只看 skill
+
+- 旧逻辑：
+  - `requestAiRelaySuggestions()` 只要命中 `skill`，就直接 `appendAiSuggestions([skill])` 然后 `return`
+- 新逻辑：
+  - 不再提前返回
+  - 会把以下内容一起写入 AI 上下文：
+    - 当前真实聊天上下文
+    - 当前命中的 `skill`
+    - `getFaqPromptContext()` 的快捷回复参考
+    - `getLearnedSkillPromptContext()` 的已学习人工作答样本
+  - AI 返回后再通过 `mergeAiSuggestions()` 合并：
+    - 当前命中的 `skill`
+    - 前 2 条快捷回复
+    - AI 生成候选
+  - 最终去重后保留前 3 条
+
+### 5. 自动推荐行为修正
+
+- `generateAutoAiSuggestion()` 不再是“命中 skill 就不跑 AI”
+- 现在会：
+  - 先保留 `maybeBuildSkillSuggestion({ autoReply: true })`
+  - 再继续调用 `requestAiRelaySuggestions({ silent: true })`
+- 这样自动推荐时，也能保持：
+  - `skill` 命中优先
+  - 但仍然会并出 AI / 快捷回复候选
+
+### 6. 本次涉及文件
+
+- `server.js`
+- `public/app.js`
+
+### 7. 验证结果
+
+- `npm run check` 已通过
+- 新端口本地实测：
+  - `http://127.0.0.1:5180/` 可返回页面
+  - `POST http://127.0.0.1:5180/ai/models` 对 `CodeBuddy` 返回真实探活结果：
+    - `deepseek-v3.1`
+    - `deepseek-r1`
+
+### 8. 后续注意事项
+
+- 如果用户仍说 `CodeBuddy` 拉模型不对，先确认访问的是不是旧的 `5177` 进程，而不是新代码进程。
+- `skill` 改写目前只做文字，不改图片。
+- 如果后面要把“每次不同表达”做得更强，不要直接随机重写整句，优先在：
+  - `rewriteSkillSendText()`
+  - `applySkillToneVariant()`
+ 里继续加受控模板。
+

@@ -6596,7 +6596,7 @@ function handleToolModalBodyKeydown(event) {
 
 async function sendSuggestionSteps(suggestion) {
   return withSendingLock(async () => {
-    const steps = getSuggestionSteps(suggestion).filter((step) => step.content || step.url);
+    const steps = getSuggestionStepsForSend(suggestion).filter((step) => step.content || step.url);
     if (!steps.length) {
       toast("推荐内容为空。", true);
       return;
@@ -6612,12 +6612,95 @@ async function sendSuggestionSteps(suggestion) {
         await delay(250);
       }
       state.lastSuggestionUsed = true;
+      state.lastAppliedSuggestionFingerprint = buildSuggestionFingerprint({ steps });
+      state.lastAppliedSuggestionSkillId = String(suggestion?.skillId || "");
+      await learnFromSentSuggestion(suggestion, steps);
       touchActiveContact(getSuggestionTextForComposer(suggestion).slice(0, 80) || "[suggestion]");
       await loadMessages(1, "replace", { forceBottom: true });
       toast("skill 推荐已发送。");
     } catch (error) {
       toast(`推荐发送失败：${error.message}`, true);
     }
+  });
+}
+
+function getSuggestionStepsForSend(suggestion) {
+  const baseSteps = getSuggestionSteps(suggestion);
+  if (!suggestion?.skillId && suggestion?.type !== "skill") return baseSteps;
+  const seedRoot = `${suggestion?.skillId || "skill"}:${Date.now()}:${Math.random()}`;
+  return baseSteps.map((step, index) => {
+    if (step.type === "image") return { ...step };
+    return {
+      ...step,
+      content: rewriteSkillSendText(step.content || "", `${seedRoot}:${index}`)
+    };
+  });
+}
+
+function rewriteSkillSendText(text, seed = "") {
+  let next = String(text || "").trim();
+  if (!next) return "";
+  const replacements = [
+    { pattern: /返利/g, variants: ["反L", "饭力", "返点", "回馈"] },
+    { pattern: /返佣/g, variants: ["反Y", "返点", "回馈"] },
+    { pattern: /红包/g, variants: ["红宝", "鸿包", "红补", "优惠包"] }
+  ];
+  replacements.forEach((item, index) => {
+    next = next.replace(item.pattern, () => pickSkillVariant(item.variants, `${seed}:${index}`));
+  });
+  return applySkillToneVariant(next, seed);
+}
+
+function pickSkillVariant(list, seed = "") {
+  const values = Array.isArray(list) ? list.filter(Boolean) : [];
+  if (!values.length) return "";
+  const hash = Array.from(String(seed)).reduce((sum, char, index) => sum + char.charCodeAt(0) * (index + 1), 0);
+  return values[Math.abs(hash) % values.length];
+}
+
+function applySkillToneVariant(text, seed = "") {
+  let next = String(text || "").trim();
+  if (!next) return "";
+  const prefix = pickSkillVariant(["", "亲，", "你好，", "这边看了下，", "先和您说一下，"], `${seed}:prefix`);
+  const suffix = pickSkillVariant(["", "，您先看下哈。", "，您按这个处理就行。", "，麻烦您先这样操作。", "，有问题我再继续帮您看。"], `${seed}:suffix`);
+  if (prefix && !/^(亲，|你好，|这边看了下，|先和您说一下，)/.test(next)) next = `${prefix}${next}`;
+  if (suffix && !/[。！？]$/.test(next)) next = `${next}${suffix}`;
+  return next;
+}
+
+async function learnFromSentSuggestion(suggestion, steps = []) {
+  if (!state.skillAutoLearn || !suggestion) return;
+  const latest = getLatestActionableInboundMessage();
+  if (!latest || latest.isSystemNotice || latest.direction !== "incoming") return;
+  const prompt = String(latest.content || "").trim();
+  if (prompt.length < 2) return;
+  const reply = steps
+    .filter((step) => step.type !== "image")
+    .map((step) => String(step.content || "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const images = steps
+    .filter((step) => step.type === "image")
+    .map((step) => normalizeImageUrl(step.url || step.content || ""))
+    .filter(Boolean);
+  if (!reply && !images.length) return;
+  const matchedSkill = suggestion.skillId ? getSkillById(suggestion.skillId) : null;
+  const platformKey = suggestion.platformKey || detectPlatformOrderNo(prompt).platformKey || detectOrderPlatformFromState() || "";
+  const intentKey = suggestion.intentKey || detectSkillIntentKey(prompt) || "";
+  if (matchedSkill && !matchedSkill.noReply) {
+    await learnMatchedSkillOverride(matchedSkill, {
+      prompt,
+      reply,
+      images,
+      steps,
+      latest,
+      platformKey,
+      intentKey
+    });
+    return;
+  }
+  await learnFromManualReply(reply, images, {
+    matchedSkill: suggestion.skillId ? { skillId: suggestion.skillId, platformKey, intentKey } : null
   });
 }
 
@@ -6662,10 +6745,6 @@ async function requestAiRelaySuggestions(options = {}) {
   }
 
   const skillSuggestion = buildSkillSuggestion();
-  if (skillSuggestion) {
-    appendAiSuggestions([skillSuggestion], { silent });
-    return;
-  }
 
   state.aiGenerating = true;
   updateAiButtonState();
@@ -6688,7 +6767,7 @@ async function requestAiRelaySuggestions(options = {}) {
         },
         {
           role: "user",
-          content: context
+          content: buildAiConversationContextWithReferences(context, skillSuggestion)
         }
       ]
     };
@@ -9873,3 +9952,177 @@ function escapeAttr(value) {
 }
 
 document.addEventListener("DOMContentLoaded", boot);
+
+function getLearnedSkillPromptContext() {
+  const currentMatch = buildSkillSuggestion();
+  const ranked = [...state.replySkills]
+    .filter((skill) => skill.enabled !== false && !skill.noReply)
+    .sort((a, b) => buildSkillGroupScore(b, currentMatch) - buildSkillGroupScore(a, currentMatch))
+    .slice(0, 6);
+  if (!ranked.length) return "none";
+  return ranked.map((skill) => {
+    const overrides = Array.isArray(skill.manualOverrides) ? skill.manualOverrides.slice(0, 2) : [];
+    const learnedText = overrides
+      .map((item) => String(item.reply || "").trim())
+      .filter(Boolean)
+      .join(" / ");
+    return `- ${skill.title}: ${learnedText || getSkillText(skill).slice(0, 160)}`;
+  }).join("\n");
+}
+
+function buildAiConversationContextWithReferences(context, skillSuggestion = null) {
+  return [
+    context,
+    "",
+    skillSuggestion && !skillSuggestion.noReply
+      ? `Matched skill: ${(skillSuggestion.title || "skill")} | ${formatSuggestionText(skillSuggestion)}`
+      : "Matched skill: none",
+    "",
+    "Learned manual reply patterns:",
+    getLearnedSkillPromptContext(),
+    "",
+    "Quick reply references:",
+    getFaqPromptContext()
+  ].join("\n");
+}
+
+function mergeAiSuggestions(skillSuggestion, aiReplies = []) {
+  const merged = [];
+  const seen = new Set();
+  const push = (suggestion) => {
+    if (!suggestion) return;
+    const normalized = normalizeSuggestion(suggestion);
+    const key = buildSuggestionFingerprint(normalized)
+      || normalizeForMatch(getSuggestionTextForComposer(normalized) || formatSuggestionText(normalized));
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    merged.push(normalized);
+  };
+
+  if (skillSuggestion && !skillSuggestion.noReply) push(skillSuggestion);
+
+  state.faqs.slice(0, 2).forEach((faq, index) => {
+    const normalizedFaq = normalizeFaq(faq, index);
+    const content = String(normalizedFaq?.content || "").trim();
+    if (!content) return;
+    push({
+      type: "quick",
+      title: normalizedFaq.title || "Quick Reply",
+      content,
+      steps: [{ type: "text", content }]
+    });
+  });
+
+  aiReplies.forEach((reply, index) => {
+    const text = String(reply || "").trim();
+    if (!text) return;
+    push({
+      type: "ai",
+      title: index === 0 ? "AI Suggestion" : `AI Suggestion ${index + 1}`,
+      content: text,
+      steps: [{ type: "text", content: text }]
+    });
+  });
+
+  return merged.slice(0, 3);
+}
+
+async function requestAiRelaySuggestions(options = {}) {
+  const silent = Boolean(options.silent);
+  if (!state.aiEnabled) {
+    if (!silent) toast("AI recommendation is disabled.", true);
+    return;
+  }
+  if (!state.aiApiKey) {
+    if (!silent) {
+      showAiSettings();
+      toast("Please fill in the AI API key first.", true);
+    }
+    return;
+  }
+
+  const context = buildAiConversationContext();
+  if (!context) {
+    if (!silent) toast("No real chat context is available for AI suggestions.", true);
+    return;
+  }
+
+  const skillSuggestion = buildSkillSuggestion();
+  state.aiGenerating = true;
+  updateAiButtonState();
+
+  try {
+    const payload = {
+      ...getAiRelayBasePayload(),
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You are a customer-service reply assistant.",
+            "Use the real conversation, matched skill, quick replies, and learned manual reply patterns together.",
+            "Generate 1 to 3 short Chinese replies that can be sent directly.",
+            "Do not invent order facts, rebates, balances, user ids, or backend states.",
+            `If the issue truly cannot be resolved, you may guide the customer to send 客服 or open ${ONLINE_SERVICE_URL}.`,
+            "Prefer JSON array output such as [\"reply 1\", \"reply 2\", \"reply 3\"]."
+          ].join("\n")
+        },
+        {
+          role: "user",
+          content: buildAiConversationContextWithReferences(context, skillSuggestion)
+        }
+      ]
+    };
+
+    const started = Date.now();
+    const response = await fetch("/ai/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const text = await response.text();
+    const parsed = parsePayload(text);
+
+    log("AI relay chat/completions", {
+      status: response.status,
+      ms: Date.now() - started,
+      baseUrl: state.aiBaseUrl,
+      model: state.aiModel,
+      response: summarize(maskAiPayload(parsed))
+    });
+
+    if (!response.ok) throw new Error(getMessage(parsed) || `HTTP ${response.status}`);
+
+    const suggestions = extractAiReplies(parsed);
+    if (!suggestions.length) throw new Error("AI did not return suggestion content");
+    const fallbackSuggestions = suggestions.length >= 2 ? suggestions : buildLocalSuggestionVariants(suggestions[0]);
+    appendAiSuggestions(mergeAiSuggestions(skillSuggestion, fallbackSuggestions), { silent });
+  } catch (error) {
+    if (skillSuggestion) appendAiSuggestions([skillSuggestion], { silent: true });
+    if (silent) {
+      log("auto ai suggestion failed", { error: error.message, source: options.source || "" });
+    } else {
+      toast(`AI suggestion failed: ${error.message}`, true);
+    }
+  } finally {
+    state.aiGenerating = false;
+    updateAiButtonState();
+  }
+}
+
+async function generateAutoAiSuggestion(expectedKey, options = {}) {
+  const latest = getLatestAutoSuggestionMessage();
+  const key = buildAutoSuggestionKey(latest);
+  if (!key || key !== expectedKey) return;
+  if (key === state.lastAutoAiSuggestionKey || key === state.aiAutoSuggestInFlightKey) return;
+  if (state.aiGenerating) return;
+
+  state.aiAutoSuggestInFlightKey = key;
+  try {
+    const skillSuggestion = await maybeBuildSkillSuggestion({ autoReply: true });
+    await requestAiRelaySuggestions({ silent: true, source: options.source || "auto" });
+    state.lastAutoAiSuggestionKey = key;
+    if (skillSuggestion && !state.aiSuggestion) appendAiSuggestion(skillSuggestion);
+  } finally {
+    if (state.aiAutoSuggestInFlightKey === key) state.aiAutoSuggestInFlightKey = "";
+  }
+}
