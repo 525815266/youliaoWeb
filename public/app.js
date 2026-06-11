@@ -7304,6 +7304,16 @@ function buildSkillSuggestion() {
   if (!match) return null;
   const skill = match.skill;
   const latest = match.latest || getLatestActionableInboundMessage();
+  const contextText = latest ? getSkillMatchText(latest) : "";
+  const replyProfile = skill.noReply
+    ? null
+    : getSkillReplyProfile(skill, {
+      prompt: contextText,
+      contextText,
+      platformKey: match.platformKey || skill.platformKey || "",
+      intentKey: match.intentKey || skill.intentKey || "",
+      preferLearned: true
+    });
   if (skill.noReply) {
     return {
       type: "skill",
@@ -7313,6 +7323,7 @@ function buildSkillSuggestion() {
       reason: skill.fallback || "这类消息通常不需要回复。",
       score: match.score,
       promptKey: latest ? getMessageKey(latest, 0) : "",
+      contextText,
       platformKey: match.platformKey || skill.platformKey || "",
       intentKey: match.intentKey || skill.intentKey || "",
       matchedOrderNo: match.matchedOrderNo || "",
@@ -7325,15 +7336,19 @@ function buildSkillSuggestion() {
     title: `skill：${skill.title}`,
     skillId: skill.id,
     allowAutoReply: skill.allowAutoReply !== false,
-    content: getSkillText(skill),
-    steps: getSkillSteps(skill),
+    content: replyProfile?.text || getSkillText(skill),
+    steps: replyProfile?.steps || getSkillSteps(skill),
     score: match.score,
     contactUrl: skill.contactUrl || ONLINE_SERVICE_URL,
     promptKey: latest ? getMessageKey(latest, 0) : "",
+    contextText,
     platformKey: match.platformKey || skill.platformKey || "",
     intentKey: match.intentKey || skill.intentKey || "",
     matchedOrderNo: match.matchedOrderNo || "",
-    matchKeywords: match.matchKeywords || []
+    matchKeywords: match.matchKeywords || [],
+    learnedFromOverride: Boolean(replyProfile?.usingOverride),
+    overrideCount: replyProfile?.overrideCount || 0,
+    imageCount: replyProfile?.imageCount || 0
   };
 }
 
@@ -7438,6 +7453,27 @@ function scoreReplySkill(skill, normalizedContext, triggerMessage, contextMeta =
       score += 18;
       hits += 1;
       if (!matchKeywords.includes(contextMeta.orderNo)) matchKeywords.push(contextMeta.orderNo);
+    }
+  }
+
+  const matchedOverride = getPreferredSkillOverride(skill, {
+    prompt: contextMeta.text,
+    contextText: contextMeta.text,
+    platformKey: resolvedPlatformKey,
+    intentKey: resolvedIntentKey
+  });
+  if (matchedOverride) {
+    const overrideScore = scoreSkillOverride(matchedOverride, {
+      prompt: contextMeta.text,
+      contextText: contextMeta.text,
+      platformKey: resolvedPlatformKey,
+      intentKey: resolvedIntentKey
+    });
+    if (overrideScore > 0) {
+      score += Math.min(44, Math.round(overrideScore * 0.55));
+      hits += 1;
+      const learnedKeyword = compactInlineText(matchedOverride.reply || matchedOverride.prompt || "", 18);
+      if (learnedKeyword && !matchKeywords.includes(learnedKeyword)) matchKeywords.push(learnedKeyword);
     }
   }
 
@@ -7629,12 +7665,114 @@ function getSkillSteps(skill) {
   return skill?.fallback ? [{ type: "text", content: skill.fallback }] : [];
 }
 
-function getSkillText(skill) {
-  return getSkillSteps(skill)
+function getSkillOverrideCount(skill) {
+  return Array.isArray(skill?.manualOverrides)
+    ? skill.manualOverrides.reduce((sum, item) => sum + Number(item.count || 1), 0)
+    : 0;
+}
+
+function buildSkillOverrideSteps(override) {
+  if (!override) return [];
+  const text = String(override.reply || "").trim();
+  const imageUrls = Array.isArray(override.imageUrls) ? override.imageUrls : [];
+  return [
+    text ? { type: "text", content: text } : null,
+    ...imageUrls.map((url, index) => ({
+      type: "image",
+      url: normalizeImageUrl(url),
+      label: `学习图片 ${index + 1}`
+    }))
+  ].filter(Boolean);
+}
+
+function scoreSkillOverride(override, options = {}) {
+  if (!override) return 0;
+  const promptText = String(options.prompt || options.contextText || "").trim();
+  const promptNormalized = normalizeForMatch(promptText);
+  const overridePromptNormalized = normalizeForMatch(override.prompt || "");
+  const overrideReplyNormalized = normalizeForMatch(override.reply || "");
+  let score = Math.min(36, Number(override.count || 1) * 10);
+
+  if (promptNormalized && overridePromptNormalized) {
+    if (promptNormalized.includes(overridePromptNormalized) || overridePromptNormalized.includes(promptNormalized)) {
+      score += 42;
+    }
+    const promptKeywords = extractLearningKeywords(promptText).map(normalizeForMatch).filter(Boolean);
+    const overrideKeywords = extractLearningKeywords(override.prompt || "").map(normalizeForMatch).filter(Boolean);
+    const overlap = promptKeywords.filter((keyword) => overrideKeywords.includes(keyword));
+    score += overlap.length * 10;
+    if (overrideReplyNormalized && promptKeywords.some((keyword) => overrideReplyNormalized.includes(keyword))) {
+      score += 8;
+    }
+  }
+
+  const age = Date.now() - new Date(override.at || 0).getTime();
+  if (Number.isFinite(age) && age >= 0) {
+    if (age < 7 * 24 * 60 * 60 * 1000) score += 8;
+    else if (age < 30 * 24 * 60 * 60 * 1000) score += 4;
+  }
+
+  if (String(override.reply || "").trim()) score += 6;
+  if (Array.isArray(override.imageUrls) && override.imageUrls.length) score += Math.min(8, override.imageUrls.length * 3);
+  return score;
+}
+
+function getPreferredSkillOverride(skill, options = {}) {
+  const overrides = Array.isArray(skill?.manualOverrides) ? skill.manualOverrides : [];
+  if (!overrides.length) return null;
+  const promptText = String(options.prompt || options.contextText || "").trim();
+  const ranked = overrides
+    .map((override, index) => ({
+      ...override,
+      __matchScore: scoreSkillOverride(override, options),
+      __index: index
+    }))
+    .sort((a, b) => (
+      b.__matchScore - a.__matchScore ||
+      Number(b.count || 1) - Number(a.count || 1) ||
+      new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime() ||
+      a.__index - b.__index
+    ));
+  const best = ranked[0];
+  if (!best) return null;
+  if (!promptText) {
+    return Number(best.count || 1) >= 2 || overrides.length === 1 ? best : null;
+  }
+  return best.__matchScore >= 16 ? best : null;
+}
+
+function getSkillReplyProfile(skill, options = {}) {
+  const override = getPreferredSkillOverride(skill, options);
+  const overrideCount = getSkillOverrideCount(skill);
+  const shouldUseOverride = Boolean(
+    override &&
+    (
+      options.preferLearned ||
+      String(options.prompt || options.contextText || "").trim() ||
+      Number(override.count || 1) >= 2 ||
+      overrideCount >= 3
+    )
+  );
+  const steps = shouldUseOverride
+    ? mergeTextWithExistingSkillImages(buildSkillOverrideSteps(override), skill)
+    : getSkillSteps(skill);
+  const text = steps
     .filter((step) => step.type !== "image")
     .map((step) => step.content || "")
     .filter(Boolean)
     .join("\n\n");
+  return {
+    steps,
+    text,
+    override,
+    overrideCount,
+    usingOverride: shouldUseOverride,
+    imageCount: steps.filter((step) => step.type === "image" && (step.url || step.content)).length
+  };
+}
+
+function getSkillText(skill) {
+  return getSkillReplyProfile(skill, { preferLearned: true }).text;
 }
 
 function getSkillImageSteps(skillOrSuggestion) {
@@ -7830,7 +7968,9 @@ async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, 
     reply,
     imageUrls: images,
     contactId: getContactId(state.activeContact),
-    messageKey: latestKey
+    messageKey: latestKey,
+    platformKey,
+    intentKey
   };
 
   if (duplicateIndex >= 0) {
@@ -7884,17 +8024,30 @@ function findLearnedSkillForPrompt(prompt) {
   const intentKey = detectSkillIntentKey(prompt) || "";
   const keywords = extractLearningKeywords(prompt).map(normalizeForMatch).filter(Boolean);
   if (!keywords.length) return null;
-  return state.replySkills.find((skill) => {
-    if (!["learned", "manual"].includes(String(skill.source || ""))) return false;
-    if (platformKey && getSkillPlatformKeys(skill).length && !getSkillPlatformKeys(skill).includes(platformKey)) return false;
-    if (intentKey && getSkillIntentKeys(skill).length && !getSkillIntentKeys(skill).includes(intentKey)) return false;
-    const haystack = normalizeForMatch([
-      skill.title,
-      ...(skill.keywords || []),
-      ...(skill.samples || [])
-    ].join("\n"));
-    return keywords.some((keyword) => keyword && haystack.includes(keyword));
-  }) || null;
+  const candidates = state.replySkills
+    .filter((skill) => {
+      if (!["learned", "manual"].includes(String(skill.source || ""))) return false;
+      if (platformKey && getSkillPlatformKeys(skill).length && !getSkillPlatformKeys(skill).includes(platformKey)) return false;
+      if (intentKey && getSkillIntentKeys(skill).length && !getSkillIntentKeys(skill).includes(intentKey)) return false;
+      return true;
+    })
+    .map((skill) => {
+      const haystack = normalizeForMatch([
+        skill.title,
+        ...(skill.keywords || []),
+        ...(skill.samples || []),
+        ...(Array.isArray(skill.manualOverrides) ? skill.manualOverrides.map((item) => item.prompt || "") : [])
+      ].join("\n"));
+      const keywordHits = keywords.filter((keyword) => keyword && haystack.includes(keyword)).length;
+      let score = keywordHits * 16;
+      if (platformKey && getSkillPlatformKeys(skill).includes(platformKey)) score += 24;
+      if (intentKey && getSkillIntentKeys(skill).includes(intentKey)) score += 18;
+      score += Math.min(18, getSkillOverrideCount(skill) * 3);
+      return { skill, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || Number(b.skill.priority || 0) - Number(a.skill.priority || 0));
+  return candidates[0]?.skill || null;
 }
 
 function extractLearningKeywords(text) {
@@ -7902,6 +8055,12 @@ function extractLearningKeywords(text) {
   const pieces = normalized.split(/\s+/).filter((item) => item.length >= 2);
   const fallback = normalized.length > 12 ? [normalized.slice(0, 12), normalized.slice(-8)] : [normalized];
   return [...new Set(pieces.length ? pieces : fallback)].slice(0, 8);
+}
+
+function compactInlineText(value, max = 60) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text || text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 3))}...`;
 }
 
 function isCurrentReplyEffectivelySameAsAppliedSuggestion(reply, images = []) {
@@ -8734,7 +8893,7 @@ function renderSkillGroup(group, suggestion = null) {
         <strong>${escapeHtml(group.label)}</strong>
         <span>${group.skills.length} 条</span>
       </header>
-      <div class="quick-list skill-list ${suggestion?.skillId ? "has-active-match" : ""}">
+      <div class="skill-list ${suggestion?.skillId ? "has-active-match" : ""}">
         ${group.skills.map((skill, index) => renderSkillRow(skill, index, suggestion)).join("")}
       </div>
     </section>
@@ -8742,50 +8901,105 @@ function renderSkillGroup(group, suggestion = null) {
 }
 
 function renderSkillMatchCard(suggestion) {
+  const metaTags = [
+    suggestion.noReply ? "无需回复" : suggestion.allowAutoReply ? "可自动回复" : "建议回复",
+    suggestion.platformKey ? getPlatformLabelByKey(suggestion.platformKey) : "",
+    suggestion.intentKey ? getIntentLabelByKey(suggestion.intentKey) : "",
+    suggestion.learnedFromOverride ? `已学习 ${suggestion.overrideCount || 1} 次` : "",
+    suggestion.imageCount ? `带 ${suggestion.imageCount} 图` : ""
+  ].filter(Boolean);
   return `
     <div class="skill-match-card ${suggestion.noReply ? "no-reply" : ""}">
-      <div class="skill-match-head">
-        <strong>${escapeHtml(suggestion.title || "skill 命中")}</strong>
-        ${renderSkillImageStrip(suggestion, { limit: 3 })}
+      <div class="skill-match-top">
+        <div class="skill-match-head">
+          <strong>${escapeHtml(suggestion.title || "skill 命中")}</strong>
+          ${metaTags.length ? `<div class="skill-match-tags">${metaTags.map((item) => `<span class="skill-meta-tag">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+        </div>
+        <div class="skill-match-actions">
+          <button class="mini-action" type="button" data-action="optimize-skill-match" ${suggestion.noReply ? "disabled" : ""}>优化</button>
+          <button class="mini-action" type="button" data-action="apply-skill-match" ${suggestion.noReply ? "disabled" : ""}>采用</button>
+          <button class="mini-action" type="button" data-action="send-skill-match" ${suggestion.noReply ? "disabled" : ""}>发送</button>
+        </div>
       </div>
       <p>${escapeHtml(formatSuggestionText(suggestion))}</p>
-      <div class="skill-match-actions">
-        <button class="mini-action" type="button" data-action="optimize-skill-match" ${suggestion.noReply ? "disabled" : ""}>优化</button>
-        <button class="mini-action" type="button" data-action="apply-skill-match" ${suggestion.noReply ? "disabled" : ""}>采用</button>
-        <button class="mini-action" type="button" data-action="send-skill-match" ${suggestion.noReply ? "disabled" : ""}>发送</button>
-      </div>
+      ${renderSkillImageStrip(suggestion, { limit: 3 })}
     </div>
   `;
 }
 
 function renderSkillRow(skill, index, suggestion = null) {
   const status = skill.noReply ? "无需回复" : skill.allowAutoReply ? "可自动" : "推荐";
-  const keywords = (skill.keywords || []).slice(0, 8).join("、") || "-";
-  const content = skill.noReply ? (skill.fallback || "无需回复") : getSkillText(skill);
-  const imageCount = getSkillImageSteps(skill).length;
+  const replyProfile = skill.noReply
+    ? {
+      text: skill.fallback || "无需回复",
+      steps: getSkillSteps(skill),
+      override: null,
+      overrideCount: getSkillOverrideCount(skill),
+      usingOverride: false,
+      imageCount: getSkillImageSteps(skill).length
+    }
+    : getSkillReplyProfile(skill, {
+      prompt: suggestion?.contextText || "",
+      contextText: suggestion?.contextText || "",
+      platformKey: suggestion?.platformKey || "",
+      intentKey: suggestion?.intentKey || "",
+      preferLearned: Boolean(suggestion?.skillId)
+    });
+  const content = skill.noReply ? (skill.fallback || "无需回复") : replyProfile.text;
+  const imageCount = replyProfile.imageCount;
   const isMatched = suggestion?.skillId && String(skill.id) === String(suggestion.skillId);
   const isDimmed = suggestion?.skillId && !isMatched;
-  const overrideCount = Array.isArray(skill.manualOverrides)
-    ? skill.manualOverrides.reduce((sum, item) => sum + Number(item.count || 1), 0)
-    : 0;
+  const overrideCount = replyProfile.overrideCount;
   const platformLabel = getPlatformLabelByKey(getSkillPlatformKeys(skill)[0]);
   const intentLabel = getIntentLabelByKey(getSkillIntentKeys(skill)[0]);
-  const metaTags = [platformLabel, intentLabel, skill.source === "learned" ? "已学习" : "", skill.noReply ? "无需回复" : ""].filter(Boolean);
+  const metaTags = [
+    platformLabel,
+    intentLabel,
+    skill.source === "learned" ? "已学习" : "",
+    replyProfile.usingOverride ? "学习版" : "",
+    skill.noReply ? "无需回复" : ""
+  ].filter(Boolean);
+  const keywords = (skill.keywords || []).slice(0, 6);
+  const footChips = [
+    imageCount ? `带 ${imageCount} 图` : "",
+    overrideCount ? `已纠正 ${overrideCount} 次` : "",
+    skill.hitCount ? `命中 ${skill.hitCount} 次` : "",
+    skill.revisionCount ? `修订 ${skill.revisionCount} 次` : ""
+  ].filter(Boolean);
+  const keywordLine = keywords.length ? `关键词：${keywords.join(" / ")}` : "";
+  const learningNote = replyProfile.override
+    ? `最近学习：${compactInlineText(replyProfile.override.reply || replyProfile.override.prompt || "", 46)}`
+    : "";
   return `
-    <article class="quick-row skill-row ${skill.enabled === false ? "is-disabled" : ""} ${isMatched ? "is-matched" : ""} ${isDimmed ? "is-dimmed" : ""}">
-      <span class="quick-index">${isMatched ? "中" : index + 1}</span>
-      <button class="quick-copy" type="button" data-copy="${escapeAttr(content)}" title="复制 skill" aria-label="复制 skill"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>
-      <div class="quick-main">
-        <strong>${escapeHtml(skill.title || "未命名 skill")} <em>${escapeHtml(status)}</em></strong>
-        ${metaTags.length ? `<div class="skill-meta-tags">${metaTags.map((item) => `<span class="skill-meta-tag">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
-        <p>${escapeHtml(content || "暂无话术")}</p>
-        ${renderSkillImageStrip(skill)}
-        <small>关键词：${escapeHtml(keywords)}${imageCount ? ` / 含 ${imageCount} 张图` : ""}${overrideCount ? ` / 人工纠正 ${overrideCount} 次` : ""}</small>
+    <article class="skill-row ${skill.enabled === false ? "is-disabled" : ""} ${isMatched ? "is-matched" : ""} ${isDimmed ? "is-dimmed" : ""}">
+      <div class="skill-row-aside">
+        <span class="quick-index">${isMatched ? "中" : index + 1}</span>
+        <button class="quick-copy" type="button" data-copy="${escapeAttr(content)}" title="复制 skill" aria-label="复制 skill"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>
       </div>
-      <div class="quick-actions">
-        <button class="mini-action" type="button" data-skill-apply="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>采用</button>
-        <button class="mini-action" type="button" data-skill-send="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>发送</button>
-        <button class="mini-action" type="button" data-skill-optimize="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>优化</button>
+      <div class="skill-row-main">
+        <div class="skill-row-head">
+          <div class="skill-row-title">
+            <div class="skill-row-titleline">
+              <strong>${escapeHtml(skill.title || "未命名 skill")}</strong>
+              <em>${escapeHtml(status)}</em>
+            </div>
+            ${metaTags.length ? `<div class="skill-meta-tags">${metaTags.map((item) => `<span class="skill-meta-tag">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+          </div>
+          <div class="skill-row-actions">
+            <button class="mini-action" type="button" data-skill-apply="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>采用</button>
+            <button class="mini-action" type="button" data-skill-send="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>发送</button>
+            <button class="mini-action" type="button" data-skill-optimize="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>优化</button>
+          </div>
+        </div>
+        <p class="skill-row-preview">${escapeHtml(content || "暂无话术")}</p>
+        ${renderSkillImageStrip(replyProfile)}
+        <div class="skill-row-foot">
+          <div class="skill-row-hints">
+            ${footChips.length ? `<div class="skill-hint-chips">${footChips.map((item) => `<span class="skill-foot-chip">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+            ${keywordLine ? `<small class="skill-keywords">${escapeHtml(keywordLine)}</small>` : ""}
+            ${learningNote ? `<small class="skill-learning-note">${escapeHtml(learningNote)}</small>` : ""}
+          </div>
+        </div>
       </div>
     </article>
   `;
@@ -9494,12 +9708,21 @@ async function updateSkillFromSuggestion(suggestion) {
 function applySkillById(id) {
   const skill = getSkillById(id);
   if (!skill) return;
+  const contextText = getCurrentSkillContextText();
+  const replyProfile = getSkillReplyProfile(skill, {
+    prompt: contextText,
+    contextText,
+    preferLearned: true
+  });
   appendAiSuggestion({
     type: "skill",
     title: `skill：${skill.title}`,
     skillId: skill.id,
-    content: getSkillText(skill),
-    steps: getSkillSteps(skill)
+    content: replyProfile.text,
+    steps: replyProfile.steps,
+    learnedFromOverride: replyProfile.usingOverride,
+    overrideCount: replyProfile.overrideCount,
+    imageCount: replyProfile.imageCount
   });
   useAiSuggestion();
 }
@@ -9507,13 +9730,27 @@ function applySkillById(id) {
 function sendSkillById(id) {
   const skill = getSkillById(id);
   if (!skill) return;
+  const contextText = getCurrentSkillContextText();
+  const replyProfile = getSkillReplyProfile(skill, {
+    prompt: contextText,
+    contextText,
+    preferLearned: true
+  });
   sendSuggestionSteps({
     type: "skill",
     title: `skill：${skill.title}`,
     skillId: skill.id,
-    content: getSkillText(skill),
-    steps: getSkillSteps(skill)
+    content: replyProfile.text,
+    steps: replyProfile.steps,
+    learnedFromOverride: replyProfile.usingOverride,
+    overrideCount: replyProfile.overrideCount,
+    imageCount: replyProfile.imageCount
   });
+}
+
+function getCurrentSkillContextText() {
+  const latest = getLatestSkillTriggerMessage() || getLatestActionableInboundMessage();
+  return latest ? getSkillMatchText(latest) : "";
 }
 
 async function optimizeSkillById(id) {
@@ -9533,7 +9770,12 @@ async function optimizeSkillById(id) {
     return;
   }
 
-  const skillText = getSkillText(skill);
+  const contextText = getCurrentSkillContextText();
+  const skillText = getSkillReplyProfile(skill, {
+    prompt: contextText,
+    contextText,
+    preferLearned: true
+  }).text;
   if (!skillText) {
     toast("这条 skill 没有可优化的话术。", true);
     return;

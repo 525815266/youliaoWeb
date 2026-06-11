@@ -1399,3 +1399,116 @@ New AI behavior:
   - `5180`
 - if user reports “CodeBuddy still only shows fallback-upstream 404 behavior”, confirm they are not hitting an old dev process
 
+## 2026-06-11 Skill Panel Layout + Learned Override Priority
+
+Files changed:
+
+- `public/app.js`
+- `public/styles.css`
+
+### Why this follow-up happened
+
+User reported the right-side `skill 回复` panel was still:
+
+- visually cramped
+- hard to scan
+- scrollbar felt missing
+- learning felt dumb because manually corrected wording was not clearly winning in the panel
+
+### Layout rule now
+
+Do not reuse quick-reply row layout for skills anymore.
+
+`skill` rows now use their own structure:
+
+- `skill-row-aside`
+- `skill-row-main`
+- `skill-row-head`
+- `skill-row-actions`
+- `skill-row-preview`
+- `skill-row-foot`
+
+This means:
+
+- sequence + copy stay narrow on the left
+- title + chips + actions are separated from body text
+- learned notes and keyword hints live in a footer area
+- image strip is its own row instead of competing with action buttons
+
+### Scroll rule now
+
+Right toolbar skill scroll affordance is intentionally stronger:
+
+- `skill-panel-scroll` now uses explicit track/thumb colors
+- webkit scrollbar width increased to `12px`
+- thumb is brighter blue and track is visible
+
+If user says “there is still no scrollbar”, first confirm they are actually inside the `skill` tool and the list has enough content to overflow.
+
+### Learned override priority changed
+
+New helper flow in `public/app.js`:
+
+- `getSkillOverrideCount()`
+- `buildSkillOverrideSteps()`
+- `scoreSkillOverride()`
+- `getPreferredSkillOverride()`
+- `getSkillReplyProfile()`
+
+Behavior:
+
+1. matched manual overrides are now scored against current context
+2. best learned override can win over stale fallback text
+3. same learned version is used by:
+   - matched skill suggestion card
+   - right-panel skill card preview
+   - `采用`
+   - `发送`
+   - `优化` seed text
+
+This is the important behavior change. Do not regress it by going back to raw `getSkillSteps(skill)` in panel actions.
+
+### Matching changed too
+
+`scoreReplySkill()` now gives score credit when a skill has a strong matching manual override.
+
+So learning is no longer only cosmetic. It now affects rank order.
+
+### Learned-skill lookup changed
+
+`findLearnedSkillForPrompt()` now scores candidates rather than returning first keyword hit.
+
+It now considers:
+
+- platform match
+- intent match
+- keyword overlap
+- override prompt history
+- override count
+
+### UI indicators now exposed
+
+Skill cards can now show:
+
+- `学习版`
+- `已纠正 N 次`
+- `最近学习：...`
+- `带 N 图`
+- `命中 N 次`
+- `修订 N 次`
+
+This is intentional. The user wanted to see whether learning was actually helping.
+
+### Verification
+
+- `npm run check` passed
+- browser DOM check confirmed the new page shell serves with the updated bundle, although full screenshot capture from the in-app browser timed out during this pass
+
+### Do not regress
+
+If you later touch the right toolbar skill panel:
+
+1. do not reintroduce `quick-row skill-row`
+2. keep learned override selection centralized in `getSkillReplyProfile()`
+3. panel actions must use context-aware learned text, not raw fallback text
+

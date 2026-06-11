@@ -2974,6 +2974,8 @@ textarea:focus-visible {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 0 0 10px;
+  scrollbar-width: auto;
+  scrollbar-color: #8abdf1 #eef5fc;
 }
 
 .quick-list,
@@ -2984,20 +2986,19 @@ textarea:focus-visible {
 
 .quick-list::-webkit-scrollbar,
 .skill-panel-scroll::-webkit-scrollbar {
-  width: 10px;
+  width: 12px;
 }
 
 .quick-list::-webkit-scrollbar-thumb,
 .skill-panel-scroll::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
+  border: 2px solid #eef5fc;
   border-radius: 999px;
-  background: #c0d7ee;
-  background-clip: padding-box;
+  background: linear-gradient(180deg, #9dcbf6 0%, #73afea 100%);
 }
 
 .quick-list::-webkit-scrollbar-track,
 .skill-panel-scroll::-webkit-scrollbar-track {
-  background: transparent;
+  background: #eef5fc;
 }
 
 .skill-controls {
@@ -3036,10 +3037,9 @@ textarea:focus-visible {
 
 .skill-match-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 7px 8px;
+  gap: 8px;
   margin: 8px 10px;
-  padding: 8px;
+  padding: 10px;
   border: 1px solid #b9dafc;
   border-radius: var(--radius);
   background: #f2f8ff;
@@ -3051,9 +3051,22 @@ textarea:focus-visible {
   background: #f7f9fc;
 }
 
+.skill-match-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .skill-match-head {
   display: grid;
   min-width: 0;
+  gap: 5px;
+}
+
+.skill-match-tags {
+  display: flex;
+  flex-wrap: wrap;
   gap: 5px;
 }
 
@@ -3067,7 +3080,6 @@ textarea:focus-visible {
 }
 
 .skill-match-card p {
-  grid-column: 1 / -1;
   margin: 0;
   color: #334155;
   font-size: 12px;
@@ -3084,7 +3096,7 @@ textarea:focus-visible {
 .skill-match-actions {
   display: flex;
   flex: 0 0 auto;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   justify-content: flex-end;
   align-self: start;
   gap: 6px;
@@ -3119,11 +3131,118 @@ textarea:focus-visible {
 }
 
 .skill-group .skill-list {
-  padding: 0 10px;
+  padding: 6px 10px 8px;
 }
 
 .skill-list.has-active-match .skill-row {
   transition: opacity 160ms ease, border-color 160ms ease, background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid #e7edf5;
+}
+
+.skill-row:last-child {
+  border-bottom: 0;
+}
+
+.skill-row-aside {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  padding-top: 1px;
+}
+
+.skill-row-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.skill-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.skill-row-title {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.skill-row-titleline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.skill-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.skill-row-preview {
+  margin: 0;
+  color: #536276;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.skill-row-foot {
+  display: flex;
+  min-width: 0;
+}
+
+.skill-row-hints {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.skill-hint-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.skill-foot-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: #627389;
+  font-size: 11px;
+  background: #f2f6fb;
+}
+
+.skill-keywords,
+.skill-learning-note {
+  margin: 0;
 }
 
 .skill-row.is-disabled {
@@ -3142,8 +3261,8 @@ textarea:focus-visible {
 
 .skill-row.is-matched {
   position: relative;
-  margin: 6px -4px 8px;
-  padding: 8px 4px;
+  margin: 2px -4px;
+  padding: 10px 8px;
   border: 1px solid #b9dafc;
   border-radius: var(--radius);
   background: linear-gradient(180deg, #f4faff 0%, #ffffff 100%);
@@ -3171,7 +3290,6 @@ textarea:focus-visible {
 }
 
 .skill-row em {
-  margin-left: 4px;
   padding: 1px 5px;
   border-radius: 999px;
   color: #0d63c7;
@@ -3201,18 +3319,9 @@ textarea:focus-visible {
 
 .skill-row small {
   display: block;
-  margin-top: 4px;
   color: #7c8a9b;
   font-size: 11px;
   line-height: 1.4;
-}
-
-.skill-row .quick-main p {
-  display: -webkit-box;
-  max-height: 52px;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
 }
 
 .skill-empty {

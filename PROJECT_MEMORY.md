@@ -3007,5 +3007,132 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
 - 如果后面要把“每次不同表达”做得更强，不要直接随机重写整句，优先在：
   - `rewriteSkillSendText()`
   - `applySkillToneVariant()`
- 里继续加受控模板。
+里继续加受控模板。
+
+## 53. 2026-06-11 右侧 Skill 面板重构与学习优先级修复
+
+### 1. 问题背景
+
+用户继续反馈右侧 `skill 回复` 工具栏有三个核心问题：
+
+1. 格式难用，内容挤在一起，读起来累。
+2. 滚动条虽然理论上存在，但视觉上太弱，像是没有。
+3. `skill` 学习不够智能，明明人工纠正过多次，命中时还是优先展示旧文案。
+
+### 2. 本次调整目标
+
+这次不再沿用快捷回复那套 `quick-row` 四列布局硬套 `skill`，而是把 `skill` 面板改成独立的工作台结构：
+
+- 左侧只保留序号与复制按钮。
+- 中间主体分成标题区、话术预览区、图片条、学习信息区。
+- 右侧操作按钮固定聚合，避免和正文抢空间。
+- 当前命中时优先展示已经学到的人工作答版本，而不是始终显示原始 fallback。
+
+### 3. 前端结构改动
+
+涉及文件：
+
+- `public/app.js`
+- `public/styles.css`
+
+关键点：
+
+- `renderSkillGroup()` 不再复用 `quick-list`。
+- `renderSkillMatchCard()` 改成：
+  - 顶部命中标题 + 标签
+  - 右上操作按钮
+  - 下方预览文案
+  - 图片条单独一行
+- `renderSkillRow()` 改成独立 `skill-row` 结构：
+  - `skill-row-aside`
+  - `skill-row-main`
+  - `skill-row-head`
+  - `skill-row-actions`
+  - `skill-row-preview`
+  - `skill-row-foot`
+
+这样 `skill` 的平台标签、意图标签、学习状态、图片张数、命中次数、修订次数都不会再挤在同一行里。
+
+### 4. 滚动条修复
+
+右侧 `skill-panel-scroll` 现在做了更明确的滚动提示：
+
+- `scrollbar-width: auto`
+- 更宽的 `12px` WebKit 滚动条
+- 更亮的蓝色 thumb
+- 浅色轨道底
+
+目标不是花哨，而是让客服一眼看出“这里还能继续往下翻”。
+
+### 5. 学习逻辑增强
+
+新增或强化了几类能力：
+
+- `getSkillOverrideCount(skill)`
+- `buildSkillOverrideSteps(override)`
+- `scoreSkillOverride(override, options)`
+- `getPreferredSkillOverride(skill, options)`
+- `getSkillReplyProfile(skill, options)`
+- `compactInlineText(value, max)`
+
+行为变化：
+
+1. 当某个 `skill` 已有人工纠正记录时，会先根据当前上下文去选最贴近的一条 override。
+2. 如果 override 已经足够稳定，会优先把这条学习版用于：
+   - 当前命中的 `skill` 卡片展示
+   - `skill` 面板里的“采用”
+   - `skill` 面板里的“发送”
+   - `skill` 的“优化”起始文案
+3. `scoreReplySkill()` 现在会把 override 匹配度纳入打分，而不是只看 `keywords / samples / platform / intent`。
+4. `findLearnedSkillForPrompt()` 也会把：
+   - 平台
+   - 意图
+   - 历史 override prompt
+   - override 数量
+   一起纳入学习匹配，而不是只做非常浅的关键词包含。
+
+### 6. 界面上新增的学习反馈
+
+右侧 `skill` 卡片现在会直接显示学习结果：
+
+- `学习版`
+- `已纠正 N 次`
+- `最近学习：xxxx`
+- `带 N 图`
+- `命中 N 次`
+- `修订 N 次`
+
+这样客服能直接看出来当前看到的是不是已经被自己修过的版本。
+
+### 7. 发送 / 采用行为同步变化
+
+`applySkillById()`、`sendSkillById()`、`optimizeSkillById()` 现在不再直接拿原始 `getSkillSteps(skill)`，而是先取当前上下文下的 `getSkillReplyProfile()`。
+
+这意味着：
+
+- 同一个 `skill` 在不同上下文里，优先带出的学习版更贴近当前客户问题。
+- 客服从右侧点“发送”时，更接近自己最近真正采用过的风格。
+
+### 8. 验证
+
+- `npm run check` 已通过。
+- 本轮还做了本地页面 DOM 验证，确认新结构类名已写入页面代码：
+  - `skill-row-actions`
+  - `skill-match-top`
+  - `skill-panel-scroll`
+
+注意：
+
+- 如果右侧仍显示旧布局，基本可以判断当前浏览器访问的是旧进程缓存的页面，需要刷新或重启当前 `node server.js` 进程。
+
+### 9. 后续维护规则
+
+后面如果还要继续增强 `skill`：
+
+1. 不要再把 `skill` 结构回退成 `quick-row`。
+2. 学习优先级相关逻辑统一收口在：
+   - `getPreferredSkillOverride()`
+   - `getSkillReplyProfile()`
+   - `scoreSkillOverride()`
+3. 如果要做更细的“当前命中分类”排序，不要只改 CSS，要同时调整 `buildSkillGroupScore()` 和 override 匹配打分。
 
