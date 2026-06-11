@@ -2818,6 +2818,53 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
 
 ## 51. 2026-06-11 AI 渠道独立配置与模型拉取
 
+## 52. 2026-06-11 左侧会话列表动态续页
+
+用户新增反馈：
+
+- 原客户端左侧会话列表在滑动接近底部时，会自动继续加载下一页，尤其 `历史` 分类更明显。
+- Web 端之前更像固定一页列表，没有把联系人分页和滚动续页真正做起来。
+
+本次修改文件：
+
+- `public/app.js`
+
+本次补齐内容：
+
+- 左侧会话列表新增独立分页状态：
+  - `state.contactListPage`
+  - `state.contactListHasMore`
+  - `state.contactListLoading`
+  - `state.contactListAutoLoading`
+- 联系人列表参数统一走：
+  - `CONTACT_LIST_PAGE_SIZE = 20`
+- 联系人接口加载模式扩展为：
+  - `replace`
+  - `append`
+  - `merge`
+- `loadContacts()` 不再只支持“替换第一页”：
+  - `append` 会把下一页联系人按 `contactId` 去重合并后继续保持排序
+  - `merge` 用于自动刷新时，把第一页最新数据和当前已加载的多页列表合并，避免每次刷新把列表缩回一页
+- 新增左侧滚动自动续页：
+  - `handleContactListScroll()`
+  - 当前 / 留言 使用 `CONTACT_LIST_AUTOLOAD_THRESHOLD = 140`
+  - 历史 使用更积极的 `CONTACT_LIST_HISTORY_AUTOLOAD_THRESHOLD = 220`
+- 切换 `当前 / 留言 / 历史` tab 时，会重置联系人分页状态，再从第一页重新加载。
+
+行为规则：
+
+- 左侧列表滑动接近底部时，会自动拉下一页。
+- `历史` tab 会比其他 tab 更早触发续页，更接近原客户端手感。
+- 自动刷新期间：
+  - 如果左侧当前只看第一页，继续 `replace`
+  - 如果左侧已经翻出多页，自动刷新改走 `merge`
+  - 这样不会每 10 秒把你已经翻出来的列表打回第一页
+
+注意事项：
+
+- 左侧联系人列表是“向下追加”，不是消息区那种“向上补旧消息”，因此不要套用 `restorePrependScroll()`。
+- 分页状态属于左侧列表本身，不要在切换某个联系人时通过 `resetContactScopedState()` 清空，否则会把已加载的多页列表状态误删。
+
 本次把 AI 设置从“全局共用一套字段”改成了“按渠道独立存储”。
 
 新增能力：

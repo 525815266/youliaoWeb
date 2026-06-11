@@ -229,6 +229,9 @@ const APP_DEEP_LINK_PROFILES = [
 ];
 
 const MESSAGE_PAGE_SIZE = 30;
+const CONTACT_LIST_PAGE_SIZE = 20;
+const CONTACT_LIST_AUTOLOAD_THRESHOLD = 140;
+const CONTACT_LIST_HISTORY_AUTOLOAD_THRESHOLD = 220;
 const HISTORY_PAGE_SIZE = 20;
 const DETAIL_PAGE_SIZE = 20;
 const READ_STATE_STORAGE_KEY = "youchat.readContactState";
@@ -412,6 +415,10 @@ const state = {
   listTab: "current",
   activeTool: "user",
   contacts: [],
+  contactListPage: 1,
+  contactListHasMore: false,
+  contactListLoading: false,
+  contactListAutoLoading: false,
   clearedListUntil: {},
   clearedContactState: loadClearedContactState(),
   messages: [],
@@ -720,6 +727,7 @@ function bindEvents() {
   el.contactList.addEventListener("click", handleContactListClick);
   el.contactList.addEventListener("keydown", handleContactListKeydown);
   el.contactList.addEventListener("contextmenu", handleContactContextMenu);
+  el.contactList.addEventListener("scroll", handleContactListScroll);
   document.addEventListener("error", handleAvatarImageError, true);
   document.addEventListener("click", closeContextMenu);
   document.addEventListener("click", closeClientSettingsMenuOnOutside);
@@ -742,6 +750,9 @@ function bindEvents() {
   document.querySelectorAll("[data-list-tab]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.listTab = button.dataset.listTab;
+      state.contactListPage = 1;
+      state.contactListHasMore = false;
+      state.contactListAutoLoading = false;
       renderConversationTabs();
       await loadContacts();
     });
@@ -2687,7 +2698,7 @@ function buildContactListParams(tab = state.listTab, options = {}) {
   const keyword = options.keyWord ?? options.searchStr ?? el.search?.value?.trim() ?? "";
   const params = {
     pageIndex: options.pageIndex || 1,
-    pageSize: options.pageSize || 20
+    pageSize: options.pageSize || CONTACT_LIST_PAGE_SIZE
   };
   if (options.id !== undefined) params.id = options.id;
   if (keyword) params.keyWord = keyword;
@@ -2834,6 +2845,28 @@ function filterCurrentConversationContacts(contacts) {
   return (contacts || []).filter(isCurrentConversationContact);
 }
 
+function mergeContacts(existingContacts, nextContacts) {
+  const merged = new Map();
+  [...(existingContacts || []), ...(nextContacts || [])].forEach((contact, index) => {
+    const key = String(getContactId(contact) || `contact-${index}`);
+    const previous = merged.get(key);
+    merged.set(key, previous ? { ...previous, ...contact } : contact);
+  });
+  return sortContacts([...merged.values()]);
+}
+
+function getContactListHasMore({ mode, contacts, pageSize, total, previousHasMore, previousCount, nextCount }) {
+  return getPagedHasMore({
+    mode,
+    records: contacts,
+    pageSize,
+    total,
+    previousHasMore,
+    previousCount,
+    nextCount
+  });
+}
+
 function shouldPreserveEmptyContactResult(result, contacts, options = {}) {
   const hasSearch = Boolean(el.search?.value?.trim());
   const existingLooksCurrent = state.contacts.length > 0 && state.contacts.every(isCurrentConversationContact);
@@ -2887,14 +2920,28 @@ async function loadContactCounts() {
 async function loadContacts(options = {}) {
   try {
     await ensureContactListAccountId();
+    const mode = options.mode || "replace";
+    const page = Number(options.page || (mode === "append" ? (state.contactListPage || 1) + 1 : 1)) || 1;
+    const previousHasMore = state.contactListHasMore;
+    const previousCount = state.contacts.length;
     const selectedId = getContactId(state.activeContact);
     const previousContactScrollTop = el.contactList.scrollTop;
+    const previousContactScrollHeight = el.contactList.scrollHeight;
+    const previousContactWasNearBottom = isNearBottom(el.contactList, CONTACT_LIST_AUTOLOAD_THRESHOLD);
     const previousToolScrollTop = el.toolContent.scrollTop;
     const previousHistoryList = el.toolContent.querySelector("[data-history-list]");
     const previousHistoryScrollTop = previousHistoryList?.scrollTop || 0;
     const previousHistoryWasNearBottom = isNearBottom(previousHistoryList);
     const preserveScroll = Boolean(options.preserveScroll);
-    const result = await fetchContactListWithFallback(state.listTab);
+    state.contactListLoading = true;
+    const result = await fetchContactListWithFallback(state.listTab, {
+      pageIndex: page,
+      pageSize: options.pageSize || CONTACT_LIST_PAGE_SIZE,
+      keyWord: options.keyWord,
+      searchStr: options.searchStr,
+      omitAccountId: options.omitAccountId,
+      accountIdOverride: options.accountIdOverride
+    });
     let contacts = result.contacts;
     const serverTotal = Math.max(0, Number(result.total || 0));
     state.listServerCounts[state.listTab] = serverTotal;
@@ -2909,6 +2956,7 @@ async function loadContacts(options = {}) {
     if (shouldPreserveEmptyContactResult(result, contacts, options)) {
       state.listCountSources.current = "stale";
       state.listUnreadCounts.current = sumContactUnread(state.contacts);
+      state.contactListHasMore = false;
       renderConversationTabs();
       renderContacts();
       log("preserved current contacts after ambiguous empty response", {
@@ -2920,12 +2968,27 @@ async function loadContacts(options = {}) {
       return;
     }
 
-    state.contacts = contacts;
+    const nextContacts = mode === "append"
+      ? mergeContacts(state.contacts, contacts)
+      : mode === "merge"
+      ? mergeContacts(contacts, state.contacts)
+      : contacts;
+    state.contacts = nextContacts;
+    state.contactListPage = mode === "merge" ? Math.max(state.contactListPage || 1, page) : page;
+    state.contactListHasMore = getContactListHasMore({
+      mode,
+      contacts,
+      pageSize: options.pageSize || CONTACT_LIST_PAGE_SIZE,
+      total: serverTotal,
+      previousHasMore,
+      previousCount,
+      nextCount: nextContacts.length
+    });
     state.totalContacts = state.listTab === "history"
-      ? Math.max(contacts.length, serverTotal)
+      ? Math.max(nextContacts.length, serverTotal)
       : locallyFiltered
-      ? contacts.length
-      : Math.max(contacts.length, serverTotal);
+      ? nextContacts.length
+      : Math.max(nextContacts.length, serverTotal);
     state.listCounts[state.listTab] = state.totalContacts || state.contacts.length;
     state.listUnreadCounts[state.listTab] = sumContactUnread(state.contacts);
     const previousActiveAvatar = getContactAvatar(state.activeContact);
@@ -2944,7 +3007,9 @@ async function loadContacts(options = {}) {
     if (!options.skipCounts) {
       loadContactCounts().catch((error) => log("contact counts failed", { error: error.message }));
     }
-    if (preserveScroll) {
+    if (mode === "append") {
+      restoreScrollTop(el.contactList, previousContactScrollTop);
+    } else if (preserveScroll) {
       el.contactList.scrollTop = previousContactScrollTop;
       el.toolContent.scrollTop = previousToolScrollTop;
       const nextHistoryList = el.toolContent.querySelector("[data-history-list]");
@@ -2965,6 +3030,8 @@ async function loadContacts(options = {}) {
       return;
     }
     state.contacts = [];
+    state.contactListPage = 1;
+    state.contactListHasMore = false;
     state.activeContact = null;
     state.messages = [];
     renderAll();
@@ -5670,6 +5737,24 @@ function handleMessageListScroll() {
   state.messageAutoLoading = true;
   loadMessages(state.messagePage + 1, "append").finally(() => {
     state.messageAutoLoading = false;
+  });
+}
+
+function getContactListAutoLoadThreshold() {
+  return state.listTab === "history" ? CONTACT_LIST_HISTORY_AUTOLOAD_THRESHOLD : CONTACT_LIST_AUTOLOAD_THRESHOLD;
+}
+
+function handleContactListScroll() {
+  if (state.contactListAutoLoading || state.contactListLoading || !state.contactListHasMore) return;
+  if (!isNearBottom(el.contactList, getContactListAutoLoadThreshold())) return;
+  state.contactListAutoLoading = true;
+  loadContacts({
+    mode: "append",
+    page: (state.contactListPage || 1) + 1,
+    preserveScroll: true,
+    skipCounts: true
+  }).finally(() => {
+    state.contactListAutoLoading = false;
   });
 }
 
@@ -9823,7 +9908,7 @@ function startAutoRefresh() {
   refreshTimer = window.setInterval(async () => {
     if (document.hidden) return;
     try {
-      await loadContacts({ preserveScroll: true });
+      await loadContacts({ preserveScroll: true, mode: state.contactListPage > 1 ? "merge" : "replace" });
       await loadMessages(1, "merge");
       if (state.activeTool === "order") await loadOrders(state.orderPage);
       if (state.activeTool === "user") await loadContactInfo();
