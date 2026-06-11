@@ -29,8 +29,8 @@ const AI_PRESETS = {
   },
   codebuddy: {
     label: "CodeBuddy",
-    baseUrl: "https://api.codebuddy.ai",
-    model: "codebuddy",
+    baseUrl: "https://copilot.tencent.com/v2",
+    model: "deepseek-v3.1",
     authType: "x-api-key"
   }
 };

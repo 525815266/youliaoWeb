@@ -1179,3 +1179,69 @@ ALTER TABLE `ChatContent_2026_06_08`
   - `SKILL_PLATFORM_DEFS`
   - `ORDER_TYPE_PLATFORM_KEYS`
   - built-in default skills
+
+## 2026-06-11 CodeBuddy Integration Verified
+
+- User provided a real CodeBuddy API key and asked whether the current integration actually works.
+- It did not work with the prior defaults.
+
+### Real findings
+
+- Old preset was wrong:
+  - `baseUrl = https://api.codebuddy.ai`
+  - `model = codebuddy`
+- Direct tests showed:
+  - `https://api.codebuddy.ai/v1/chat/completions` -> `404 Route Not Found`
+  - so the old preset was not a valid production endpoint for this user
+
+### Working endpoint and model
+
+- The real reachable target for this key is:
+  - `https://copilot.tencent.com/v2/chat/completions`
+- Working auth:
+  - `X-Api-Key`
+- Important behavior:
+  - non-stream requests return `Non-stream chat request is currently not supported`
+  - `model = codebuddy` returns `model [codebuddy] service info not found`
+  - tested good model:
+    - `deepseek-v3.1`
+  - also observed as reachable in model probing:
+    - `deepseek-r1`
+
+### Code changes
+
+- `public/app.js`
+  - `AI_PRESETS.codebuddy` now defaults to:
+    - `baseUrl: "https://copilot.tencent.com/v2"`
+    - `model: "deepseek-v3.1"`
+    - `authType: "x-api-key"`
+
+- `server.js`
+  - `getAiChatCompletionsUrl()` now understands `copilot.tencent.com` and normalizes:
+    - `/v2` -> `/v2/chat/completions`
+  - Added:
+    - `isCodeBuddyTarget()`
+    - `convertCodeBuddyStreamToJson()`
+  - `proxyAi()` now:
+    - forces `stream = true` for CodeBuddy/Tencent Copilot targets
+    - converts SSE stream output into ordinary JSON with:
+      - `choices[0].message.content`
+    - this lets existing frontend reply extraction continue unchanged
+
+### Real verification
+
+- Local proxy test against:
+  - `http://localhost:5177/ai/chat/completions`
+  - with user key
+  - `baseUrl = https://copilot.tencent.com/v2`
+  - `model = deepseek-v3.1`
+  - `authType = x-api-key`
+- returned `200 OK`
+- returned assistant message content:
+  - `OK`
+
+### Do not regress
+
+- Do not switch CodeBuddy preset back to `api.codebuddy.ai` unless later verified.
+- Do not default CodeBuddy model to `codebuddy`; current test says that model id is invalid.
+- Keep the stream-to-JSON conversion unless the frontend is later upgraded to consume SSE natively.

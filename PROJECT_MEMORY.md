@@ -2722,3 +2722,71 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
     - `scoreReplySkill()`
     - `buildSkillGroupScore()`
   - 学习逻辑最容易回退的坑是：不要恢复成“采用过推荐就完全不学”。
+
+2026-06-11 CodeBuddy 实测接通：
+
+- 用户提供了真实 CodeBuddy API Key，要求确认现有接口是否能调用，不能则修好。
+
+- 实测结论：
+  - 之前网页里的 CodeBuddy 预设是错的：
+    - `baseUrl = https://api.codebuddy.ai`
+    - `model = codebuddy`
+  - 这套配置实测会得到：
+    - `404 Route Not Found`
+  - 说明不是 key 无效，而是默认端点和模型就不对。
+
+- 真实打通的参数：
+  - 端点：`https://copilot.tencent.com/v2/chat/completions`
+  - 鉴权：`X-Api-Key`
+  - 模型：`deepseek-v3.1`
+  - 请求模式：必须 `stream: true`
+
+- 实测链路：
+  - 直接请求 `https://copilot.tencent.com/v2/chat/completions`，带用户 key：
+    - 用非流式会返回：`Non-stream chat request is currently not supported`
+    - 用流式 + `model=codebuddy` 会返回：`model [codebuddy] service info not found`
+    - 用流式 + `model=deepseek-v3.1` 则可正常返回
+  - 通过本地代理 `http://localhost:5177/ai/chat/completions` 实测成功返回：
+    - assistant content = `OK`
+
+- 本次修改文件：
+  - `public/app.js`
+  - `server.js`
+
+- 前端预设修复：
+  - `AI_PRESETS.codebuddy` 改为：
+    - `baseUrl: "https://copilot.tencent.com/v2"`
+    - `model: "deepseek-v3.1"`
+    - `authType: "x-api-key"`
+
+- 服务端 AI 代理修复：
+  - `getAiChatCompletionsUrl()` 现在识别 `copilot.tencent.com`：
+    - `.../v2` -> 自动补到 `/v2/chat/completions`
+    - 若已经是 `/v2/chat/completions` 则直接使用
+  - 新增：
+    - `isCodeBuddyTarget()`
+    - `convertCodeBuddyStreamToJson()`
+  - `proxyAi()` 逻辑新增：
+    - 命中 CodeBuddy/Tencent Copilot 域名时，自动强制 `payload.stream = true`
+    - 如果上游返回的是 SSE/stream 内容，则把增量片段拼成普通 OpenAI 兼容 JSON：
+      - `choices[0].message.content`
+    - 这样前端现有 `extractAiReplies()` 不需要重写也能继续工作
+
+- 验证结果：
+  - `curl http://localhost:5177/ai/chat/completions` 携带：
+    - `baseUrl=https://copilot.tencent.com/v2`
+    - `model=deepseek-v3.1`
+    - `authType=x-api-key`
+    - 用户提供的真实 key
+  - 返回 `200 OK`
+  - body 中成功得到：
+    - `choices[0].message.content = "OK"`
+  - `npm run check` 通过
+
+- 后续注意事项：
+  - 不要再把 CodeBuddy 默认端点改回 `api.codebuddy.ai`，当前实测是 404。
+  - 不要把 CodeBuddy 默认模型写成 `codebuddy`，当前实测该模型不存在。
+  - 如果后续用户换了新的 CodeBuddy 账号/网络环境，优先再次验证：
+    - 是否仍走 `copilot.tencent.com/v2/chat/completions`
+    - 是否仍要求 `stream=true`
+    - 当前账号可用模型是否还是 `deepseek-v3.1 / deepseek-r1`

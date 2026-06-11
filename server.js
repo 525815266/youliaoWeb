@@ -1011,6 +1011,11 @@ function getAiChatCompletionsUrl(baseUrl) {
     throw new Error("AI base URL is empty");
   }
   const parsedBase = new URL(rawBase);
+  if (/copilot\.tencent\.com$/i.test(parsedBase.hostname)) {
+    if (/\/v2\/chat\/completions$/i.test(parsedBase.pathname)) return new URL(rawBase);
+    if (/\/v2$/i.test(parsedBase.pathname)) return new URL(`${rawBase}/chat/completions`);
+    return new URL(`${parsedBase.origin}/v2/chat/completions`);
+  }
   if (/api\.deepseek\.com$/i.test(parsedBase.hostname)) {
     if (/\/v1\/chat\/completions$/i.test(parsedBase.pathname)) return new URL(`${parsedBase.origin}/chat/completions`);
     if (/\/chat\/completions$/i.test(parsedBase.pathname)) return new URL(rawBase);
@@ -1040,6 +1045,54 @@ function getAiAuthHeaders(apiKey, authType, targetUrl) {
     return { "X-Api-Key": apiKey };
   }
   return { Authorization: `Bearer ${apiKey}` };
+}
+
+function isCodeBuddyTarget(targetUrl) {
+  try {
+    const hostname = new URL(String(targetUrl || "")).hostname;
+    return /copilot\.tencent\.com$/i.test(hostname) || /codebuddy/i.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+function convertCodeBuddyStreamToJson(text, model = "") {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const chunks = [];
+  let done = false;
+  for (const line of lines) {
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
+    if (!payload) continue;
+    if (payload === "[DONE]") {
+      done = true;
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(payload);
+      const content = parsed?.choices?.[0]?.delta?.content ?? parsed?.choices?.[0]?.message?.content ?? "";
+      if (content) chunks.push(content);
+    } catch {
+      // Ignore malformed stream fragments and keep parsing.
+    }
+  }
+  const message = chunks.join("");
+  return {
+    id: `codebuddy-${Date.now()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: model || "codebuddy",
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: message },
+        finish_reason: done ? "stop" : "unknown"
+      }
+    ]
+  };
 }
 
 async function proxyApi(req, res) {
@@ -1174,6 +1227,7 @@ async function proxyAi(req, res) {
   if (incoming.stream !== undefined) payload.stream = Boolean(incoming.stream);
   if (incoming.reasoning_effort !== undefined) payload.reasoning_effort = incoming.reasoning_effort;
   if (incoming.thinking !== undefined) payload.thinking = incoming.thinking;
+  if (isCodeBuddyTarget(targetUrl.toString())) payload.stream = true;
 
   try {
     const authHeaders = getAiAuthHeaders(apiKey, incoming.authType, targetUrl.toString());
@@ -1186,8 +1240,21 @@ async function proxyAi(req, res) {
       body: JSON.stringify(payload)
     }, AI_PROXY_TIMEOUT_MS, "AI proxy");
     const text = await upstream.text();
+    const contentType = upstream.headers.get("content-type") || "application/json; charset=utf-8";
+    if (isCodeBuddyTarget(targetUrl.toString()) && /text\/event-stream|stream/i.test(contentType)) {
+      const converted = convertCodeBuddyStreamToJson(text, payload.model);
+      res.writeHead(upstream.status, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+      });
+      res.end(JSON.stringify(converted));
+      return;
+    }
     res.writeHead(upstream.status, {
-      "Content-Type": upstream.headers.get("content-type") || "application/json; charset=utf-8",
+      "Content-Type": contentType,
       "Cache-Control": "no-store",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "*",
