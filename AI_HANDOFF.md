@@ -78,6 +78,23 @@ Default API target:
 - Fixed by backing up config/SQLite under `/vol1/1000/Docker/youchat/docker-control/config-backups/manual-mysql-switch-20260609-152800`, editing `/vol1/1000/Docker/youchat/\悠聊数据库\config\YouChatConfig.json` back to `DatabaseType=0` with the MySQL connection string, and restarting only `youchat-service`.
 - Post-fix probes: `/System/GetOptions` shows `databaseType=0`; `/Contact/GetContactList isHistory=true` returns `total=5714`; bare `/Contact/GetContactList` returns `total=8041`.
 - Run `npm run fnos:health` before frontend debugging when counts look wrong. If it reports `databaseType=2`, fix FnOS service database mode first. The script lives at `tools/check-fnos-youchat-health.ps1`.
+- 2026-06-12 the same SQLite regression happened again. `fnos:health` showed `databaseType=2`, `historyContacts=24`, and `totalContacts≈481`. This was not a fake Web count; the backend really switched runtime DB mode again.
+- Recovery on 2026-06-12 used real service APIs:
+  - `POST /System/ConnectDatabase`
+  - `POST /System/SetConnectionString`
+  - `POST /System/GetConnectionString`
+  - `POST /System/GetOptions`
+- Verified MySQL connection string:
+  - `Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;Allow User Variables=true;`
+- After restore on 2026-06-12:
+  - `databaseType=0`
+  - `Contact total=8059`
+  - `History contacts=5732`
+  - `AccountId=2 current probe=7`
+- New helper added:
+  - `tools/restore-fnos-mysql-mode.ps1`
+  - `npm run fnos:restore:mysql`
+- Use `fnos:restore:mysql` first when counts suddenly collapse into dozens again. Only continue frontend debugging if `fnos:health` already reports `databaseType=0`.
 
 ## Contact List Data Gotchas
 
@@ -89,7 +106,13 @@ Current conversation list should start with the Electron-compatible request:
 - `pageIndex = 1`
 - `pageSize = 20`
 - use `keyWord` for search
-- do not default-send `id=0`, `isGuestbook=false`, or `isHistory=false`
+- current project state now default-sends native list-shape flags for contact tabs:
+  - `id=0`
+  - `isGuestbook=false`
+  - `isHistory=false`
+- then overrides by tab:
+  - `guestbook -> isGuestbook=true`
+  - `history -> isHistory=true`
 
 Known account-id facts:
 
@@ -1869,4 +1892,68 @@ If future work touches this area, keep commit boundaries explicit:
 - runtime learned skill data
 
 Only the first two belong in git by default.
+
+## 2026-06-12 Current Conversation Sync Bug (Data Exists, Web Shows Empty)
+
+### Symptom
+
+User reported the web app “again cannot get data / not synced”.
+
+Immediate verification showed backend was actually healthy:
+
+- `/health` OK on `5177`
+- `/System/GetOptions` OK on `192.168.9.83:18080/api`
+- `Contact/GetContactList` capture still returned real data
+  - current list: `total = 5`
+  - history list: `total = 21`
+
+So this was not a backend outage.
+
+### Root cause
+
+Relevant function:
+
+- `fetchContactListWithFallback()`
+
+Old current-list logic:
+
+1. try candidate `accountId`s
+2. if one candidate returned an explicitly empty result, return it immediately
+
+That meant:
+
+- one stale / wrong remembered `accountId` could short-circuit the whole flow
+- later valid candidates were never tried
+- global fallback result was never allowed to rescue the list
+
+### Fix
+
+Current behavior:
+
+1. fetch a global compatible result first (`omitAccountId: true`) as fallback reference
+2. iterate candidate `accountId`s
+3. return immediately only for `isUsefulContactListResult(result)`
+4. keep empty candidate results as evidence, but do not short-circuit on them
+5. if no useful account candidate wins, fall back to global result
+
+Important change:
+
+- account candidates no longer immediately return on explicit-empty / zero-data
+- final fallback source is now marked `global-fallback`
+
+### Debug checklist for future
+
+If user says current conversations disappeared again:
+
+1. verify `Contact/GetContactList` capture still contains real records
+2. inspect `fetchContactListWithFallback()`
+3. inspect local storage candidates:
+   - `youchat.accountId`
+   - `youchat.contactListAccountIds`
+
+This bug class is specifically “frontend fallback state drift”, not “backend unavailable”.
+
+### Verification
+
+- `npm run check` passed after patch
 

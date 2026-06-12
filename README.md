@@ -289,6 +289,36 @@ npm run fnos:health
 
 脚本会检查数据库模式、历史数量和几个关键联系人列表口径。如果 `databaseType=2`，先修飞牛服务端 `YouChatConfig.json`，不要先改 Web 前端。
 
+2026-06-12 又复发过一次同样的问题：`/System/GetOptions` 再次掉回 `databaseType=2`，导致历史只剩 `24` 条、全量联系人只剩四百多。已确认这次也不是 Web 计数错，而是飞牛服务端运行时又读回了 SQLite。
+
+这次新增了一个恢复脚本：
+
+```powershell
+npm run fnos:restore:mysql
+```
+
+脚本会按真实悠聊接口顺序调用：
+
+- `/System/ConnectDatabase`
+- `/System/SetConnectionString`
+- `/System/GetConnectionString`
+- `/System/GetOptions`
+
+把数据库模式切回 `databaseType=0`。恢复后再跑一次：
+
+```powershell
+npm run fnos:health
+```
+
+2026-06-12 实测恢复结果：
+
+- `databaseType=0`
+- `Contact total=8059`
+- `History contacts=5732`
+- `AccountId=2 current probe=7`
+
+如果 `fnos:restore:mysql` 成功但稍后又掉回 SQLite，就继续排查飞牛侧是否有启动后的初始化脚本或手工设置把数据库模式再次改回去。
+
 ## 当前注意点
 
 - 当前不会使用假数据，接口失败会显示真实失败信息并写入抓包日志。

@@ -55,6 +55,8 @@
 49. [2026-06-09 图片发送卡在发送中修复](#49-2026-06-09-图片发送卡在发送中修复)
 50. [2026-06-09 SignalR 清红点桥接](#50-2026-06-09-signalr-清红点桥接)
 51. [2026-06-11 AI 渠道独立配置与模型拉取](#51-2026-06-11-ai-渠道独立配置与模型拉取)
+58. [2026-06-12 当前会话列表“接口有数据但 Web 偶发显示空”排查与修复](#58-2026-06-12-当前会话列表接口有数据但-web-偶发显示空排查与修复)
+59. [2026-06-12 飞牛 SQLite 再次回退与一键恢复脚本](#59-2026-06-12-飞牛-sqlite-再次回退与一键恢复脚本)
 
 ## 1. 项目目标
 
@@ -3626,4 +3628,202 @@ skill 面板顶部新增：
 
 - `data/reply-skills.json`
 - `logs/api-capture.ndjson`
+
+## 58. 2026-06-12 当前会话列表“接口有数据但 Web 偶发显示空”排查与修复
+
+### 1. 排查结论
+
+这次不是服务端整体挂了。
+
+现场核查结果：
+
+- `http://localhost:5177/health` 正常
+- `http://192.168.9.83:18080/api/System/GetOptions` 正常
+- 抓包日志里 `Contact/GetContactList` 正常返回：
+  - 当前：`total = 5`
+  - 历史：`total = 21`
+
+因此问题不在“接口拿不到”，而在 Web 前端当前会话列表的 fallback 逻辑。
+
+### 2. 根因
+
+涉及文件：
+
+- `public/app.js`
+
+函数：
+
+- `fetchContactListWithFallback()`
+
+旧逻辑在当前会话 `current` 模式下会按 `accountId` 候选逐个尝试。
+
+问题在于：
+
+- 某个候选 `accountId` 只要返回“明确空列表”
+- 前端就会立刻 `return` 这个空结果
+- 后面的候选不会继续试
+- 全局 `omitAccountId` 结果也不会再参与兜底
+
+这样一来，只要本地记住的 `accountId` 候选里有一个失效或错位，就会出现：
+
+- 服务端明明有真实数据
+- Web 偶发显示空列表或不同步
+
+### 3. 本次修复
+
+修复原则：
+
+1. 当前会话先拉一次全局兼容结果作为兜底参考
+2. 再按 `accountId` 候选逐个尝试
+3. 只有命中“有用结果”时立即返回
+4. 所有候选都试完后，才决定是否回退到全局结果
+5. 不再被单个空候选提前截断
+
+也就是：
+
+- `isUsefulContactListResult(result)` 才允许 account 结果立即返回
+- 显式空结果先记录下来，不再直接把页面清空
+- 最后优先使用 `global-fallback`
+
+### 4. 当前判断规则
+
+后续如果又遇到“接口有数据但页面空了”：
+
+先看这几个点：
+
+1. 抓包里 `Contact/GetContactList` 的真实返回是不是还有数据
+2. `fetchContactListWithFallback()` 有没有被某个旧 `accountId` 候选提前命中空结果
+3. 本地存储的：
+   - `youchat.accountId`
+   - `youchat.contactListAccountIds`
+   是否积累了过期候选
+
+### 5. 验证
+
+- `npm run check` 已通过
+- 抓包确认当前接口仍在返回真实会话数据
+
+## 59. 2026-06-12 飞牛 SQLite 再次回退与一键恢复脚本
+
+### 1. 现象
+
+- 用户反馈“历史数据不对”。
+- 当次真实探测里：
+  - `POST /Contact/GetContactList(isHistory=true)` 只有 `total=24`
+  - 全量联系人约 `total=481`
+  - `accountId=2` 当前只有 `7`
+
+### 2. 结论
+
+这次不是 Web 前端把历史数算错了，而是飞牛服务端又重新读回了 SQLite。
+
+`npm run fnos:health` 当次返回：
+
+- `databaseType=2 (sqlite)`
+- `historyContacts=24`
+- `totalContacts=481`
+
+因此历史数据不对的主因在服务端数据库模式，不在前端 tab 计数。
+
+### 3. 原生请求形状复核
+
+同时核对了 `localhost.har`：
+
+- 原生客户端历史列表请求确实是：
+  - `pageIndex=1`
+  - `pageSize=80`
+  - `id=0`
+  - `isGuestbook=false`
+  - `isHistory=true`
+- 历史量级当时是 `5679`
+
+2026-06-12 现场重新用同样的 `multipart/form-data` 请求形状直连飞牛：
+
+- 仍然只返回 `24`
+
+这说明当次问题不是“参数形状不一致导致历史口径偏差”，而是服务端真实读库模式已经变小。
+
+### 4. 当次修复动作
+
+这次直接通过悠聊真实接口恢复 MySQL 模式，而不是先手改 Web：
+
+- `POST /System/ConnectDatabase`
+- `POST /System/SetConnectionString`
+- `POST /System/GetConnectionString`
+- `POST /System/GetOptions`
+
+使用已验证连接串：
+
+- `Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;Allow User Variables=true;`
+
+恢复后立刻复测：
+
+- `databaseType=0`
+- `Contact total=8059`
+- `History contacts=5732`
+- `AccountId=2 current probe=7`
+
+Web 本地代理 `http://localhost:5177/api/Contact/GetContactList` 也同步恢复：
+
+- 历史 `total=5732`
+
+### 5. 本次新增脚本
+
+新增：
+
+- `tools/restore-fnos-mysql-mode.ps1`
+- `npm run fnos:restore:mysql`
+
+用途：
+
+- 当飞牛又掉回 `databaseType=2` 时，直接通过真实接口一键恢复到 MySQL 模式。
+
+### 6. 前端顺手对齐
+
+涉及文件：
+
+- `public/app.js`
+
+`buildContactListParams()` 现在默认补齐原生列表请求形状：
+
+- `id=0`
+- `isGuestbook=false`
+- `isHistory=false`
+
+再按 tab 覆写：
+
+- `guestbook -> isGuestbook=true`
+- `history -> isHistory=true`
+
+已验证这不会影响当前会话短 id 请求：
+
+- `accountId=2`
+- `accountId=2 + id=0 + isGuestbook=false + isHistory=false`
+
+返回一致。
+
+### 7. 以后排查顺序
+
+如果再出现“历史怎么突然只剩几十条”：
+
+1. 先跑：
+
+```powershell
+cd C:\youchat-dev-web
+npm run fnos:health
+```
+
+2. 如果看到 `databaseType=2`，先跑：
+
+```powershell
+npm run fnos:restore:mysql
+```
+
+3. 再复跑：
+
+```powershell
+npm run fnos:health
+```
+
+4. 只有在 `databaseType=0` 仍异常时，才继续追前端或 MySQL 分表问题。
 

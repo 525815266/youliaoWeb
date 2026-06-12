@@ -132,7 +132,8 @@ $summary | ConvertTo-Json -Depth 4
 if (-not $summary.ok) {
   Write-Host ""
   Write-Host "Recommended next checks:" -ForegroundColor Yellow
-  Write-Host "- If databaseType=2, FnOS YouChat is reading SQLite. Switch YouChatConfig.json back to MySQL and restart youchat-service."
+  Write-Host "- If databaseType=2, first run: npm run fnos:restore:mysql"
+  Write-Host "- If databaseType=2 still remains after the restore script, switch YouChatConfig.json back to MySQL and restart youchat-service."
   Write-Host "- If databaseType=0 but chat/contact APIs fail, inspect MySQL ChatContent_* table collations and service logs."
   exit 1
 }

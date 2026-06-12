@@ -2898,9 +2898,11 @@ function buildContactListParams(tab = state.listTab, options = {}) {
   const keyword = options.keyWord ?? options.searchStr ?? el.search?.value?.trim() ?? "";
   const params = {
     pageIndex: options.pageIndex || 1,
-    pageSize: options.pageSize || CONTACT_LIST_PAGE_SIZE
+    pageSize: options.pageSize || CONTACT_LIST_PAGE_SIZE,
+    id: options.id !== undefined ? options.id : 0,
+    isGuestbook: false,
+    isHistory: false
   };
-  if (options.id !== undefined) params.id = options.id;
   if (keyword) params.keyWord = keyword;
   if (tab === "guestbook") params.isGuestbook = true;
   if (tab === "history") params.isHistory = true;
@@ -2950,20 +2952,18 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
 
   let globalResult = null;
   const candidates = getContactListAccountCandidates();
-  if (!candidates.length) {
-    try {
-      globalResult = await fetchContactListPayload(tab, {
-        ...options,
-        omitAccountId: true
-      }, {
-        source: "global-filtered"
-      });
-      if (isUsefulContactListResult(globalResult)) {
-        return globalResult;
-      }
-    } catch (error) {
-      log("contact list client-compatible request failed", { error: error.message });
+  try {
+    globalResult = await fetchContactListPayload(tab, {
+      ...options,
+      omitAccountId: true
+    }, {
+      source: "global-filtered"
+    });
+    if (!candidates.length && isUsefulContactListResult(globalResult)) {
+      return globalResult;
     }
+  } catch (error) {
+    log("contact list client-compatible request failed", { error: error.message });
   }
 
   const emptyAccountResults = [];
@@ -2976,17 +2976,17 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
         source: "account",
         accountIdUsed: accountId
       });
-      if (isUsefulContactListResult(result) || isExplicitEmptyContactListResult(result) || result.isZeroData) return result;
+      if (isUsefulContactListResult(result)) return result;
       emptyAccountResults.push(result);
     } catch (error) {
       log("contact list account filter failed", { accountId, error: error.message });
     }
   }
 
-  if (globalResult) {
+  if (globalResult && (isUsefulContactListResult(globalResult) || isExplicitEmptyContactListResult(globalResult) || globalResult.isZeroData)) {
     return {
       ...globalResult,
-      source: candidates.length ? "global-empty" : "global",
+      source: candidates.length ? "global-fallback" : "global",
       emptyAccountResults
     };
   }
