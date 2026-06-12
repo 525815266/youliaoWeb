@@ -1609,3 +1609,156 @@ Use:
 
 Do not reintroduce a horizontal category track unless the user explicitly asks for it.
 
+## 2026-06-12 Settings UI + Skill Learning Guardrails
+
+### Scope
+
+Files changed in this pass:
+
+- `public/app.js`
+- `public/styles.css`
+- `PROJECT_MEMORY.md`
+
+Do not commit runtime data changes from:
+
+- `data/reply-skills.json`
+- `logs/api-capture.ndjson`
+
+### Client settings modal
+
+The old `client-options` modal was a raw field dump.
+It is now intentionally remapped to a native-like compact settings sheet.
+
+Important behavior:
+
+- still reads real `/System/GetOptions`
+- still writes real `/System/SetOptions`
+- modal size is now `settings`
+- modal panel class support added:
+  - `tool-modal-settings`
+
+Key UI mapping:
+
+- `commonOptions.switchType`
+  - `显示昵称`
+  - `显示备注`
+  - `备注（昵称）`
+- `commonOptions.audioNotice`
+  - `系统提示音`
+- `commonOptions.alertSysNotice`
+  - `系统消息弹窗`
+- `jobOptions.runTimeoutCheckJob`
+  - `开启任务`
+- `jobOptions.autoInviteScore`
+  - `是否开启自动邀评`
+- `jobOptions.autoLeaveMsg`
+  - `是否开启留言分发`
+- `jobOptions.autoShutDown`
+  - `自动关闭会话`
+- `jobOptions.closeTime`
+  - `自动关闭时间(分钟)`
+- `jobOptions.timeout`
+  - `回复超时判定时间(分钟)`
+- `jobOptions.getMsgByDate`
+  - `获取多少小时前的聊天记录`
+
+Database type mapping:
+
+- `0` => `自定义数据库`
+- `2` => `跟随服务端`
+
+Raw fields are still available inside:
+
+- `高级配置`
+- `服务端 AI 与数据库`
+- `原始配置 JSON`
+
+### Skill learning guardrails
+
+This pass fixes the main corruption pattern:
+
+- learned overrides no longer auto-rewrite base `replySteps`
+- learned overrides no longer auto-rewrite base `fallback`
+- override activation is more conservative
+- explicit optimize/update can now replace images instead of permanently unioning old + new images
+
+Relevant functions:
+
+- `getPreferredSkillOverride()`
+- `getSkillReplyProfile()`
+- `learnMatchedSkillOverride()`
+- `mergeTextWithExistingSkillImages()`
+- `normalizeSkillReplySteps()`
+- `updateSkillFromSuggestion()`
+
+Current rules:
+
+1. learned override is used only when confidence is stronger
+2. base skill content remains the stable source of truth
+3. learned images can be replaced on explicit optimize/update
+
+### Recovery actions added
+
+Per skill row:
+
+- `恢复`
+
+Behavior:
+
+- clears `manualOverrides`
+- keeps base skill content
+
+Function:
+
+- `resetSkillLearningById(id)`
+
+Top toolbar action:
+
+- `清理学习`
+
+Behavior:
+
+- removes obviously noisy manual overrides
+
+Functions:
+
+- `trimSkillLearningNoise()`
+- `isSkillOverrideNoisy()`
+
+Current noisy override heuristics:
+
+- image override with almost no text
+- very long reply text
+- long link-heavy pasted garbage
+
+### Skill panel UI details
+
+Added:
+
+- `skill-head-actions`
+- `skill-learning-state`
+
+The skill panel still must use one vertical scroll container:
+
+- `.skill-panel-scroll`
+
+Do not reintroduce a horizontal category scroll track.
+
+### Verification state
+
+- `npm run check` passed
+- local server was restarted on `http://localhost:5177`
+
+### If user still reports old behavior
+
+Check in this order:
+
+1. is current process really `node server.js` from `C:\youchat-dev-web`
+2. was port `5177` restarted after code changes
+3. did runtime `reply-skills.json` already contain old polluted learned data
+
+If the issue is old polluted data, use:
+
+- per-row `恢复`
+- top-level `清理学习`
+

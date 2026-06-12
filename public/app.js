@@ -408,6 +408,7 @@ const state = {
   sendMode: normalizeSendMode(localStorage.getItem(SEND_MODE_STORAGE_KEY)),
   lastSkillAutoReplyKey: "",
   emojiOpen: false,
+  recentEmojis: loadRecentEmojis(),
   draftImages: [],
   redPackTemplates: [],
   redPackTemplatesLoading: false,
@@ -732,6 +733,7 @@ function bindEvents() {
   document.addEventListener("click", closeContextMenu);
   document.addEventListener("click", closeClientSettingsMenuOnOutside);
   document.addEventListener("click", closeEmojiOnOutside);
+  window.addEventListener("resize", closeEmojiPopover);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeContextMenu();
@@ -937,13 +939,24 @@ function updateClientChromeState() {
   }
 }
 
+const CLIENT_OPTION_SKIP = Symbol("client-option-skip");
+const CLIENT_SWITCH_TYPE_OPTIONS = [
+  { value: 0, label: "显示昵称" },
+  { value: 1, label: "显示备注" },
+  { value: 2, label: "备注（昵称）" }
+];
+const CLIENT_DATABASE_TYPE_OPTIONS = [
+  { value: 0, label: "自定义数据库" },
+  { value: 2, label: "跟随服务端" }
+];
+
 async function showClientOptionsModal() {
   state.clientOptionsLoading = true;
   state.clientOptions = null;
   openToolModal({
     type: "client-options",
-    size: "wide",
-    title: "客户端设置",
+    size: "settings",
+    title: "系统设置",
     confirmText: "保存",
     body: renderClientOptionsModal(),
     onConfirm: saveClientOptionsFromModal
@@ -973,41 +986,214 @@ function renderClientOptionsModal() {
         <strong>设置读取失败</strong>
         <p>${escapeHtml(state.clientOptions.__error)}</p>
       </div>
-      <p class="modal-hint">这里调用原生接口 /System/GetOptions。接口恢复后再打开即可看到真实配置。</p>
+      <p class="modal-hint">这里直接调用原生接口 /System/GetOptions，接口恢复后再打开即可看到真实配置。</p>
     `;
   }
 
   const options = state.clientOptions || {};
+  const commonOptions = getClientOptionGroup(options, "commonOptions");
+  const jobOptions = getClientOptionGroup(options, "jobOptions");
+  const aiOptions = getClientOptionGroup(options, "aiOptions");
+  const dataBaseOptions = getClientOptionGroup(options, "dataBaseOptions");
   return `
-    <div class="client-settings-grid">
-      <section class="client-settings-block">
-        <h4>常规设置</h4>
-        ${renderEditableOptionFields(options.commonOptions || options.CommonOptions || options.common || {}, "commonOptions")}
-      </section>
-      <section class="client-settings-block">
-        <h4>任务设置</h4>
-        ${renderEditableOptionFields(options.jobOptions || options.JobOptions || options.job || {}, "jobOptions")}
-      </section>
-      <section class="client-settings-block">
-        <h4>服务端 AI 设置</h4>
-        <p class="modal-hint">这是悠聊服务端配置，和右上角单独的 Web AI 推荐设置互不覆盖。</p>
-        ${renderEditableOptionFields(options.aiOptions || options.AiOptions || options.ai || {}, "aiOptions")}
-      </section>
-      <section class="client-settings-block">
-        <h4>数据库设置</h4>
-        ${renderEditableOptionFields(options.dataBaseOptions || options.DataBaseOptions || options.databaseOptions || {}, "dataBaseOptions")}
+    <div class="client-settings-shell">
+      <section class="client-settings-sheet">
+        <div class="client-settings-panel">
+          ${renderClientRadioSetting({
+            label: "会话显示",
+            namespace: "commonOptions",
+            key: "switchType",
+            value: firstValue(commonOptions.switchType, 0),
+            options: CLIENT_SWITCH_TYPE_OPTIONS
+          })}
+          ${renderClientToggleSetting({
+            label: "系统提示音",
+            hint: "有新消息时播放提示音。",
+            namespace: "commonOptions",
+            key: "audioNotice",
+            checked: Boolean(commonOptions.audioNotice)
+          })}
+          ${renderClientToggleSetting({
+            label: "系统消息弹窗",
+            hint: "收到系统提醒时显示弹窗。",
+            namespace: "commonOptions",
+            key: "alertSysNotice",
+            checked: Boolean(commonOptions.alertSysNotice)
+          })}
+        </div>
+
+        <div class="client-settings-divider">
+          <span>定时任务</span>
+        </div>
+
+        <div class="client-settings-panel">
+          ${renderClientToggleSetting({
+            label: "开启任务",
+            hint: "启用超时检测和自动任务。",
+            namespace: "jobOptions",
+            key: "runTimeoutCheckJob",
+            checked: Boolean(jobOptions.runTimeoutCheckJob)
+          })}
+          ${renderClientToggleSetting({
+            label: "是否开启自动邀评",
+            namespace: "jobOptions",
+            key: "autoInviteScore",
+            checked: Boolean(jobOptions.autoInviteScore)
+          })}
+          ${renderClientToggleSetting({
+            label: "是否开启留言分发",
+            namespace: "jobOptions",
+            key: "autoLeaveMsg",
+            checked: Boolean(jobOptions.autoLeaveMsg)
+          })}
+          ${renderClientToggleSetting({
+            label: "自动关闭会话",
+            namespace: "jobOptions",
+            key: "autoShutDown",
+            checked: Boolean(jobOptions.autoShutDown)
+          })}
+          <div class="client-settings-number-list">
+            ${renderClientNumberSetting({
+              label: "自动关闭时间(分钟)",
+              namespace: "jobOptions",
+              key: "closeTime",
+              value: firstValue(jobOptions.closeTime, 20),
+              min: 0
+            })}
+            ${renderClientNumberSetting({
+              label: "回复超时判定时间(分钟)",
+              namespace: "jobOptions",
+              key: "timeout",
+              value: firstValue(jobOptions.timeout, 5),
+              min: 0
+            })}
+            ${renderClientNumberSetting({
+              label: "获取多少小时前的聊天记录",
+              namespace: "jobOptions",
+              key: "getMsgByDate",
+              value: firstValue(jobOptions.getMsgByDate, 2),
+              min: 0
+            })}
+          </div>
+        </div>
+
+        <details class="client-settings-advanced">
+          <summary>高级配置</summary>
+          <div class="client-settings-advanced-grid">
+            <section class="client-settings-block compact">
+              <h4>常规补充</h4>
+              ${renderEditableOptionFields(commonOptions, "commonOptions", {
+                exclude: ["audioNotice", "alertSysNotice", "switchType"]
+              })}
+            </section>
+            <section class="client-settings-block compact">
+              <h4>任务补充</h4>
+              ${renderEditableOptionFields(jobOptions, "jobOptions", {
+                exclude: ["runTimeoutCheckJob", "autoInviteScore", "autoLeaveMsg", "autoShutDown", "closeTime", "timeout", "getMsgByDate"]
+              })}
+            </section>
+          </div>
+        </details>
+
+        <details class="client-settings-advanced">
+          <summary>服务端 AI 与数据库</summary>
+          <p class="modal-hint">这里是悠聊服务端原生配置，不会覆盖右上角单独的 Web AI 推荐设置。</p>
+          <div class="client-settings-advanced-grid">
+            <section class="client-settings-block compact">
+              <h4>服务端 AI</h4>
+              ${renderEditableOptionFields(aiOptions, "aiOptions")}
+            </section>
+            <section class="client-settings-block compact">
+              <h4>数据库</h4>
+              ${renderClientRadioSetting({
+                label: "数据库模式",
+                namespace: "dataBaseOptions",
+                key: "databaseType",
+                value: firstValue(dataBaseOptions.databaseType, 0),
+                options: CLIENT_DATABASE_TYPE_OPTIONS,
+                compact: true
+              })}
+              ${renderEditableOptionFields(dataBaseOptions, "dataBaseOptions", { exclude: ["databaseType"] })}
+            </section>
+          </div>
+        </details>
+
+        <details class="client-settings-advanced">
+          <summary>原始配置 JSON</summary>
+          <div class="raw-json-box embedded">
+            <pre>${escapeHtml(JSON.stringify(options, null, 2))}</pre>
+          </div>
+        </details>
       </section>
     </div>
-    <details class="raw-json-box">
-      <summary>查看原始配置 JSON</summary>
-      <pre>${escapeHtml(JSON.stringify(options, null, 2))}</pre>
-    </details>
   `;
 }
 
-function renderEditableOptionFields(group, namespace) {
-  const entries = Object.entries(group || {}).filter(([, value]) => isEditablePrimitive(value));
-  if (!entries.length) return '<p class="empty-state compact">接口未返回可直接编辑的字段。</p>';
+function getClientOptionGroup(options, namespace) {
+  return options?.[namespace] || options?.[toPascalCase(namespace)] || {};
+}
+
+function renderClientRadioSetting({ label, namespace, key, value, options, compact = false }) {
+  const inputName = `client-option-${namespace}-${key}`;
+  return `
+    <div class="client-setting-row ${compact ? "compact" : ""}">
+      <div class="client-setting-copy">
+        <strong>${escapeHtml(label)}</strong>
+      </div>
+      <div class="client-radio-group" role="radiogroup" aria-label="${escapeAttr(label)}">
+        ${options.map((item) => `
+          <label class="client-radio-item">
+            <input
+              type="radio"
+              name="${escapeAttr(inputName)}"
+              data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}"
+              data-client-option-value="${escapeAttr(item.value)}"
+              ${Number(value) === Number(item.value) ? "checked" : ""}
+            >
+            <span>${escapeHtml(item.label)}</span>
+          </label>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderClientToggleSetting({ label, hint = "", namespace, key, checked }) {
+  return `
+    <label class="client-setting-row is-inline">
+      <div class="client-setting-copy">
+        <strong>${escapeHtml(label)}</strong>
+        ${hint ? `<span>${escapeHtml(hint)}</span>` : ""}
+      </div>
+      <span class="client-toggle">
+        <input type="checkbox" data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}" ${checked ? "checked" : ""}>
+        <i aria-hidden="true"></i>
+      </span>
+    </label>
+  `;
+}
+
+function renderClientNumberSetting({ label, namespace, key, value, min = 0 }) {
+  return `
+    <label class="client-setting-number">
+      <span>${escapeHtml(label)}</span>
+      <input
+        type="number"
+        min="${escapeAttr(min)}"
+        step="1"
+        data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}"
+        value="${escapeAttr(value)}"
+      >
+    </label>
+  `;
+}
+
+function renderEditableOptionFields(group, namespace, options = {}) {
+  const exclude = new Set((options.exclude || []).map(String));
+  const entries = Object.entries(group || {})
+    .filter(([, value]) => isEditablePrimitive(value))
+    .filter(([key]) => !exclude.has(String(key)));
+  if (!entries.length) return '<p class="empty-state compact">当前没有额外可编辑字段。</p>';
   return `
     <div class="client-option-fields">
       ${entries.slice(0, 24).map(([key, value]) => `
@@ -1015,7 +1201,7 @@ function renderEditableOptionFields(group, namespace) {
           <span>${escapeHtml(key)}</span>
           ${typeof value === "boolean"
             ? `<select data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}"><option value="true" ${value ? "selected" : ""}>true</option><option value="false" ${!value ? "selected" : ""}>false</option></select>`
-            : `<input data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}" value="${escapeAttr(value)}" />`}
+            : `<input data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}" value="${escapeAttr(value ?? "")}" />`}
         </label>
       `).join("")}
     </div>
@@ -1035,11 +1221,13 @@ async function saveClientOptionsFromModal() {
 
   const next = clonePlainObject(original);
   el.toolModalBody.querySelectorAll("[data-client-option]").forEach((input) => {
+    const nextValue = readClientOptionInputValue(input);
+    if (nextValue === CLIENT_OPTION_SKIP) return;
     const [namespace, key] = String(input.dataset.clientOption || "").split(".");
     if (!namespace || !key) return;
     const sourceGroup = original[namespace] || original[toPascalCase(namespace)] || {};
     const targetGroup = next[namespace] || next[toPascalCase(namespace)] || {};
-    targetGroup[key] = castLike(input.value, sourceGroup[key]);
+    targetGroup[key] = castLike(nextValue, sourceGroup[key]);
     if (next[namespace]) next[namespace] = targetGroup;
     else next[toPascalCase(namespace)] = targetGroup;
   });
@@ -1052,13 +1240,24 @@ async function saveClientOptionsFromModal() {
       aiOptions: next.aiOptions || next.AiOptions || {}
     }, { asJson: true });
     state.clientOptions = next;
-    toast("客户端设置已提交到 /System/SetOptions。");
+    toast("系统设置已提交到 /System/SetOptions。");
     closeToolModal();
     return true;
   } catch (error) {
-    toast(`保存客户端设置失败：${error.message}`, true);
+    toast(`保存系统设置失败：${error.message}`, true);
     return false;
   }
+}
+
+function readClientOptionInputValue(input) {
+  if (!input) return CLIENT_OPTION_SKIP;
+  if (input.matches('input[type="radio"]')) {
+    return input.checked ? (input.dataset.clientOptionValue ?? input.value) : CLIENT_OPTION_SKIP;
+  }
+  if (input.matches('input[type="checkbox"]')) {
+    return Boolean(input.checked);
+  }
+  return input.value;
 }
 
 function showDatabaseModal() {
@@ -5232,6 +5431,87 @@ function decodeUrlValue(value) {
   return text;
 }
 
+function loadRecentEmojis() {
+  try {
+    const raw = localStorage.getItem("youchat.recentEmojis");
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentEmojis(tokens) {
+  const unique = [...new Set(tokens)];
+  const trimmed = unique.slice(0, 8);
+  localStorage.setItem("youchat.recentEmojis", JSON.stringify(trimmed));
+  state.recentEmojis = trimmed;
+}
+
+function recordRecentEmoji(token) {
+  const next = [token, ...state.recentEmojis.filter((t) => t !== token)];
+  saveRecentEmojis(next);
+}
+
+function getReplyTextContent() {
+  const node = el.replyText;
+  if (!node) return "";
+  let text = "";
+  node.childNodes.forEach((child) => {
+    if (child.nodeType === Node.TEXT_NODE) {
+      text += child.textContent;
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      if (child.tagName === "BR") {
+        text += "\n";
+      } else if (child.classList?.contains("emoji-inline")) {
+        text += child.dataset.token || "";
+      } else {
+        text += child.textContent || "";
+      }
+    }
+  });
+  return text;
+}
+
+function setReplyTextContent(html) {
+  if (el.replyText) el.replyText.innerHTML = html || "";
+}
+
+function insertEmojiAtCursor(token) {
+  const node = el.replyText;
+  if (!node) return;
+  node.focus();
+  const selection = window.getSelection();
+  if (!selection.rangeCount) {
+    node.appendChild(createEmojiElement(token));
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  if (!node.contains(range.commonAncestorContainer)) {
+    node.appendChild(createEmojiElement(token));
+    return;
+  }
+  range.deleteContents();
+  const emojiEl = createEmojiElement(token);
+  range.insertNode(emojiEl);
+  range.setStartAfter(emojiEl);
+  range.setEndAfter(emojiEl);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function createEmojiElement(token) {
+  const span = document.createElement("span");
+  span.className = "emoji-inline";
+  span.dataset.token = token;
+  span.contentEditable = "false";
+  const emoji = EMOJI_LOOKUP.get(token);
+  if (emoji) {
+    span.style.cssText = `display:inline-block;width:20px;height:20px;overflow:hidden;background-image:url('/static/emojiSource.cdbf96da.png');background-repeat:no-repeat;background-size:203.625px 185.0625px;background-position:${emoji.x}px ${emoji.y}px;vertical-align:text-bottom;`;
+  }
+  return span;
+}
+
 function getDeepLinkEmbeddedUrl(rawDeepLink, parsed = parseAppDeepLink(rawDeepLink)) {
   const nested = getDeepLinkNestedData(parsed);
   const candidates = [
@@ -5841,7 +6121,7 @@ function triggerHistoryAutoLoad() {
 
 async function sendText() {
   return withSendingLock(async () => {
-    const content = el.replyText.value.trim();
+    const content = getReplyTextContent().trim();
     const contactId = getContactId(state.activeContact);
     const images = [...state.draftImages];
     const matchedSkillBeforeSend = resolveManualReplySkillTarget();
@@ -5876,7 +6156,7 @@ async function sendText() {
       }
       setSendingStage("正在学习回复并刷新聊天...");
       await learnFromManualReply(content, sentImageUrls, { matchedSkill: matchedSkillBeforeSend });
-      el.replyText.value = "";
+      setReplyTextContent("");
       clearDraftImages();
       clearAiSuggestion();
       touchActiveContact(content || (sentImageUrls.length ? "[image]" : ""));
@@ -5886,7 +6166,7 @@ async function sendText() {
       await loadContacts({ preserveScroll: true, skipCounts: true });
       toast(images.length ? "文字和图片已提交到悠聊服务。" : "消息已提交到悠聊服务。");
     } catch (error) {
-      if (textSubmitted) el.replyText.value = "";
+      if (textSubmitted) setReplyTextContent("");
       if (submittedImageIds.size) {
         state.draftImages = state.draftImages.filter((image) => !submittedImageIds.has(image.id));
         renderDraftImages();
@@ -5946,18 +6226,52 @@ function renderEmojiPopover() {
   if (!el.emojiPopover) return;
   el.emojiPopover.classList.toggle("is-hidden", !state.emojiOpen);
   if (!state.emojiOpen) return;
-  el.emojiPopover.innerHTML = EMOJI_DEFS.map((emoji) => `
+  const recent = state.recentEmojis || [];
+  const recentButtons = recent.length
+    ? recent.map((token) => {
+        const emoji = EMOJI_LOOKUP.get(token);
+        if (!emoji) return "";
+        return `<button type="button" data-emoji="${escapeAttr(token)}" title="${escapeAttr(emoji.label)}" aria-label="${escapeAttr(emoji.label)}">${renderEmojiGlyph(token, { className: "emoji-popover-icon", size: 20 })}</button>`;
+      }).join("")
+    : "";
+  const allButtons = EMOJI_DEFS.map((emoji) => `
     <button type="button" data-emoji="${escapeAttr(emoji.token)}" title="${escapeAttr(emoji.label)}" aria-label="${escapeAttr(emoji.label)}">
-      ${renderEmojiGlyph(emoji.token, { className: "emoji-popover-icon", size: 22 })}
-      <span>${escapeHtml(emoji.label)}</span>
+      ${renderEmojiGlyph(emoji.token, { className: "emoji-popover-icon", size: 20 })}
     </button>
   `).join("");
+  const recentSection = recent.length
+    ? `<div class="emoji-recent-label">最近使用</div><div class="emoji-recent-row">${recentButtons}</div>`
+    : "";
+  el.emojiPopover.innerHTML = `${recentSection}${allButtons}`;
+  positionEmojiPopover();
+}
+
+function positionEmojiPopover() {
+  const btn = el.emojiTool;
+  const popover = el.emojiPopover;
+  if (!btn || !popover) return;
+  const btnRect = btn.getBoundingClientRect();
+  const popoverWidth = 360;
+  const popoverHeight = Math.min(320, popover.scrollHeight || 320);
+  let left = btnRect.left;
+  let top = btnRect.bottom + 8;
+  if (left + popoverWidth > window.innerWidth - 12) {
+    left = window.innerWidth - popoverWidth - 12;
+  }
+  if (left < 12) left = 12;
+  if (top + popoverHeight > window.innerHeight - 12) {
+    top = btnRect.top - popoverHeight - 8;
+  }
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
 }
 
 function handleEmojiPick(event) {
   const button = event.target.closest("[data-emoji]");
   if (!button) return;
-  insertTextAtCursor(el.replyText, button.dataset.emoji);
+  const token = button.dataset.emoji;
+  insertEmojiAtCursor(token);
+  recordRecentEmoji(token);
   closeEmojiPopover();
 }
 
@@ -6512,7 +6826,7 @@ function getComposerSkillSourceText() {
   const suggestionText = state.aiSuggestion && !state.aiSuggestion.noReply ? getSuggestionTextForComposer(state.aiSuggestion) : "";
   return {
     prompt,
-    reply: el.replyText.value.trim() || suggestionText
+    reply: getReplyTextContent().trim() || suggestionText
   };
 }
 
@@ -6577,10 +6891,11 @@ function openToolModal(config) {
   el.toolModalConfirm.disabled = Boolean(config.confirmDisabled);
   el.toolModalCancel.classList.toggle("is-hidden", config.hideCancel === true);
   el.toolModalConfirm.classList.toggle("is-hidden", config.hideConfirm === true);
-  el.toolModalPanel.classList.remove("tool-modal-wide", "tool-modal-large", "tool-modal-xl");
+  el.toolModalPanel.classList.remove("tool-modal-wide", "tool-modal-large", "tool-modal-xl", "tool-modal-settings");
   if (config.size === "wide") el.toolModalPanel.classList.add("tool-modal-wide");
   if (config.size === "large") el.toolModalPanel.classList.add("tool-modal-large");
   if (config.size === "xl") el.toolModalPanel.classList.add("tool-modal-xl");
+  if (config.size === "settings") el.toolModalPanel.classList.add("tool-modal-settings");
   el.toolModalOverlay.classList.remove("is-hidden");
 }
 
@@ -7121,7 +7436,7 @@ function buildRecentConversationBrief(limit = 8) {
 
 function triggerDraftAiOptimize() {
   if (state.aiOptimizeTimer) window.clearTimeout(state.aiOptimizeTimer);
-  const draftText = el.replyText?.value.trim() || "";
+  const draftText = getReplyTextContent().trim() || "";
   if (!draftText || draftText.length < 4 || !state.aiEnabled) return;
   state.aiOptimizeTimer = window.setTimeout(() => optimizeDraftReply().catch((error) => {
     log("draft optimize failed", { error: error.message });
@@ -7129,7 +7444,7 @@ function triggerDraftAiOptimize() {
 }
 
 async function optimizeDraftReply() {
-  const draftText = el.replyText.value.trim();
+  const draftText = getReplyTextContent().trim();
   if (!draftText || draftText.length < 4 || !state.aiEnabled || !state.aiApiKey) return;
   const latest = getLatestActionableInboundMessage();
   const key = [
@@ -7736,9 +8051,9 @@ function getPreferredSkillOverride(skill, options = {}) {
   const best = ranked[0];
   if (!best) return null;
   if (!promptText) {
-    return Number(best.count || 1) >= 2 || overrides.length === 1 ? best : null;
+    return Number(best.count || 1) >= 3 ? best : null;
   }
-  return best.__matchScore >= 16 ? best : null;
+  return best.__matchScore >= 22 ? best : null;
 }
 
 function getSkillReplyProfile(skill, options = {}) {
@@ -7748,13 +8063,12 @@ function getSkillReplyProfile(skill, options = {}) {
     override &&
     (
       options.preferLearned ||
-      String(options.prompt || options.contextText || "").trim() ||
-      Number(override.count || 1) >= 2 ||
-      overrideCount >= 3
+      Number(override.count || 1) >= 3 ||
+      overrideCount >= 4
     )
   );
   const steps = shouldUseOverride
-    ? mergeTextWithExistingSkillImages(buildSkillOverrideSteps(override), skill)
+    ? normalizeSkillReplySteps(buildSkillOverrideSteps(override))
     : getSkillSteps(skill);
   const text = steps
     .filter((step) => step.type !== "image")
@@ -7996,8 +8310,6 @@ async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, 
   };
 
   if (totalOverrideCount >= 3) {
-    nextSkill.replySteps = mergeTextWithExistingSkillImages(steps, skill);
-    nextSkill.fallback = reply || skill.fallback || "";
     nextSkill.priority = Math.max(Number(skill.priority || 50), 75);
     nextSkill.allowAutoReply = skill.allowAutoReply !== false;
     nextSkill.lastAutoRevisedAt = override.at;
@@ -8011,7 +8323,7 @@ async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, 
       reply,
       images,
       overrideCount: totalOverrideCount,
-      autoRevised: totalOverrideCount >= 3
+      autoRevised: false
     });
     if (state.activeTool === "skill") renderToolContent();
   } catch (error) {
@@ -8138,7 +8450,7 @@ function useAiSuggestion(suggestion = state.aiSuggestion) {
     return;
   }
   const text = getSuggestionTextForComposer(suggestion);
-  el.replyText.value = text.replace(/^建议回复：?/, "");
+  setReplyTextContent(escapeHtml(text.replace(/^建议回复：?/, "")));
   state.lastSuggestionUsed = true;
   state.lastAppliedSuggestionFingerprint = buildSuggestionFingerprint(suggestion);
   state.lastAppliedSuggestionSkillId = String(suggestion.skillId || "");
@@ -8726,7 +9038,10 @@ function renderSkillReplyPanel() {
     <section class="tool-section skill-section">
       <h3>
         <span>skill 回复</span>
-        <button class="mini-action" type="button" data-action="refresh-skills">刷新</button>
+        <div class="skill-head-actions">
+          <button class="mini-action" type="button" data-action="refresh-skills">刷新</button>
+          <button class="mini-action" type="button" data-action="trim-skill-learning">清理学习</button>
+        </div>
       </h3>
       <div class="skill-controls">
         <label><input type="checkbox" data-action="toggle-skill-auto" ${state.skillAutoReply ? "checked" : ""}> 自动回复</label>
@@ -8965,6 +9280,9 @@ function renderSkillRow(skill, index, suggestion = null) {
   const learningNote = replyProfile.override
     ? `最近学习：${compactInlineText(replyProfile.override.reply || replyProfile.override.prompt || "", 46)}`
     : "";
+  const learningState = Array.isArray(skill.manualOverrides) && skill.manualOverrides.length
+    ? `学习覆盖 ${skill.manualOverrides.length} 条`
+    : "基线话术";
   return `
     <article class="skill-row ${skill.enabled === false ? "is-disabled" : ""} ${isMatched ? "is-matched" : ""} ${isDimmed ? "is-dimmed" : ""}">
       <div class="skill-row-aside">
@@ -8984,6 +9302,7 @@ function renderSkillRow(skill, index, suggestion = null) {
             <button class="mini-action" type="button" data-skill-apply="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>采用</button>
             <button class="mini-action" type="button" data-skill-send="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>发送</button>
             <button class="mini-action" type="button" data-skill-optimize="${escapeAttr(skill.id)}" ${skill.noReply || state.sendingMessage ? "disabled" : ""}>优化</button>
+            <button class="mini-action ghost" type="button" data-skill-reset-learning="${escapeAttr(skill.id)}">恢复</button>
           </div>
         </div>
         <p class="skill-row-preview">${escapeHtml(content || "暂无话术")}</p>
@@ -8991,6 +9310,7 @@ function renderSkillRow(skill, index, suggestion = null) {
         <div class="skill-row-foot">
           <div class="skill-row-hints">
             ${footChips.length ? `<div class="skill-hint-chips">${footChips.map((item) => `<span class="skill-foot-chip">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+            <small class="skill-learning-state">${escapeHtml(learningState)}</small>
             ${keywordLine ? `<small class="skill-keywords">${escapeHtml(keywordLine)}</small>` : ""}
             ${learningNote ? `<small class="skill-learning-note">${escapeHtml(learningNote)}</small>` : ""}
           </div>
@@ -9461,14 +9781,14 @@ function handleToolClick(event) {
 
   const quickSendTarget = event.target.closest("[data-quick-send]");
   if (quickSendTarget) {
-    el.replyText.value = quickSendTarget.dataset.quickSend || "";
+    setReplyTextContent(escapeHtml(quickSendTarget.dataset.quickSend || ""));
     sendText();
     return;
   }
 
   const quickFillTarget = event.target.closest("[data-quick-fill]");
   if (quickFillTarget) {
-    el.replyText.value = quickFillTarget.dataset.quickFill || "";
+    setReplyTextContent(escapeHtml(quickFillTarget.dataset.quickFill || ""));
     el.replyText.focus();
     return;
   }
@@ -9488,6 +9808,12 @@ function handleToolClick(event) {
   const skillOptimizeTarget = event.target.closest("[data-skill-optimize]");
   if (skillOptimizeTarget) {
     optimizeSkillById(skillOptimizeTarget.dataset.skillOptimize);
+    return;
+  }
+
+  const skillResetLearningTarget = event.target.closest("[data-skill-reset-learning]");
+  if (skillResetLearningTarget) {
+    resetSkillLearningById(skillResetLearningTarget.dataset.skillResetLearning);
     return;
   }
 
@@ -9561,6 +9887,8 @@ function handleToolClick(event) {
     if (state.historyHasMore) loadHistoryMessages(state.historyPage + 1, "append");
   } else if (action === "refresh-skills") {
     loadReplySkills();
+  } else if (action === "trim-skill-learning") {
+    trimSkillLearningNoise();
   } else if (action === "search-skills") {
     updateSkillKeyword();
     renderToolContent();
@@ -9642,26 +9970,37 @@ async function replaceReplySkill(nextSkill) {
   return getSkillById(id) || merged;
 }
 
-function mergeTextWithExistingSkillImages(textSteps, skill) {
-  const existingImageSteps = getSkillSteps(skill).filter((step) => step.type === "image");
-  const nextTextSteps = textSteps
-    .filter((step) => step.type !== "image" && String(step.content || "").trim())
-    .map((step) => ({ type: "text", content: String(step.content || "").trim() }));
-  const nextImageSteps = textSteps
-    .filter((step) => step.type === "image" && (step.url || step.content))
-    .map((step) => ({
-      type: "image",
-      url: step.url || step.content || "",
-      label: step.label || "人工回复图片"
-    }));
+function normalizeSkillReplySteps(steps = []) {
+  const textSteps = [];
+  const imageSteps = [];
   const seenImages = new Set();
-  const imageSteps = [...nextImageSteps, ...existingImageSteps].filter((step) => {
-    const url = String(step.url || step.content || "").trim();
-    if (!url || seenImages.has(url)) return false;
-    seenImages.add(url);
-    return true;
+  steps.forEach((step) => {
+    if (!step) return;
+    if (step.type === "image") {
+      const url = normalizeImageUrl(step.url || step.content || "");
+      if (!url || seenImages.has(url)) return;
+      seenImages.add(url);
+      imageSteps.push({
+        type: "image",
+        url,
+        label: step.label || "skill 图片"
+      });
+      return;
+    }
+    const content = String(step.content || "").trim();
+    if (!content) return;
+    textSteps.push({ type: "text", content });
   });
-  return [...nextTextSteps, ...imageSteps].slice(0, 8);
+  return [...textSteps, ...imageSteps].slice(0, 8);
+}
+
+function mergeTextWithExistingSkillImages(textSteps, skill, options = {}) {
+  const normalizedSteps = normalizeSkillReplySteps(textSteps);
+  if (options.replaceImages) return normalizedSteps;
+  const hasExplicitImages = normalizedSteps.some((step) => step.type === "image");
+  if (hasExplicitImages) return normalizedSteps;
+  const baseImageSteps = getSkillSteps(skill).filter((step) => step.type === "image");
+  return normalizeSkillReplySteps([...normalizedSteps, ...baseImageSteps]);
 }
 
 async function updateSkillFromSuggestion(suggestion) {
@@ -9687,7 +10026,7 @@ async function updateSkillFromSuggestion(suggestion) {
       replySteps: mergeTextWithExistingSkillImages([
         { type: "text", content: text },
         ...imageSteps
-      ], skill),
+      ], skill, { replaceImages: true }),
       fallback: text,
       revisionCount: Number(skill.revisionCount || 0) + 1,
       lastOptimizedAt: new Date().toISOString()
@@ -9698,6 +10037,56 @@ async function updateSkillFromSuggestion(suggestion) {
   } catch (error) {
     toast(`更新 skill 失败：${error.message}`, true);
   }
+}
+
+async function resetSkillLearningById(id) {
+  const skill = getSkillById(id);
+  if (!skill) return;
+  if (!Array.isArray(skill.manualOverrides) || !skill.manualOverrides.length) {
+    toast("这个 skill 目前没有学习覆盖。");
+    return;
+  }
+  try {
+    await replaceReplySkill({
+      ...skill,
+      manualOverrides: [],
+      lastManualOverrideAt: null
+    });
+    if (state.activeTool === "skill") renderToolContent();
+    toast("已恢复为 skill 基线话术。");
+  } catch (error) {
+    toast(`恢复 skill 失败：${error.message}`, true);
+  }
+}
+
+async function trimSkillLearningNoise() {
+  const dirtySkills = state.replySkills.filter((skill) => Array.isArray(skill.manualOverrides) && skill.manualOverrides.some((item) => isSkillOverrideNoisy(item)));
+  if (!dirtySkills.length) {
+    toast("当前没有识别到明显的学习噪音。");
+    return;
+  }
+  try {
+    for (const skill of dirtySkills) {
+      const nextOverrides = (skill.manualOverrides || []).filter((item) => !isSkillOverrideNoisy(item));
+      await replaceReplySkill({
+        ...skill,
+        manualOverrides: nextOverrides
+      });
+    }
+    if (state.activeTool === "skill") renderToolContent();
+    toast(`已清理 ${dirtySkills.length} 个 skill 的异常学习记录。`);
+  } catch (error) {
+    toast(`清理学习记录失败：${error.message}`, true);
+  }
+}
+
+function isSkillOverrideNoisy(override) {
+  const reply = String(override?.reply || "").trim();
+  const imageCount = Array.isArray(override?.imageUrls) ? override.imageUrls.filter(Boolean).length : 0;
+  if (imageCount > 0 && reply.length <= 2) return true;
+  if (reply.length > 260) return true;
+  if (/https?:\/\/\S+/i.test(reply) && reply.length > 120) return true;
+  return false;
 }
 
 function applySkillById(id) {
@@ -9776,7 +10165,7 @@ async function optimizeSkillById(id) {
     return;
   }
 
-  const draftText = el.replyText?.value.trim() || "";
+  const draftText = getReplyTextContent().trim() || "";
   const latest = getLatestActionableInboundMessage();
   const imageSummary = state.draftImages.length
     ? `客服准备附带 ${state.draftImages.length} 张图片，图片保持原图发送，只根据图片存在这一事实调整文字。`

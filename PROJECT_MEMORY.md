@@ -3283,3 +3283,191 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
 - 用户要的是右侧工具栏整体纵向滚动体验
 - 不是顶部分类横向滑动体验
 
+## 56. 2026-06-12 系统设置原生化与 Skill 学习纠偏
+
+### 1. 背景
+
+用户明确指出两个问题：
+
+1. 右上角“系统设置”太像字段 dump，不像原生客户端。
+2. `skill` 学习只会越学越脏：
+   - 错误图片一旦学进去，后面不会自动去掉
+   - 学习到的话术会反写进主 `skill`
+   - 导致原始文案被带偏，越用越不可信
+
+这次处理目标不是只修样式，而是一起修 UI 和学习机制。
+
+### 2. 系统设置弹窗这次怎么改
+
+涉及文件：
+
+- `public/app.js`
+- `public/styles.css`
+
+#### 结构改动
+
+`showClientOptionsModal()` 的 modal size 从 `wide` 调整为新的 `settings`。
+
+`openToolModal()` 现在支持：
+
+- `tool-modal-settings`
+
+弹窗标题改为：
+
+- `系统设置`
+
+#### 字段映射规则
+
+保留真实接口：
+
+- 读取：`/System/GetOptions`
+- 保存：`/System/SetOptions`
+
+但展示不再直接 dump 四组原始字段，而是映射成更接近原客户端的设置项：
+
+- `commonOptions.switchType`
+  - `显示昵称`
+  - `显示备注`
+  - `备注（昵称）`
+- `commonOptions.audioNotice`
+  - `系统提示音`
+- `commonOptions.alertSysNotice`
+  - `系统消息弹窗`
+- `jobOptions.runTimeoutCheckJob`
+  - `开启任务`
+- `jobOptions.autoInviteScore`
+  - `是否开启自动邀评`
+- `jobOptions.autoLeaveMsg`
+  - `是否开启留言分发`
+- `jobOptions.autoShutDown`
+  - `自动关闭会话`
+- `jobOptions.closeTime`
+  - `自动关闭时间(分钟)`
+- `jobOptions.timeout`
+  - `回复超时判定时间(分钟)`
+- `jobOptions.getMsgByDate`
+  - `获取多少小时前的聊天记录`
+
+数据库模式也改成了可读文案：
+
+- `0` -> `自定义数据库`
+- `2` -> `跟随服务端`
+
+#### 保底策略
+
+真实字段仍然保留，只是移到：
+
+- `高级配置`
+- `服务端 AI 与数据库`
+- `原始配置 JSON`
+
+这样既保留真实调试能力，也不再把主界面做成后台表单。
+
+### 3. Skill 学习这次怎么纠偏
+
+涉及文件：
+
+- `public/app.js`
+
+#### 旧问题根因
+
+旧逻辑里：
+
+- `mergeTextWithExistingSkillImages()` 会把新图片和旧图片永久合并
+- `learnMatchedSkillOverride()` 在学习次数够多后，会把学习结果反写回：
+  - `replySteps`
+  - `fallback`
+
+这会导致：
+
+- 一次误学习图片，后面一直带着
+- 主 skill 的基线文案被学习覆盖污染
+
+#### 新规则
+
+1. `manualOverrides` 继续保留，但默认只作为“学习覆盖”使用。
+2. 学习结果不再自动反写主 `replySteps` / `fallback`。
+3. `getPreferredSkillOverride()` 更保守：
+   - 无上下文时，至少 `count >= 3` 才启用
+   - 有上下文时，匹配阈值从 `16` 提到 `22`
+4. `getSkillReplyProfile()` 改为：
+   - 命中学习覆盖时，直接使用 `normalizeSkillReplySteps(buildSkillOverrideSteps(...))`
+   - 不再把旧主图重新并进学习覆盖
+
+#### 图片更新规则
+
+`updateSkillFromSuggestion()` 现在在显式更新 skill 时使用：
+
+- `mergeTextWithExistingSkillImages(..., { replaceImages: true })`
+
+含义：
+
+- 这次明确提供了哪些图片，就只保留这次图片
+- 不再把历史图片偷偷带回来
+
+### 4. 新增恢复与清理入口
+
+用户需要能把误学习的东西撤回，所以这次新增：
+
+#### 单条恢复
+
+每条 skill 右侧增加：
+
+- `恢复`
+
+行为：
+
+- 清空该 skill 的 `manualOverrides`
+- 恢复为主 `skill` 基线话术
+
+函数：
+
+- `resetSkillLearningById(id)`
+
+#### 批量清理
+
+skill 面板顶部新增：
+
+- `清理学习`
+
+行为：
+
+- 扫描明显异常的学习覆盖并移除
+
+当前噪音判定：
+
+- 带图片但文本极短
+- 回复文本超长
+- 回复里是超长链接堆积
+
+函数：
+
+- `trimSkillLearningNoise()`
+- `isSkillOverrideNoisy()`
+
+### 5. Skill 面板本次顺手修的展示
+
+#### 顶部动作
+
+`skill 回复` 标题区现在有：
+
+- `刷新`
+- `清理学习`
+
+#### 单条状态
+
+每条 skill 会额外显示：
+
+- `基线话术`
+  或
+- `学习覆盖 N 条`
+
+这样可以直接看出当前是不是已经被学习覆盖过。
+
+### 6. 本次仍需注意
+
+1. `data/reply-skills.json` 是运行态学习数据，不要直接跟着代码提交。
+2. `logs/api-capture.ndjson` 同样不要进代码提交。
+3. 如果用户说“还是旧的系统设置样式”，先检查当前 `5177` 的 `node server.js` 是否重启。
+4. 如果后面继续扩 `skill` 学习，优先扩 `manualOverrides` 的筛选策略，不要再回到“自动反写主 skill”的旧路上。
+

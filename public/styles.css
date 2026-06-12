@@ -2020,33 +2020,33 @@ textarea:focus-visible {
 }
 
 .emoji-popover {
-  align-self: start;
-  width: min(420px, 100%);
+  position: fixed;
+  z-index: 1000;
+  width: 360px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
-  gap: 6px;
-  max-height: 196px;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  max-height: 320px;
   overflow: auto;
-  margin: 0 0 7px;
-  padding: 8px;
+  padding: 10px;
   border: 1px solid #c9d9ec;
-  border-radius: var(--radius);
+  border-radius: 10px;
   background: #fff;
-  box-shadow: 0 10px 28px rgba(18, 48, 86, 0.16);
+  box-shadow: 0 12px 40px rgba(18, 48, 86, 0.22);
 }
 
 .emoji-popover button {
-  display: grid;
-  justify-items: center;
-  align-content: center;
-  gap: 4px;
-  min-height: 58px;
-  padding: 6px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 4px;
-  color: #314258;
-  background: #f7fbff;
-  font-size: 11px;
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
 }
 
 .emoji-popover button:hover {
@@ -2054,15 +2054,8 @@ textarea:focus-visible {
   background: #edf6ff;
 }
 
-.emoji-popover button span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.emoji-popover-icon {
-  --emoji-size: 22px;
+.emoji-popover .client-emoji-icon {
+  --emoji-size: 20px;
 }
 
 .ai-suggestion-card {
@@ -2332,7 +2325,7 @@ textarea:focus-visible {
   grid-template-columns: 82px minmax(0, 1fr);
 }
 
-.composer textarea {
+.composer .reply-text {
   width: 100%;
   min-height: 0;
   height: 100%;
@@ -2342,6 +2335,25 @@ textarea:focus-visible {
   padding: 8px 10px;
   color: #172033;
   background: #fff;
+  overflow-y: auto;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.composer .reply-text:empty::before {
+  content: attr(placeholder);
+  color: #9aa8bc;
+  pointer-events: none;
+}
+
+.composer .reply-text .emoji-inline {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  vertical-align: text-bottom;
+  pointer-events: none;
 }
 
 .composer-actions {
@@ -2929,6 +2941,13 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
+.skill-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
 .skill-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -2967,6 +2986,7 @@ textarea:focus-visible {
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+  height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 0 0 10px;
@@ -3165,6 +3185,7 @@ textarea:focus-visible {
 
 .skill-group .skill-list {
   padding: 4px 10px 6px;
+  overflow: visible;
 }
 
 .skill-list.has-active-match .skill-row {
@@ -3274,8 +3295,13 @@ textarea:focus-visible {
 }
 
 .skill-keywords,
-.skill-learning-note {
+.skill-learning-note,
+.skill-learning-state {
   margin: 0;
+}
+
+.skill-learning-state {
+  color: #527295;
 }
 
 .skill-row.is-disabled {
@@ -4245,6 +4271,12 @@ textarea:focus-visible {
   max-height: min(720px, calc(100dvh - 36px));
 }
 
+.tool-modal-settings {
+  width: min(520px, calc(100vw - 40px));
+  max-height: min(640px, calc(100dvh - 52px));
+  border-radius: 10px;
+}
+
 .tool-modal-head {
   display: flex;
   align-items: center;
@@ -4498,10 +4530,182 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
-.client-settings-grid {
+.client-settings-shell {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.client-settings-sheet {
+  display: grid;
+  gap: 16px;
+  padding: 4px 6px 2px;
+}
+
+.client-settings-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.client-setting-row {
+  display: grid;
+  gap: 8px;
+}
+
+.client-setting-row.is-inline {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.client-setting-row.compact {
+  gap: 6px;
+}
+
+.client-setting-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.client-setting-copy strong {
+  color: #172033;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.client-setting-copy span {
+  color: #6f7d91;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.client-settings-divider {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 2px 0;
+}
+
+.client-settings-divider::before,
+.client-settings-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: #e6edf6;
+}
+
+.client-settings-divider span {
+  padding: 0 12px;
+  color: #344055;
+  font-size: 14px;
+}
+
+.client-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.client-radio-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #344055;
+  font-size: 13px;
+}
+
+.client-radio-item input {
+  margin: 0;
+  accent-color: var(--you-blue);
+}
+
+.client-toggle {
+  position: relative;
+  display: inline-flex;
+  width: 46px;
+  height: 26px;
+}
+
+.client-toggle input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.client-toggle i {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: #c9ced6;
+  transition: background 160ms ease;
+}
+
+.client-toggle i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  transition: transform 160ms ease;
+}
+
+.client-toggle input:checked + i {
+  background: #2d8cf0;
+}
+
+.client-toggle input:checked + i::after {
+  transform: translateX(20px);
+}
+
+.client-settings-number-list {
+  display: grid;
+  gap: 10px;
+}
+
+.client-setting-number {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  align-items: center;
+  gap: 10px;
+  color: #344055;
+  font-size: 13px;
+}
+
+.client-setting-number input {
+  width: 100%;
+  height: 30px;
+  border: 1px solid #d5dce7;
+  border-radius: 4px;
+  padding: 0 8px;
+  color: #172033;
+  background: #fff;
+}
+
+.client-settings-advanced {
+  border-top: 1px solid #edf1f7;
+  padding-top: 8px;
+}
+
+.client-settings-advanced summary {
+  color: #31506f;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.client-settings-advanced-grid {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
 }
 
 .client-settings-block {
@@ -4510,6 +4714,10 @@ textarea:focus-visible {
   border-radius: 6px;
   padding: 10px;
   background: #fbfdff;
+}
+
+.client-settings-block.compact {
+  padding: 10px 10px 11px;
 }
 
 .client-settings-block h4 {
@@ -4541,6 +4749,10 @@ textarea:focus-visible {
   border: 1px solid #dfe7f1;
   border-radius: 6px;
   background: #fbfdff;
+}
+
+.raw-json-box.embedded {
+  margin-top: 8px;
 }
 
 .raw-json-box summary {
