@@ -848,6 +848,8 @@ textarea:focus-visible {
 .tool-pane {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
   border-right: 0;
   border-left: 1px solid var(--line);
   background: #fff;
@@ -2452,6 +2454,8 @@ textarea:focus-visible {
 .tool-tabs {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
+  width: 100%;
+  flex: 0 0 42px;
   height: 42px;
   border-bottom: 1px solid var(--line);
   background: #f8fbff;
@@ -2461,9 +2465,12 @@ textarea:focus-visible {
   min-width: 0;
   border: 0;
   border-right: 1px solid #e5edf6;
+  padding: 0 4px;
+  overflow: hidden;
   color: #4d5b6d;
   font-size: 13px;
   background: transparent;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -2483,17 +2490,20 @@ textarea:focus-visible {
   flex-direction: column;
   align-items: stretch;
   gap: 12px;
+  width: 100%;
   min-height: 0;
   flex: 1 1 auto;
+  box-sizing: border-box;
   padding: 12px;
   overflow: hidden;
 }
 
 .tool-content.is-compact-tool {
+  width: 100%;
   height: auto;
   max-height: 100%;
   overflow: auto;
-  align-self: start;
+  align-self: stretch;
 }
 
 .tool-content.is-skill-tool {
@@ -2511,6 +2521,9 @@ textarea:focus-visible {
 }
 
 .tool-section {
+  width: 100%;
+  box-sizing: border-box;
+  flex: 0 0 auto;
   margin-bottom: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -3027,12 +3040,12 @@ textarea:focus-visible {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-height: 0;
   height: auto;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 0 10px;
+  padding: 0 0 12px;
   scrollbar-width: auto;
   scrollbar-color: #8abdf1 #eef5fc;
 }
@@ -3114,11 +3127,13 @@ textarea:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin: 0 10px 2px;
-  padding: 8px 10px;
-  border-bottom: 1px solid #edf1f7;
+  margin: 0 10px;
+  padding: 7px 10px;
+  border: 1px solid #dce8f5;
+  border-radius: 6px;
   color: #607086;
   font-size: 12px;
+  background: #fbfdff;
 }
 
 .skill-inline-hint strong {
@@ -3129,6 +3144,12 @@ textarea:focus-visible {
 
 .skill-inline-hint.muted {
   background: #fbfdff;
+}
+
+.skill-inline-hint.is-hit {
+  border-color: #b9dafc;
+  color: #315b89;
+  background: #f2f8ff;
 }
 
 .skill-match-card {
@@ -3200,6 +3221,8 @@ textarea:focus-visible {
 
 .skill-group {
   margin: 0 10px;
+  width: calc(100% - 20px);
+  box-sizing: border-box;
   border: 1px solid #e5edf6;
   border-radius: 6px;
   background: #fff;
@@ -3248,7 +3271,7 @@ textarea:focus-visible {
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 8px;
   align-items: start;
-  padding: 8px 0;
+  padding: 7px 0;
   border-bottom: 1px solid #e7edf5;
 }
 
@@ -3265,7 +3288,7 @@ textarea:focus-visible {
 
 .skill-row-main {
   display: grid;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
 }
 
@@ -3297,19 +3320,20 @@ textarea:focus-visible {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 4px;
+  max-width: 148px;
 }
 
 .skill-row-preview {
   margin: 0;
   color: #536276;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.42;
   white-space: pre-wrap;
   word-break: break-word;
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 3;
 }
 
 .skill-row-foot {

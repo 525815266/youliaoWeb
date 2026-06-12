@@ -2029,3 +2029,98 @@ Do not commit runtime files while touching this area:
 - `data/reply-skills.json`
 - `logs/api-capture.ndjson`
 
+## 2026-06-12 Right Tool Pane, Skill Learning, Scroll, and Red-Dot Fix
+
+### User symptom
+
+User reported:
+
+- right tool panels looked too narrow / not dynamically fitting the pane
+- `skill回复` was split into a top match card and a lower current-match list
+- skill auto-learning polluted order skills with later unrelated replies or accidental images
+- right skill/history scroll could jump back to the top after refresh
+- selecting a conversation sometimes landed in the middle of chat instead of the bottom
+- red-dot unread behavior did not match the native client
+
+### Files changed
+
+- `public/app.js`
+- `public/styles.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+### Key app.js changes
+
+Right pane scroll preservation:
+
+- `getToolScrollSelector()`
+- `captureToolScrollSnapshot()`
+- `restoreToolScrollSnapshot()`
+- `renderToolContent()` now captures and restores internal scroll only for the same active tool tab and same contact.
+
+Skill match UI:
+
+- `renderSkillReplyPanel()` no longer renders the full `renderSkillMatchCard()` above the list.
+- New `renderSkillMatchHint()` renders a compact status strip.
+- Real actions stay on `renderSkillRow()`: apply, send, optimize, reset learning.
+
+Skill learning guard:
+
+- New state:
+  - `lastAppliedSuggestionPromptKey`
+  - `lastAppliedSuggestionContactId`
+  - `lastAppliedSuggestionAt`
+  - `lastAppliedSuggestionPlatformKey`
+  - `lastAppliedSuggestionIntentKey`
+- New helpers:
+  - `rememberAppliedSuggestionContext()`
+  - `clearAppliedSuggestionContext()`
+  - `isAppliedSuggestionContextValid()`
+  - `canLearnAsMatchedSkill()`
+- `resolveManualReplySkillTarget(latest)` now validates context before returning the previously applied skill.
+- `resetContactScopedState()` clears applied-suggestion context on contact switch.
+- `learnMatchedSkillOverride()` keeps multiple variants for the same prompt instead of deleting old prompt variants.
+- `getSkillReplyProfile()` only lets a learned override replace baseline wording when that exact variant has `count >= 3` or `forceLearned` is used.
+
+Conversation bottom behavior:
+
+- `selectContactById()` now opens normal conversation clicks at the latest/bottom position.
+- It no longer jumps to the first unread red-point anchor during ordinary contact selection.
+- Re-clicking the active `当前` tab still jumps to the red-point anchor if one is rendered.
+- `renderMessages("bottom")` now calls `scrollElementToBottom(..., { force: true, watchImages: true })`.
+
+Red-dot syncing:
+
+- `syncConsumedMessages()` now consumes actual red-point message ids from `getConsumableMessageIds(contact)` first, then still calls `msgId=0` as fallback.
+- Single message-id consume failures do not block the `msgId=0` fallback.
+- New `clearLocalMessageRedPoints(contactId)` clears local red-point flags in `state.messages`, `activeContact.records`, and `contacts.records` after sync.
+
+### Key styles.css changes
+
+- `.tool-pane` has `min-width: 0` and `overflow: hidden`.
+- `.tool-tabs` is full-width 6-column grid.
+- `.tool-content` and `.tool-section` are full-width with border-box sizing.
+- `.skill-panel-scroll` remains vertical-only scrolling.
+- `.skill-inline-hint` is a compact strip; `.skill-inline-hint.is-hit` is the highlighted hit state.
+- `.skill-row-preview` is tighter and clamped to 3 lines.
+
+### Verification
+
+- `npm run check` passed.
+- `http://localhost:5177/health` returned `ok: true`.
+- Local service was running on port `5177`.
+- Browser check via system Edge after login:
+  - right pane width about `382px`
+  - tool content width about `381px`
+  - six tool tabs about `64px` each
+  - tool section width about `357px`
+  - skill panel had `overflow-y:auto`, no horizontal overflow
+  - `skill-match-card` count was `0` after the UI change
+
+### Git hygiene reminder
+
+Do not commit runtime files:
+
+- `data/reply-skills.json`
+- `logs/api-capture.ndjson`
+

@@ -58,6 +58,7 @@
 58. [2026-06-12 当前会话列表“接口有数据但 Web 偶发显示空”排查与修复](#58-2026-06-12-当前会话列表接口有数据但-web-偶发显示空排查与修复)
 59. [2026-06-12 飞牛 SQLite 再次回退与一键恢复脚本](#59-2026-06-12-飞牛-sqlite-再次回退与一键恢复脚本)
 60. [2026-06-12 左侧会话列表动态加载截断修复](#60-2026-06-12-左侧会话列表动态加载截断修复)
+61. [2026-06-12 右侧工具栏、Skill 学习与红点滚动修复](#61-2026-06-12-右侧工具栏skill-学习与红点滚动修复)
 
 ## 1. 项目目标
 
@@ -3906,4 +3907,130 @@ npm run fnos:health
 - `handleContactListScroll()` 是否被 `contactListLoading` 或 `contactListAutoLoading` 卡住
 - `CONTACT_LIST_PAGE_SIZE` 是否又被改小
 - 原生抓包里 `GetContactList` 的 `pageSize` 是否变化
+
+## 61. 2026-06-12 右侧工具栏、Skill 学习与红点滚动修复
+
+### 1. 用户反馈
+
+本轮集中修复这些体验问题：
+
+- 右侧用户、订单、明细等工具面板宽度没有动态撑满，看起来短一块。
+- skill 回复面板上半部分一个命中卡、下半部分又一个当前匹配列表，重复且割裂。
+- skill 自动学习会把后续无关回复、偶发图片学到原来的订单 skill 里，导致下次推荐被反向污染。
+- 右侧 skill/聊天记录列表手动滚动后，自动刷新会把滚动条强制跳回顶部。
+- 从左侧会话列表点进会话时，有时主聊天区停在半空而不是最新消息底部。
+- 红点消除与原客户端不一致，Web 本地清了但服务端/客户端可能又出现红点。
+
+### 2. 涉及文件
+
+- `public/app.js`
+- `public/styles.css`
+
+### 3. 右侧工具栏布局修复
+
+`styles.css` 调整：
+
+- `.tool-pane` 增加 `min-width: 0` 和 `overflow: hidden`。
+- `.tool-tabs` 固定为 6 等分、宽度 100%。
+- `.tool-content`、`.tool-section` 强制 `width: 100%` 和 `box-sizing: border-box`。
+- skill 列表只保留竖向滚动，禁止横向溢出。
+
+浏览器实测：
+
+- 右侧 pane 宽度约 `382px`。
+- tool content 宽度约 `381px`。
+- 6 个工具 tab 均分，每个约 `64px`。
+- section 宽度约 `357px`，正好扣掉左右 12px padding。
+
+### 4. 右侧滚动保护
+
+新增函数：
+
+- `getToolScrollSelector()`
+- `captureToolScrollSnapshot()`
+- `restoreToolScrollSnapshot()`
+
+`renderToolContent()` 在重绘前记录：
+
+- 当前工具 tab
+- 当前联系人 id
+- 内部滚动容器选择器
+- `scrollTop`
+
+重绘后仅在“同一 tab + 同一联系人”时恢复滚动位置，避免自动刷新把 skill/聊天记录拉回顶部，也避免切换联系人时错误继承上一个人的滚动条。
+
+### 5. Skill 面板结构修复
+
+旧结构：
+
+- 顶部 `renderSkillMatchCard()`
+- 下方 `当前匹配` 分组
+
+这会把同一个命中 skill 展示两遍。
+
+新结构：
+
+- 顶部只保留一条轻量 `renderSkillMatchHint()` 状态提示。
+- 具体文案、图片、采用、发送、优化、恢复都放在 skill 行里。
+- 命中的 skill 仍排在 `当前匹配` 第一条，其他相关 skill 变暗但可浏览。
+
+### 6. Skill 学习防污染
+
+新增状态：
+
+- `lastAppliedSuggestionPromptKey`
+- `lastAppliedSuggestionContactId`
+- `lastAppliedSuggestionAt`
+- `lastAppliedSuggestionPlatformKey`
+- `lastAppliedSuggestionIntentKey`
+
+新增函数：
+
+- `rememberAppliedSuggestionContext()`
+- `clearAppliedSuggestionContext()`
+- `isAppliedSuggestionContextValid()`
+- `canLearnAsMatchedSkill()`
+
+规则：
+
+- 只有同一会话、同一触发消息或平台/意图一致，并且未超过 10 分钟窗口，才允许把人工修改写回原 skill。
+- 切换联系人时清空上一会话的应用上下文。
+- 同一 prompt 下新的不同回复不再删除旧 override，而是保留多个变体。
+- 只有同一变体累计 `count >= 3` 时，才会优先顶替基线话术。
+- 一次偶发图片会被记录，但不会立刻污染常用订单 skill。
+
+### 7. 会话点击与聊天区滚动
+
+`selectContactById()` 调整：
+
+- 普通点击会话默认滚到最新消息底部。
+- 不再在普通会话点击时自动跳到红点消息锚点。
+- 明确 bottom 渲染时 `renderMessages("bottom")` 使用 `force: true`。
+- 需要跳红点时，重复点击 `当前` tab 且当前消息区有红点锚点，会执行 `scrollToFirstUnreadMessage()`。
+
+### 8. 红点消费同步
+
+`syncConsumedMessages()` 调整：
+
+- 先通过 `getConsumableMessageIds()` 收集真实红点消息 id。
+- 逐个调用 `consumeMessageWithFallback(contactId, msgId)`。
+- 最后仍调用 `consumeMessageWithFallback(contactId, 0)` 兜底。
+- 单条 msgId 消费失败不会阻断后续 `msgId=0` 兜底。
+- 成功后执行 `clearLocalMessageRedPoints()`，清理本地 `messages`、`activeContact.records`、`contacts.records` 的 redPoint 标记。
+
+### 9. 验证
+
+已验证：
+
+- `npm run check` 通过。
+- `http://localhost:5177/health` 返回 `ok: true`，端口仍为 `5177`。
+- 使用本机 Edge 通道打开 `http://localhost:5177` 并成功连接。
+- 右侧工具栏宽度实测正常。
+- skill 面板实测为竖向滚动，无横向溢出，旧的上半块 match card 数量为 0。
+
+### 10. 后续注意
+
+- 不要把 `data/reply-skills.json` 的运行时学习结果随功能代码一起提交，除非明确要固化技能库。
+- 不要把 `logs/api-capture.ndjson` 提交。
+- 如果以后又出现 skill 被图片污染，先看某个 override 的 `count` 是否达到 3，再看 `lastAppliedSuggestion*` 上下文是否被绕过。
 
