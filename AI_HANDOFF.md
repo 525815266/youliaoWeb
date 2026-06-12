@@ -1957,3 +1957,75 @@ This bug class is specifically “frontend fallback state drift”, not “backe
 
 - `npm run check` passed after patch
 
+## 2026-06-12 Left Conversation List Truncation / Dynamic Load Fix
+
+### User symptom
+
+User reported the left conversation list still looked truncated and did not dynamically continue loading, especially in the `历史` tab.
+
+### Verified backend status
+
+This was not a backend data shortage.
+
+Direct real API probe against FnOS:
+
+- `POST /Contact/GetContactList`
+- history request shape:
+  - `pageIndex=1`
+  - `pageSize=80`
+  - `id=0`
+  - `isGuestbook=false`
+  - `isHistory=true`
+
+Verified result on 2026-06-12:
+
+- `total=5739`
+- first page count `= 80`
+
+Second-page probe returned a different id set, confirming server pagination works.
+
+### Root cause
+
+Two frontend issues stacked together:
+
+1. `loadContacts()` set `state.contactListLoading = true` but did not reliably reset it after success/failure.
+   - This blocked `handleContactListScroll()` auto-append because the guard always thought a load was still running.
+2. `CONTACT_LIST_PAGE_SIZE` had drifted down to `20`.
+   - Native request capture for the left list uses `pageSize=80`, so the smaller size made the truncation feel much worse.
+
+### Fix applied
+
+In `public/app.js`:
+
+1. Restored:
+   - `CONTACT_LIST_PAGE_SIZE = 80`
+2. Added:
+   - `finally { state.contactListLoading = false; }`
+   - directly inside `loadContacts()`
+3. Added:
+   - `scheduleContactListViewportFill()`
+   - after non-append loads, if the contact list still does not fill the viewport and `hasMore=true`, it auto-loads the next page(s)
+
+### Why this matters
+
+This fixes two distinct failure modes:
+
+- scroll-triggered loading being permanently blocked
+- history/current lists looking visually cut off even before the user scrolls
+
+### Verification
+
+- `npm run check` passed
+- `http://localhost:5177/health` returned `ok: true`
+- direct API re-check confirmed history page 1 now matches native batch sizing expectations:
+  - `pageSize=80`
+  - `count=80`
+  - `total=5739`
+
+### Git hygiene reminder
+
+Do not commit runtime files while touching this area:
+
+- `data/reply-skills.json`
+- `logs/api-capture.ndjson`
+

@@ -57,6 +57,7 @@
 51. [2026-06-11 AI 渠道独立配置与模型拉取](#51-2026-06-11-ai-渠道独立配置与模型拉取)
 58. [2026-06-12 当前会话列表“接口有数据但 Web 偶发显示空”排查与修复](#58-2026-06-12-当前会话列表接口有数据但-web-偶发显示空排查与修复)
 59. [2026-06-12 飞牛 SQLite 再次回退与一键恢复脚本](#59-2026-06-12-飞牛-sqlite-再次回退与一键恢复脚本)
+60. [2026-06-12 左侧会话列表动态加载截断修复](#60-2026-06-12-左侧会话列表动态加载截断修复)
 
 ## 1. 项目目标
 
@@ -3826,4 +3827,83 @@ npm run fnos:health
 ```
 
 4. 只有在 `databaseType=0` 仍异常时，才继续追前端或 MySQL 分表问题。
+
+## 60. 2026-06-12 左侧会话列表动态加载截断修复
+
+### 1. 现象
+
+用户反馈左侧会话列表“像被截断”，尤其切到“历史”后更明显。原生客户端会随着滚动继续动态加载，但 Web 版看起来只出一小截。
+
+### 2. 真实排查结果
+
+这次不是服务端没有更多数据。
+
+2026-06-12 现场用真实接口直连飞牛验证：
+
+- `POST /Contact/GetContactList`
+- 参数形状：
+  - `pageIndex=1`
+  - `pageSize=80`
+  - `id=0`
+  - `isGuestbook=false`
+  - `isHistory=true`
+
+返回：
+
+- `total=5739`
+- `page1 list count=80`
+
+继续请求第二页：
+
+- `pageIndex=2`
+- `pageSize=20` 或 `80`
+
+都能拿到不同于第一页的真实联系人，说明服务端分页本身是正常的。
+
+### 3. 根因
+
+这次前端有两个叠加问题：
+
+1. `loadContacts()` 里把 `state.contactListLoading` 置成了 `true`，但成功路径和失败路径结束后没有统一复位。
+2. 左侧列表页大小之前被改成了 `20`，而原生抓包里首屏列表是 `pageSize=80`，因此在历史分类里更容易表现成“只出来一截”。
+
+第一个问题会直接导致：
+
+- `handleContactListScroll()` 里的自动追加加载长期被 `contactListLoading` 挡住。
+
+### 4. 本次修复
+
+涉及文件：
+
+- `public/app.js`
+
+本次已做：
+
+1. 将左侧会话列表页大小恢复为更接近原生客户端的：
+   - `CONTACT_LIST_PAGE_SIZE = 80`
+2. 给 `loadContacts()` 增加统一收尾：
+   - `finally { state.contactListLoading = false; }`
+3. 新增 `scheduleContactListViewportFill()`
+   - 当左侧列表首屏高度还没有撑满滚动容器，且服务端仍有更多页时，自动继续追加下一页。
+   - 这样即使用户还没滚动，历史/当前列表也不会表现成明显“半屏截断”。
+
+### 5. 验证结论
+
+本次修改后：
+
+- `npm run check` 通过
+- `http://localhost:5177/health` 正常
+- 真实接口复测历史第一页：
+  - `pageSize=80`
+  - `list count=80`
+  - `total=5739`
+
+### 6. 以后再遇到类似问题时先看哪里
+
+先查：
+
+- `loadContacts()` 是否有成对的 loading 置位/复位
+- `handleContactListScroll()` 是否被 `contactListLoading` 或 `contactListAutoLoading` 卡住
+- `CONTACT_LIST_PAGE_SIZE` 是否又被改小
+- 原生抓包里 `GetContactList` 的 `pageSize` 是否变化
 

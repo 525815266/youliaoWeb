@@ -229,7 +229,7 @@ const APP_DEEP_LINK_PROFILES = [
 ];
 
 const MESSAGE_PAGE_SIZE = 30;
-const CONTACT_LIST_PAGE_SIZE = 20;
+const CONTACT_LIST_PAGE_SIZE = 80;
 const CONTACT_LIST_AUTOLOAD_THRESHOLD = 140;
 const CONTACT_LIST_HISTORY_AUTOLOAD_THRESHOLD = 220;
 const HISTORY_PAGE_SIZE = 20;
@@ -3118,6 +3118,7 @@ async function loadContactCounts() {
 }
 
 async function loadContacts(options = {}) {
+  state.contactListLoading = true;
   try {
     await ensureContactListAccountId();
     const mode = options.mode || "replace";
@@ -3133,7 +3134,6 @@ async function loadContacts(options = {}) {
     const previousHistoryScrollTop = previousHistoryList?.scrollTop || 0;
     const previousHistoryWasNearBottom = isNearBottom(previousHistoryList);
     const preserveScroll = Boolean(options.preserveScroll);
-    state.contactListLoading = true;
     const result = await fetchContactListWithFallback(state.listTab, {
       pageIndex: page,
       pageSize: options.pageSize || CONTACT_LIST_PAGE_SIZE,
@@ -3221,6 +3221,9 @@ async function loadContacts(options = {}) {
         }
       }
     }
+    if (mode !== "append") {
+      scheduleContactListViewportFill();
+    }
   } catch (error) {
     if (options.preserveScroll && state.contacts.length) {
       state.listCountSources[state.listTab] = "stale";
@@ -3236,6 +3239,8 @@ async function loadContacts(options = {}) {
     state.messages = [];
     renderAll();
     toast(`会话接口失败：${error.message}`, true);
+  } finally {
+    state.contactListLoading = false;
   }
 }
 
@@ -6143,6 +6148,26 @@ function handleMessageListScroll() {
 
 function getContactListAutoLoadThreshold() {
   return state.listTab === "history" ? CONTACT_LIST_HISTORY_AUTOLOAD_THRESHOLD : CONTACT_LIST_AUTOLOAD_THRESHOLD;
+}
+
+function scheduleContactListViewportFill() {
+  requestAnimationFrame(() => {
+    if (state.contactListAutoLoading || state.contactListLoading || !state.contactListHasMore) return;
+    if (!el.contactList) return;
+    if (el.contactList.scrollHeight > el.contactList.clientHeight + 12) return;
+    state.contactListAutoLoading = true;
+    loadContacts({
+      mode: "append",
+      page: (state.contactListPage || 1) + 1,
+      preserveScroll: true,
+      skipCounts: true
+    }).finally(() => {
+      state.contactListAutoLoading = false;
+      if (state.contactListHasMore && el.contactList && el.contactList.scrollHeight <= el.contactList.clientHeight + 12) {
+        scheduleContactListViewportFill();
+      }
+    });
+  });
 }
 
 function handleContactListScroll() {
