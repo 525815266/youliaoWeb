@@ -689,6 +689,7 @@ function bindEvents() {
   el.replyText.addEventListener("paste", handleReplyPaste);
   el.replyText.addEventListener("dragover", handleReplyDragOver);
   el.replyText.addEventListener("drop", handleReplyDrop);
+  el.replyText.addEventListener("click", handleDraftImageClick);
   el.sendMode.addEventListener("change", handleSendModeChange);
   el.emojiTool.addEventListener("click", toggleEmojiPopover);
   el.emojiPopover.addEventListener("click", handleEmojiPick);
@@ -5456,6 +5457,10 @@ function recordRecentEmoji(token) {
 function getReplyTextContent() {
   const node = el.replyText;
   if (!node) return "";
+  return extractTextFromNode(node);
+}
+
+function extractTextFromNode(node) {
   let text = "";
   node.childNodes.forEach((child) => {
     if (child.nodeType === Node.TEXT_NODE) {
@@ -5465,16 +5470,101 @@ function getReplyTextContent() {
         text += "\n";
       } else if (child.classList?.contains("emoji-inline")) {
         text += child.dataset.token || "";
+      } else if (child.classList?.contains("inline-draft-image")) {
+        text += "[图片]";
+      } else if (child.tagName === "DIV" || child.tagName === "P") {
+        text += extractTextFromNode(child);
       } else {
-        text += child.textContent || "";
+        text += extractTextFromNode(child);
       }
     }
   });
   return text;
 }
 
+function parseComposerBlocks() {
+  const node = el.replyText;
+  if (!node) return { blocks: [], images: [] };
+  const blocks = [];
+  const images = [];
+  let currentText = "";
+  const flushText = () => {
+    if (currentText) {
+      blocks.push({ type: "text", content: currentText });
+      currentText = "";
+    }
+  };
+  const walk = (parent) => {
+    parent.childNodes.forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        currentText += child.textContent;
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        if (child.tagName === "BR") {
+          currentText += "\n";
+        } else if (child.classList?.contains("emoji-inline")) {
+          currentText += child.dataset.token || "";
+        } else if (child.classList?.contains("inline-draft-image")) {
+          flushText();
+          const imageId = child.dataset.imageId;
+          const image = state.draftImages.find((img) => img.id === imageId);
+          if (image) {
+            blocks.push({ type: "image", imageId, image });
+            images.push(image);
+          }
+        } else {
+          walk(child);
+        }
+      }
+    });
+  };
+  walk(node);
+  flushText();
+  return { blocks, images };
+}
+
 function setReplyTextContent(html) {
   if (el.replyText) el.replyText.innerHTML = html || "";
+}
+
+function insertInlineImagesAtCursor(files) {
+  const node = el.replyText;
+  if (!node) return;
+  node.focus();
+  const selection = window.getSelection();
+  let range;
+  if (selection.rangeCount && node.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+    range = selection.getRangeAt(0);
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(node);
+    range.collapse(false);
+  }
+  files.forEach((file) => {
+    const img = createInlineImageElement(file);
+    if (!img || !img.nodeType) return;
+    range.insertNode(img);
+    range.setStartAfter(img);
+    range.setEndAfter(img);
+  });
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function createInlineImageElement(file) {
+  const info = addInlineDraftImage(file);
+  if (!info) return document.createTextNode("");
+  const span = document.createElement("span");
+  span.className = "inline-draft-image";
+  span.contentEditable = "false";
+  span.dataset.inlineImage = "true";
+  span.dataset.imageId = info.id;
+  span.dataset.objectUrl = info.objectUrl;
+  const img = document.createElement("img");
+  img.src = info.objectUrl;
+  img.alt = file.name || "图片";
+  img.draggable = false;
+  span.appendChild(img);
+  return span;
 }
 
 function insertEmojiAtCursor(token) {
@@ -5510,6 +5600,37 @@ function createEmojiElement(token) {
     span.style.cssText = `display:inline-block;width:20px;height:20px;overflow:hidden;background-image:url('/static/emojiSource.cdbf96da.png');background-repeat:no-repeat;background-size:203.625px 185.0625px;background-position:${emoji.x}px ${emoji.y}px;vertical-align:text-bottom;`;
   }
   return span;
+}
+
+function insertTextAtCursor(input, text) {
+  if (input.isContentEditable) {
+    input.focus();
+    const selection = window.getSelection();
+    if (!selection.rangeCount) {
+      input.appendChild(document.createTextNode(text));
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!input.contains(range.commonAncestorContainer)) {
+      input.appendChild(document.createTextNode(text));
+      return;
+    }
+    range.deleteContents();
+    const textNode = document.createTextNode(text);
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
+    range.setEndAfter(textNode);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return;
+  }
+  const value = input.value || "";
+  const start = input.selectionStart ?? value.length;
+  const end = input.selectionEnd ?? value.length;
+  input.value = `${value.slice(0, start)}${text}${value.slice(end)}`;
+  const next = start + String(text).length;
+  input.focus();
+  input.setSelectionRange(next, next);
 }
 
 function getDeepLinkEmbeddedUrl(rawDeepLink, parsed = parseAppDeepLink(rawDeepLink)) {
@@ -6039,7 +6160,22 @@ function handleContactListScroll() {
 }
 
 function handleReplyInput() {
+  syncInlineDraftImages();
   triggerDraftAiOptimize();
+}
+
+function syncInlineDraftImages() {
+  const node = el.replyText;
+  if (!node) return;
+  const inlineIds = new Set();
+  node.querySelectorAll(".inline-draft-image").forEach((el2) => {
+    if (el2.dataset.imageId) inlineIds.add(el2.dataset.imageId);
+  });
+  const removed = state.draftImages.filter((img) => img.inline && !inlineIds.has(img.id));
+  if (!removed.length) return;
+  removed.forEach((img) => { if (img.url) URL.revokeObjectURL(img.url); });
+  state.draftImages = state.draftImages.filter((img) => !img.inline || inlineIds.has(img.id));
+  renderDraftImages();
 }
 
 function handleReplyKeydown(event) {
@@ -6064,14 +6200,29 @@ function handleSendModeChange(event) {
 }
 
 function handleReplyPaste(event) {
+  const plainText = event.clipboardData?.getData("text/plain")?.trim() || "";
+  const htmlText = event.clipboardData?.getData("text/html")?.trim() || "";
   const files = getClipboardImageFiles(event.clipboardData);
-  if (!files.length) return;
-  const hasTextPayload = Boolean(
-    event.clipboardData?.getData("text/plain")?.trim() ||
-    event.clipboardData?.getData("text/html")?.trim()
-  );
-  if (!hasTextPayload) event.preventDefault();
-  addDraftImages(files, "粘贴图片");
+  const hasImageFiles = files.length > 0;
+  const hasTextPayload = Boolean(plainText || htmlText);
+  const isOnlyImageLabel = /^\[图片\]$/.test(plainText);
+  const containsImageLabel = plainText.includes("[图片]");
+
+  if (hasImageFiles) {
+    event.preventDefault();
+    if (hasTextPayload && !isOnlyImageLabel) {
+      const cleanedText = containsImageLabel ? plainText.replace(/\[图片\]/g, "").trim() : plainText;
+      if (cleanedText) {
+        insertTextAtCursor(el.replyText, cleanedText);
+      }
+    }
+    insertInlineImagesAtCursor(files);
+    return;
+  }
+
+  if (isOnlyImageLabel) {
+    event.preventDefault();
+  }
 }
 
 function getClipboardImageFiles(clipboardData) {
@@ -6079,7 +6230,7 @@ function getClipboardImageFiles(clipboardData) {
   const files = [];
   const addFile = (file) => {
     if (!file?.type?.startsWith("image/")) return;
-    const key = [file.name, file.type, file.size, file.lastModified].join(":");
+    const key = [file.type, file.size, file.lastModified].join(":");
     if (seen.has(key)) return;
     seen.add(key);
     files.push(file);
@@ -6108,7 +6259,7 @@ function handleReplyDrop(event) {
   const files = [...(event.dataTransfer?.files || [])].filter((file) => file.type.startsWith("image/"));
   if (!files.length) return;
   event.preventDefault();
-  addDraftImages(files, "拖入图片");
+  insertInlineImagesAtCursor(files);
 }
 
 function triggerHistoryAutoLoad() {
@@ -6121,11 +6272,11 @@ function triggerHistoryAutoLoad() {
 
 async function sendText() {
   return withSendingLock(async () => {
-    const content = getReplyTextContent().trim();
+    const { blocks, images } = parseComposerBlocks();
     const contactId = getContactId(state.activeContact);
-    const images = [...state.draftImages];
     const matchedSkillBeforeSend = resolveManualReplySkillTarget();
-    if (!contactId || (!content && !images.length)) {
+    const hasContent = blocks.some((b) => b.type === "text" && b.content.trim()) || images.length;
+    if (!contactId || !hasContent) {
       toast("请先选择会话，并输入回复内容或粘贴图片。", true);
       return;
     }
@@ -6133,42 +6284,53 @@ async function sendText() {
     let textSubmitted = false;
     const submittedImageIds = new Set();
     try {
-      const sentImageUrls = [];
+      const imageUrlMap = new Map();
       for (const [index, image] of images.entries()) {
         setSendingStage(`正在上传第 ${index + 1}/${images.length} 张图片...`);
         const imageUrl = await uploadChatImage(image.file);
-        sentImageUrls.push(imageUrl);
+        imageUrlMap.set(image.id, imageUrl);
         await delay(180);
       }
-      if (content) {
-        setSendingStage("正在提交文字消息...");
-        await sendChatContent({ content, contentType: 0 });
-        textSubmitted = true;
+      for (const block of blocks) {
+        if (block.type === "text" && block.content.trim()) {
+          setSendingStage("正在提交文字消息...");
+          await sendChatContent({ content: block.content.trim(), contentType: 0 });
+          textSubmitted = true;
+        } else if (block.type === "image") {
+          const imageUrl = imageUrlMap.get(block.imageId);
+          if (imageUrl) {
+            setSendingStage("正在提交图片消息...");
+            await sendChatContent({
+              content: imageUrl,
+              contentType: block.image.file?.type === "image/gif" ? 4 : 1
+            });
+            submittedImageIds.add(block.imageId);
+            await delay(180);
+          }
+        }
       }
-      for (const [index, imageUrl] of sentImageUrls.entries()) {
-        setSendingStage(`正在提交第 ${index + 1}/${sentImageUrls.length} 张图片消息...`);
-        await sendChatContent({
-          content: imageUrl,
-          contentType: images[index]?.file?.type === "image/gif" ? 4 : 1
-        });
-        if (images[index]?.id) submittedImageIds.add(images[index].id);
-        await delay(180);
-      }
+      const allImageUrls = images.map((img) => imageUrlMap.get(img.id)).filter(Boolean);
+      const allText = blocks.filter((b) => b.type === "text").map((b) => b.content).join("\n").trim();
       setSendingStage("正在学习回复并刷新聊天...");
-      await learnFromManualReply(content, sentImageUrls, { matchedSkill: matchedSkillBeforeSend });
+      await learnFromManualReply(allText, allImageUrls, { matchedSkill: matchedSkillBeforeSend });
       setReplyTextContent("");
       clearDraftImages();
       clearAiSuggestion();
-      touchActiveContact(content || (sentImageUrls.length ? "[image]" : ""));
+      touchActiveContact(allText || (allImageUrls.length ? "[image]" : ""));
       markContactRead(state.activeContact);
       await loadMessages(1, "replace", { forceBottom: true });
       await syncConsumedMessages(state.activeContact);
       await loadContacts({ preserveScroll: true, skipCounts: true });
-      toast(images.length ? "文字和图片已提交到悠聊服务。" : "消息已提交到悠聊服务。");
+      toast(allImageUrls.length ? "文字和图片已提交到悠聊服务。" : "消息已提交到悠聊服务。");
     } catch (error) {
       if (textSubmitted) setReplyTextContent("");
       if (submittedImageIds.size) {
         state.draftImages = state.draftImages.filter((image) => !submittedImageIds.has(image.id));
+        if (el.replyText) {
+          el.replyText.querySelectorAll(".inline-draft-image").forEach((imgEl) => {
+            if (submittedImageIds.has(imgEl.dataset.imageId)) imgEl.remove();
+          });
+        }
         renderDraftImages();
       }
       toast(`发送失败：${error.message}`, true);
@@ -6275,16 +6437,6 @@ function handleEmojiPick(event) {
   closeEmojiPopover();
 }
 
-function insertTextAtCursor(input, text) {
-  const value = input.value || "";
-  const start = input.selectionStart ?? value.length;
-  const end = input.selectionEnd ?? value.length;
-  input.value = `${value.slice(0, start)}${text}${value.slice(end)}`;
-  const next = start + String(text).length;
-  input.focus();
-  input.setSelectionRange(next, next);
-}
-
 function showSuperCommandModal() {
   if (!ensureActiveContactForTool()) return;
   openToolModal({
@@ -6340,7 +6492,7 @@ async function handleImageFileSelected() {
   const files = [...(el.imageFileInput.files || [])].filter((file) => file.type.startsWith("image/"));
   if (!files.length) return;
   try {
-    addDraftImages(files, "选择图片");
+    insertInlineImagesAtCursor(files);
   } catch (error) {
     toast(`添加图片失败：${error.message}`, true);
   } finally {
@@ -6388,10 +6540,25 @@ function addDraftImages(files, source = "图片") {
   toast(`${source}已加入待发送${accepted.length > 1 ? `（${accepted.length} 张）` : ""}${skipped ? `，已达到 9 张上限` : ""}。`);
 }
 
+function addInlineDraftImage(file) {
+  const slots = Math.max(0, 9 - state.draftImages.length);
+  if (slots <= 0) {
+    toast("已达到 9 张图片上限。", true);
+    return null;
+  }
+  const id = `inline-draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const objectUrl = URL.createObjectURL(file);
+  state.draftImages.push({ id, file, name: file.name || "图片", url: objectUrl, inline: true });
+  return { id, objectUrl };
+}
+
 function removeDraftImage(id) {
   const removed = state.draftImages.find((image) => image.id === id);
   if (removed?.url) URL.revokeObjectURL(removed.url);
   state.draftImages = state.draftImages.filter((image) => image.id !== id);
+  if (el.replyText) {
+    el.replyText.querySelectorAll(`[data-image-id="${CSS.escape(id)}"]`).forEach((el2) => el2.remove());
+  }
   renderDraftImages();
   triggerDraftAiOptimize();
 }
@@ -6401,30 +6568,46 @@ function clearDraftImages() {
     if (image.url) URL.revokeObjectURL(image.url);
   });
   state.draftImages = [];
+  if (el.replyText) {
+    el.replyText.querySelectorAll(".inline-draft-image").forEach((el2) => el2.remove());
+  }
   renderDraftImages();
 }
 
 function renderDraftImages() {
   if (!el.draftImageTray) return;
-  const hasDraftImages = Boolean(state.draftImages.length);
-  el.draftImageTray.classList.toggle("is-hidden", !hasDraftImages);
-  el.draftImageTray.closest(".composer")?.classList.toggle("has-draft-images", hasDraftImages);
+  const trayImages = state.draftImages.filter((img) => !img.inline);
+  const hasTrayImages = Boolean(trayImages.length);
+  const hasAnyImages = Boolean(state.draftImages.length);
+  el.draftImageTray.classList.toggle("is-hidden", !hasTrayImages);
+  el.draftImageTray.closest(".composer")?.classList.toggle("has-draft-images", hasTrayImages);
   el.draftImageTray.innerHTML = [
-    ...state.draftImages.map((image, index) => `
+    ...trayImages.map((image, index) => `
     <figure class="draft-image" title="${escapeAttr(image.name)}">
       <img src="${escapeAttr(image.url)}" alt="待发送图片 ${index + 1}">
       <button type="button" data-remove-draft-image="${escapeAttr(image.id)}" aria-label="移除图片"><i class="native-icon bfi-close" aria-hidden="true"></i></button>
     </figure>
   `),
-    hasDraftImages ? `<span class="draft-image-count">共 ${state.draftImages.length} 个图片</span>` : ""
+    hasTrayImages ? `<span class="draft-image-count">共 ${state.draftImages.length} 个图片</span>` : ""
   ].join("");
   updateComposerStatus();
 }
 
 function handleDraftImageClick(event) {
-  const target = event.target.closest("[data-remove-draft-image]");
-  if (!target) return;
-  removeDraftImage(target.dataset.removeDraftImage);
+  const removeTarget = event.target.closest("[data-remove-draft-image]");
+  if (removeTarget) {
+    removeDraftImage(removeTarget.dataset.removeDraftImage);
+    return;
+  }
+  const inlineTarget = event.target.closest(".inline-draft-image");
+  if (inlineTarget) {
+    const imageId = inlineTarget.dataset.imageId;
+    const image = state.draftImages.find((img) => img.id === imageId);
+    if (image?.url) {
+      showImagePreview(image.url);
+    }
+    return;
+  }
 }
 
 async function uploadDraftImagesForSkill() {
@@ -8272,6 +8455,7 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
 async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, latest, platformKey = "", intentKey = "" }) {
   const overrides = Array.isArray(skill.manualOverrides) ? [...skill.manualOverrides] : [];
   const latestKey = latest ? getMessageKey(latest, 0) : "";
+  const promptNormalized = normalizeForMatch(prompt);
   const duplicateIndex = overrides.findIndex((item) => (
     normalizeForMatch(item.prompt) === normalizeForMatch(prompt) &&
     normalizeForMatch(item.reply) === normalizeForMatch(reply)
@@ -8294,6 +8478,13 @@ async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, 
       count: Number(overrides[duplicateIndex].count || 1) + 1
     };
   } else {
+    for (let index = overrides.length - 1; index >= 0; index -= 1) {
+      const current = overrides[index];
+      if (!current) continue;
+      const currentPromptNormalized = normalizeForMatch(current.prompt || "");
+      if (!currentPromptNormalized || currentPromptNormalized !== promptNormalized) continue;
+      overrides.splice(index, 1);
+    }
     overrides.unshift({ ...override, count: 1 });
   }
 

@@ -1762,3 +1762,111 @@ If the issue is old polluted data, use:
 - per-row `恢复`
 - top-level `清理学习`
 
+## 2026-06-12 Skill Right Pane Scroll Finalization + Composer Structure Commit
+
+### Scope
+
+This pass intentionally bundled three related frontend surfaces:
+
+1. right-side `skill` pane scroll/layout stabilization
+2. small native-style polish for client settings menu + system settings modal sizing
+3. commit of the already-coupled composer structure changes (`contenteditable` + inline image blocks + top-level emoji popover)
+
+Relevant files:
+
+- `public/index.html`
+- `public/app.js`
+- `public/styles.css`
+
+Runtime files still excluded from commit:
+
+- `data/reply-skills.json`
+- `logs/api-capture.ndjson`
+
+### Skill pane scroll rule
+
+Root cause was not “missing scrollbar CSS”.
+
+The old layout had competing height models:
+
+- `.tool-content` using `height: calc(100% - 42px)`
+- `.skill-panel-scroll` also trying to fill height
+- `.skill-group` still flex-shrinkable
+
+This created:
+
+- unstable vertical space
+- hidden or awkward scrollbar behavior
+- compressed group cards / folded-looking rows
+
+Current rule:
+
+- `.tool-content` is now `flex: 1 1 auto`
+- `.skill-panel-scroll` is the single vertical scroll container
+- `.skill-group` is `flex: 0 0 auto`
+- long row content uses `min-width: 0` in the key flex/grid nodes
+
+Do not reintroduce:
+
+- `calc(100% - xx)` height hacks for the right pane
+- horizontal scrolling category strips
+- nested competing vertical scroll containers for skill content
+
+### Settings polish
+
+This pass slightly tightened the native-feel controls:
+
+- `client-settings-menu`
+  - wider, softer shadow, denser row typography
+- `tool-modal-settings`
+  - smaller and tighter
+- `client-settings-*`
+  - reduced heading sizes and spacing so the modal feels closer to the desktop client
+
+This is a visual polish pass, not a schema or endpoint change.
+
+### Composer structure state
+
+The repo had a previously uncommitted but already-dependent structure change:
+
+- `replyText` changed from `<textarea>` to contenteditable `<div class="reply-text">`
+- `emojiPopover` moved to top-level
+- inline draft images render inside the composer content itself
+
+`public/app.js` already contains the paired logic:
+
+- `parseComposerBlocks()`
+- `insertInlineImagesAtCursor()`
+- `syncInlineDraftImages()`
+- contenteditable-aware `insertTextAtCursor()`
+
+Because CSS/JS already depended on this DOM, this pass keeps them together to avoid a half-old / half-new state.
+
+### Skill learning behavior update
+
+One more learning cleanup was added inside:
+
+- `learnMatchedSkillOverride()`
+
+New behavior:
+
+- when the same normalized prompt gets a newer manual reply variant
+- older overrides for that same prompt are removed before inserting the newest one
+
+This keeps matched skill learning closer to the operator’s latest real wording instead of only accumulating stale variants.
+
+### Verification
+
+- `npm run check` passed
+- `/health` still returns `ok: true`
+
+### Commit hygiene
+
+If future work touches this area, keep commit boundaries explicit:
+
+- UI structure / composer DOM
+- right-pane scroll model
+- runtime learned skill data
+
+Only the first two belong in git by default.
+

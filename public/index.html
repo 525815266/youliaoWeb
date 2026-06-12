@@ -8,6 +8,7 @@
   </head>
   <body>
     <div id="toastHost" class="toast-host" aria-live="polite"></div>
+    <div id="emojiPopover" class="emoji-popover is-hidden" role="dialog" aria-label="表情选择"></div>
     <div id="aiSettingsOverlay" class="settings-overlay is-hidden" role="presentation">
       <form id="aiSettingsPanel" class="settings-panel" aria-label="AI 设置">
         <header class="settings-head">
@@ -257,12 +258,10 @@
               </label>
               <input id="imageFileInput" class="file-input" type="file" accept="image/*" multiple />
             </div>
-            <div class="composer-module composer-attachments" aria-label="输入附件">
-              <div id="emojiPopover" class="emoji-popover is-hidden" role="dialog" aria-label="表情选择"></div>
-            </div>
+            <div class="composer-module composer-attachments" aria-label="输入附件"></div>
             <div class="composer-module composer-editor">
               <div id="draftImageTray" class="draft-image-tray is-hidden" aria-label="待发送图片"></div>
-              <textarea id="replyText" placeholder="请输入客服回复内容"></textarea>
+              <div id="replyText" class="reply-text" contenteditable="true" placeholder="请输入客服回复内容"></div>
             </div>
             <div class="composer-module composer-actions">
               <span class="composer-status">文字和图片会按接口能力分开发送</span>
