@@ -4159,6 +4159,46 @@ function getContactListDetail(contact) {
   return firstDisplayValue(detail, "悠聊客户");
 }
 
+function getContactRobotName(contact) {
+  const robot = contact?.robot || {};
+  return firstDisplayValue(
+    robot.robotName,
+    contact?.robotName,
+    contact?.accountName,
+    robot.robotRemark,
+    contact?.robotRemark
+  );
+}
+
+function getContactRobotRemark(contact) {
+  const robot = contact?.robot || {};
+  return firstDisplayValue(
+    robot.robotRemark,
+    contact?.robotRemark,
+    contact?.robotRemarkName,
+    contact?.deviceRemark,
+    contact?.remarkName
+  );
+}
+
+function getContactRobotTypeText(contact) {
+  const rawType = getContactRobotType(contact);
+  return firstDisplayValue(
+    contact?.robotTypeName,
+    contact?.contactTypeName,
+    contact?.accountTypeName,
+    robotTypeName(rawType)
+  );
+}
+
+function getActiveRobotMetaText(contact) {
+  const robotName = getContactRobotName(contact) || "-";
+  const robotType = getContactRobotTypeText(contact);
+  const robotRemark = getContactRobotRemark(contact) || "-";
+  const typeText = robotType && robotType !== "-" ? `（${robotType}）` : "";
+  return `所属机器人：${robotName}${typeText}  备注：${robotRemark}`;
+}
+
 function renderContacts() {
   const count = state.totalContacts || state.contacts.length;
   el.conversationCount.textContent = `${count} 个客户`;
@@ -4867,16 +4907,11 @@ function renderActive() {
 
   renderActiveAvatar(contact);
   const displayName = getContactDisplayName(contact);
-  const userId = getContactUserId(contact) || "-";
-  const userName = getContactUserName(contact) || "-";
   const rawRemark = getContactRemark(contact);
   const remark = isSameDisplayText(rawRemark, displayName) ? "" : rawRemark;
-  const displayRemark = remark ? `（${remark}）` : "";
-  el.activeTitle.innerHTML = `${escapeHtml(displayName)}${displayRemark ? `<span class="active-remark">${escapeHtml(displayRemark)}</span>` : ""}`;
-  el.activeMeta.textContent = [
-    `微信号 ${userName}`,
-    `用户ID ${userId}`
-  ].filter(Boolean).join("，");
+  const displayRemark = remark ? `<span class="active-remark">（${escapeHtml(remark)}）</span>` : "";
+  el.activeTitle.innerHTML = `<span class="active-name-text">${escapeHtml(displayName)}</span>${displayRemark}${renderContactTypeBadge(contact, "active-type-badge")}`;
+  el.activeMeta.textContent = getActiveRobotMetaText(contact);
 }
 
 function renderActiveAvatar(contact) {

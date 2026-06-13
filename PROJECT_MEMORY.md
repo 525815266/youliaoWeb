@@ -4368,3 +4368,67 @@ Invoke-RestMethod -Uri "http://localhost:5177/health"
 
 注意：本次只改前端展示层，不改服务端、数据库、会话分页、红点接口。
 
+## 66. 2026-06-13 当前会话头部改回原生客户端信息结构
+
+### 1. 用户反馈
+
+用户再次对比原生客户端截图指出，Web 当前会话头部仍然不是原生显示方式。
+
+原生客户端头部结构是：
+
+- 第一行：`昵称（客户备注）`
+- 第二行：`所属机器人：机器人名称（机器人类型）  备注：机器人备注`
+
+用户还要求在第一行 `昵称（客户备注）` 后面继续显示用户类型标签，例如 `个微`、`公众号`、`企微`。
+
+### 2. 本次修复
+
+相关文件：
+
+- `public/app.js`
+- `public/styles.css`
+
+新增头部机器人信息 helper：
+
+- `getContactRobotName(contact)`
+- `getContactRobotRemark(contact)`
+- `getContactRobotTypeText(contact)`
+- `getActiveRobotMetaText(contact)`
+
+当前会话头部规则调整：
+
+- `renderActive()` 不再把 `微信号`、`用户ID` 放在聊天头部。
+- 头部第一行改为：
+  - `displayName`
+  - `（客户备注）`
+  - `renderContactTypeBadge(contact, "active-type-badge")`
+- 头部第二行改为：
+  - `所属机器人：${robotName}（${robotTypeName}）  备注：${robotRemark}`
+- 详细的用户微信号、用户 ID 仍然保留在右侧用户信息面板，不在聊天头部重复显示。
+
+### 3. 样式调整
+
+- `#activeTitle` 改成横向 flex，用来承载昵称、备注和标签。
+- `.active-name-text`、`.active-remark`、`.active-type-badge` 单行显示，超长内容省略。
+- `#activeMeta` 固定单行省略，避免长机器人名称把头部撑高。
+- 头部里的类型标签复用 `.contact-type-badge`，但补了 `.active-contact .contact-type-badge` 覆盖，避免被通用 `.active-contact span` 规则拉错字体和行高。
+
+### 4. 验证
+
+已执行：
+
+```powershell
+npm run check
+git diff --check
+Invoke-RestMethod -Uri "http://localhost:5177/health"
+```
+
+真实接口浏览器验证：
+
+- 选择 `A-文静` 会话后：
+  - 头部第一行：`A-文静（51-260613-A-文静）个微`
+  - 头部第二行：`所属机器人：我们的小秘密 ¹°（微信手机版）  备注：小秘密10`
+- 页面端口仍为 `http://localhost:5177`。
+
+注意：本次只改聊天头部展示，不改右侧用户信息面板、会话列表数据加载、红点或消息接口。
+

@@ -2384,3 +2384,51 @@ Git reminder:
   - `data/reply-skills.json`
   - `logs/api-capture.ndjson`
 
+## 2026-06-13 Handoff: Native Active Header Structure
+
+User correction:
+
+- The active chat header must match the native Windows client, not the previous Web header.
+- Native structure:
+  - first line: `昵称（客户备注）`
+  - second line: `所属机器人：机器人名称（机器人类型）  备注：机器人备注`
+- User also wants the contact type badge after the first-line `昵称（客户备注）`.
+
+Files changed:
+
+- `public/app.js`
+- `public/styles.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Important functions:
+
+- `getContactRobotName(contact)`: prefer real `contact.robot.robotName`, then other real robot/account name fields.
+- `getContactRobotRemark(contact)`: prefer real `contact.robot.robotRemark`.
+- `getContactRobotTypeText(contact)`: uses `getContactRobotType(contact)` and `robotTypeName(rawType)`.
+- `getActiveRobotMetaText(contact)`: returns the exact header second-line format.
+- `renderActive()` now renders:
+  - `activeTitle`: `active-name-text` + `active-remark` + `renderContactTypeBadge(contact, "active-type-badge")`
+  - `activeMeta`: native robot line from `getActiveRobotMetaText(contact)`
+
+Do not regress:
+
+- Do not put `微信号` / `用户ID` back into the active chat header. Those belong in the right-side user information panel.
+- Keep `.active-contact #activeMeta` single-line with ellipsis, or long robot names will push the header taller than native.
+- Keep `.active-contact .contact-type-badge` override, because `.active-contact span` is a broad legacy rule and otherwise changes badge sizing.
+
+Verification:
+
+- `npm run check` passed.
+- `git diff --check` passed.
+- `http://localhost:5177/health` OK.
+- Browser connected to real API and selecting `A-文静` produced:
+  - title: `A-文静（51-260613-A-文静）个微`
+  - meta: `所属机器人：我们的小秘密 ¹°（微信手机版）  备注：小秘密10`
+
+Git reminder:
+
+- Do not commit runtime dirty files:
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+
