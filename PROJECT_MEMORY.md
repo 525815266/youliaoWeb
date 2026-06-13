@@ -60,6 +60,7 @@
 60. [2026-06-12 左侧会话列表动态加载截断修复](#60-2026-06-12-左侧会话列表动态加载截断修复)
 61. [2026-06-12 右侧工具栏、Skill 学习与红点滚动修复](#61-2026-06-12-右侧工具栏skill-学习与红点滚动修复)
 62. [2026-06-13 底部会话分类红点与未读跳转修复](#62-2026-06-13-底部会话分类红点与未读跳转修复)
+63. [2026-06-13 SQLite 回退恢复与图片发送性能修复](#63-2026-06-13-sqlite-回退恢复与图片发送性能修复)
 
 ## 1. 项目目标
 
@@ -4181,4 +4182,98 @@ npm run check
 结果：通过。
 
 注意：`data/reply-skills.json` 与 `logs/api-capture.ndjson` 是运行时脏文件，本次不提交。
+
+## 63. 2026-06-13 SQLite 回退恢复与图片发送性能修复
+
+### 1. 服务端状态
+
+用户反馈回复几条消息后数量异常。执行：
+
+```powershell
+npm run fnos:health
+```
+
+发现飞牛服务端再次回退到 SQLite：
+
+- `databaseType=2`
+- `totalContacts=497`
+- `historyContacts=24`
+
+随后执行：
+
+```powershell
+npm run fnos:restore:mysql
+npm run fnos:health
+```
+
+恢复结果：
+
+- `databaseType=0`
+- `databaseMode=mysql`
+- `totalContacts=8066`
+- `historyContacts=5736`
+- `currentAccount2=6`
+
+结论：本次消息数量异常首先是后端运行库又切到 SQLite，不是 Web 计数逻辑本身。
+
+### 2. 图片发送卡住原因
+
+从 `logs/api-capture.ndjson` 看到一次 `/local/oss-upload` 在拿到 Qiniu 配置后卡了约 40 秒并 `fetch failed`。原配置：
+
+- 前端本地代理上传超时 `LOCAL_IMAGE_UPLOAD_TIMEOUT_MS=70000`
+- 服务端 OSS 代理超时 `OSS_UPLOAD_TIMEOUT_MS=70000`
+
+同时 `sendText()` 把以下步骤全部包在同一个“发送中”锁里：
+
+- 上传图片
+- 调用 `/ChatContent/SendMsg`
+- `learnFromManualReply()` 学习 skill
+- `loadMessages()` 刷新聊天
+- `syncConsumedMessages()` 清红点
+- `loadContacts()` 刷新会话列表
+
+所以多图或 OSS 抖动时，消息可能已经提交成功，但按钮仍显示发送中很多秒。
+
+### 3. 当前修复
+
+相关文件：
+
+- `public/app.js`
+- `server.js`
+
+图片上传：
+
+- 前端本地代理超时从 `70000ms` 降到 `12000ms`。
+- 浏览器直传超时调整为 `20000ms`。
+- 服务端 `/local/oss-upload` 的上游 OSS 超时从 `70000ms` 降到 `20000ms`。
+- 新增 `prepareImageForUpload()`：
+  - GIF/SVG 不压缩，避免破坏动图或矢量图。
+  - 大图最长边压到 `1600px`。
+  - 大图转 JPEG，质量 `0.86`。
+  - 小于约 `900KB` 的非 PNG 图片不处理。
+  - 上传前记录压缩前后大小到日志。
+- `sendText()` 会缓存每张草稿图的 `image.uploadUrl`，部分发送失败后重试不会重复上传已成功的图片。
+
+发送流程：
+
+- 移除了多图发送中每张图之间的固定 `180ms` 延迟。
+- `sendText()` 和 `sendImageFile()` 在消息提交成功后立即清输入框、更新左侧会话预览并释放发送锁。
+- `learnFromManualReply()`、`loadMessages()`、`syncConsumedMessages()`、`loadContacts()` 改由 `schedulePostSendMaintenance()` 后台执行。
+- 后台刷新只在当前仍停留同一会话时刷新聊天区，避免客服切到其他会话后被后台任务拉回。
+
+### 4. 验证
+
+已执行：
+
+```powershell
+npm run check
+npm run fnos:health
+```
+
+结果：
+
+- `node --check server.js && node --check public/app.js` 通过。
+- 飞牛服务端为 MySQL，健康检查通过。
+
+注意：因为 `server.js` 改了 OSS 代理超时，正在运行的 `http://localhost:5177` 服务需要重启后才会使用新的服务端超时；前端 `public/app.js` 需要刷新页面后生效。
 

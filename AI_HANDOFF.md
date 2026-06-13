@@ -2260,3 +2260,59 @@ Git reminder:
   - `data/reply-skills.json`
   - `logs/api-capture.ndjson`
 
+## 2026-06-13 Handoff: SQLite Restore And Image Send Optimization
+
+FnOS service status:
+
+- User saw abnormal message/contact counts after replying.
+- `npm run fnos:health` showed the service had switched to SQLite again:
+  - `databaseType=2`
+  - `totalContacts=497`
+  - `historyContacts=24`
+- Ran `npm run fnos:restore:mysql`.
+- Final `npm run fnos:health` passed:
+  - `databaseType=0`
+  - `databaseMode=mysql`
+  - `totalContacts=8066`
+  - `historyContacts=5736`
+  - `currentAccount2=6`
+
+Image-send changes:
+
+- Files changed:
+  - `public/app.js`
+  - `server.js`
+  - `PROJECT_MEMORY.md`
+  - `AI_HANDOFF.md`
+- `LOCAL_IMAGE_UPLOAD_TIMEOUT_MS` is now `12000`.
+- `IMAGE_UPLOAD_TIMEOUT_MS` is now `20000`.
+- `server.js` `OSS_UPLOAD_TIMEOUT_MS` is now `20000`.
+- Added `prepareImageForUpload(file)`:
+  - skips GIF/SVG
+  - max edge `1600px`
+  - JPEG quality `0.86`
+  - skips small non-PNG files under about `900KB`
+- `sendText()` caches uploaded draft image URLs on `image.uploadUrl`, so a retry after partial failure does not re-upload successful images.
+- Removed fixed `180ms` waits between image upload/send steps.
+- Added `schedulePostSendMaintenance()`:
+  - sends are considered complete after `/ChatContent/SendMsg` succeeds
+  - skill learning, message refresh, red-point sync, and contact refresh run in the background
+  - message refresh only runs if the active contact is still the same contact
+- `sendImageFile()` uses the same background post-send maintenance path.
+
+Operational note:
+
+- Because `server.js` changed, restart the local dev server for the shorter OSS proxy timeout to take effect.
+- Browser page refresh is enough for the `public/app.js` changes.
+
+Verification:
+
+- `npm run check` passed.
+- `npm run fnos:health` passed after restore.
+
+Git reminder:
+
+- Do not commit runtime files:
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+

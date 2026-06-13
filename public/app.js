@@ -13,8 +13,12 @@ const AI_PROVIDER_STORAGE_KEY = "youchat.ai.provider";
 const AI_PROVIDER_SETTINGS_STORAGE_KEY = "youchat.ai.providers";
 const DEFAULT_AI_PROVIDER = "sub2";
 const API_REQUEST_TIMEOUT_MS = 45000;
-const IMAGE_UPLOAD_TIMEOUT_MS = 15000;
-const LOCAL_IMAGE_UPLOAD_TIMEOUT_MS = 70000;
+const IMAGE_UPLOAD_TIMEOUT_MS = 20000;
+const LOCAL_IMAGE_UPLOAD_TIMEOUT_MS = 12000;
+const MAX_UPLOAD_IMAGE_EDGE = 1600;
+const MAX_UPLOAD_IMAGE_BYTES = 900 * 1024;
+const IMAGE_UPLOAD_JPEG_QUALITY = 0.86;
+const POST_SEND_REFRESH_DELAY_MS = 80;
 const SIGNALR_KEEP_ALIVE_MS = 120000;
 const SIGNALR_START_TIMEOUT_MS = 12000;
 const AI_PRESETS = {
@@ -6689,9 +6693,9 @@ async function sendText() {
       const imageUrlMap = new Map();
       for (const [index, image] of images.entries()) {
         setSendingStage(`正在上传第 ${index + 1}/${images.length} 张图片...`);
-        const imageUrl = await uploadChatImage(image.file);
+        const imageUrl = image.uploadUrl || await uploadChatImage(image.file);
+        image.uploadUrl = imageUrl;
         imageUrlMap.set(image.id, imageUrl);
-        await delay(180);
       }
       for (const block of blocks) {
         if (block.type === "text" && block.content.trim()) {
@@ -6707,22 +6711,22 @@ async function sendText() {
               contentType: block.image.file?.type === "image/gif" ? 4 : 1
             });
             submittedImageIds.add(block.imageId);
-            await delay(180);
           }
         }
       }
       const allImageUrls = images.map((img) => imageUrlMap.get(img.id)).filter(Boolean);
       const allText = blocks.filter((b) => b.type === "text").map((b) => b.content).join("\n").trim();
-      setSendingStage("正在学习回复并刷新聊天...");
-      await learnFromManualReply(allText, allImageUrls, { matchedSkill: matchedSkillBeforeSend });
       setReplyTextContent("");
       clearDraftImages();
       clearAiSuggestion();
       touchActiveContact(allText || (allImageUrls.length ? "[image]" : ""));
       markContactRead(state.activeContact);
-      await loadMessages(1, "replace", { forceBottom: true });
-      await syncConsumedMessages(state.activeContact);
-      await loadContacts({ preserveScroll: true, skipCounts: true });
+      schedulePostSendMaintenance({
+        contact: state.activeContact,
+        text: allText,
+        imageUrls: allImageUrls,
+        matchedSkill: matchedSkillBeforeSend
+      });
       toast(allImageUrls.length ? "文字和图片已提交到悠聊服务。" : "消息已提交到悠聊服务。");
     } catch (error) {
       if (textSubmitted) setReplyTextContent("");
@@ -6738,6 +6742,27 @@ async function sendText() {
       toast(`发送失败：${error.message}`, true);
     }
   });
+}
+
+function schedulePostSendMaintenance({ contact, text = "", imageUrls = [], matchedSkill = null } = {}) {
+  const contactId = getContactId(contact);
+  window.setTimeout(async () => {
+    try {
+      await learnFromManualReply(text, imageUrls, { matchedSkill });
+    } catch (error) {
+      log("background reply learning failed", { contactId, error: error.message });
+    }
+
+    try {
+      if (contactId && String(getContactId(state.activeContact) || "") === String(contactId)) {
+        await loadMessages(1, "replace", { forceBottom: true });
+        await syncConsumedMessages(contact || state.activeContact);
+      }
+      await loadContacts({ preserveScroll: true, skipCounts: true });
+    } catch (error) {
+      log("background post-send refresh failed", { contactId, error: error.message });
+    }
+  }, POST_SEND_REFRESH_DELAY_MS);
 }
 
 function resolveManualReplySkillTarget(latest = getLatestActionableInboundMessage()) {
@@ -6914,9 +6939,11 @@ async function sendImageFile(file, options = {}) {
   if (!options.silent) {
     touchActiveContact("[image]");
     markContactRead(state.activeContact);
-    await loadMessages(1, "replace", { forceBottom: true });
-    await syncConsumedMessages(state.activeContact);
-    await loadContacts({ preserveScroll: true, skipCounts: true });
+    schedulePostSendMaintenance({
+      contact: state.activeContact,
+      text: "",
+      imageUrls: [imageUrl]
+    });
     toast("图片已提交到悠聊服务。");
   }
   return imageUrl;
@@ -7033,9 +7060,73 @@ async function uploadDraftImagesForSkill() {
   return steps;
 }
 
+async function prepareImageForUpload(file) {
+  if (!file || !file.type?.startsWith("image/")) throw new Error("请选择图片文件");
+  if (file.optimizedUploadFile) return file.optimizedUploadFile;
+  const type = String(file.type || "").toLowerCase();
+  if (type.includes("gif") || type.includes("svg")) return file;
+  if (file.size && file.size <= MAX_UPLOAD_IMAGE_BYTES && !type.includes("png")) return file;
+
+  let bitmap = null;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch (error) {
+    log("image decode for compression failed", { name: file.name, size: file.size, error: error.message });
+    return file;
+  }
+
+  const width = bitmap.width || 0;
+  const height = bitmap.height || 0;
+  const maxEdge = Math.max(width, height);
+  if (!width || !height || (maxEdge <= MAX_UPLOAD_IMAGE_EDGE && file.size <= MAX_UPLOAD_IMAGE_BYTES)) {
+    bitmap.close?.();
+    return file;
+  }
+
+  const scale = Math.min(1, MAX_UPLOAD_IMAGE_EDGE / maxEdge);
+  const targetWidth = Math.max(1, Math.round(width * scale));
+  const targetHeight = Math.max(1, Math.round(height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  const ctx = canvas.getContext("2d", { alpha: false });
+  if (!ctx) {
+    bitmap.close?.();
+    return file;
+  }
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, targetWidth, targetHeight);
+  ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+  bitmap.close?.();
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", IMAGE_UPLOAD_JPEG_QUALITY));
+  if (!blob || blob.size >= file.size) return file;
+  const optimized = new File([blob], replaceImageExtension(file.name || "image.png", ".jpg"), {
+    type: "image/jpeg",
+    lastModified: Date.now()
+  });
+  file.optimizedUploadFile = optimized;
+  log("image optimized before upload", {
+    name: file.name,
+    fromBytes: file.size,
+    toBytes: optimized.size,
+    width,
+    height,
+    targetWidth,
+    targetHeight
+  });
+  return optimized;
+}
+
+function replaceImageExtension(fileName = "image.png", extension = ".jpg") {
+  const base = String(fileName || "image").replace(/\.[a-z0-9]{2,8}$/i, "") || "image";
+  return `${base}${extension}`;
+}
+
 async function uploadChatImage(file) {
   const contactId = assertActiveContact();
-  const uploadFileName = createOssUploadFileName(file);
+  const uploadFile = await prepareImageForUpload(file);
+  const uploadFileName = createOssUploadFileName(uploadFile);
   setSendingStage("正在获取图片上传配置...");
   const payload = await api("/ChatContent/GetOssConfig", {
     contactId,
@@ -7053,7 +7144,7 @@ async function uploadChatImage(file) {
   }
 
   const objectKey = buildOssObjectKey(config, uploadFileName);
-  const localPayload = { config, objectKey, file, fileName: uploadFileName };
+  const localPayload = { config, objectKey, file: uploadFile, fileName: uploadFileName };
   try {
     setSendingStage("正在通过本地代理上传图片...");
     return await uploadImageViaLocalProxy(localPayload);
@@ -7063,7 +7154,7 @@ async function uploadChatImage(file) {
 
   try {
     setSendingStage("正在通过浏览器直传图片...");
-    const uploadForm = buildOssUploadForm(config, objectKey, file, uploadFileName);
+    const uploadForm = buildOssUploadForm(config, objectKey, uploadFile, uploadFileName);
     const response = await fetchWithTimeout(endpoint, {
       method: "POST",
       body: uploadForm
