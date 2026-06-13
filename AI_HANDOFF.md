@@ -2432,3 +2432,89 @@ Git reminder:
   - `data/reply-skills.json`
   - `logs/api-capture.ndjson`
 
+## 2026-06-13 Handoff: Skill Training Center
+
+User issue:
+
+- User said skill learning quality is poor.
+- They want a separate page that summarizes today's learned replies and lets them approve whether each one should be optimized.
+- The goal is to stop bad automatic learning from silently polluting future recommendations.
+
+Files changed:
+
+- `server.js`
+- `public/skill-training.html`
+- `public/skill-training.css`
+- `public/skill-training.js`
+- `public/index.html`
+- `public/app.js`
+- `package.json`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+New UI entry:
+
+- Top-right native client settings menu now has `skill 训练`.
+- Handler in `public/app.js` opens `/skill-training.html` in a new tab/window.
+
+New local API:
+
+- `GET /local/skill-training?date=YYYY-MM-DD&scope=today|all`
+- `POST /local/skill-training`
+
+Server functions to know:
+
+- `getShanghaiDateKey(value)`: uses `Asia/Shanghai` for "today".
+- `buildSkillTrainingItems(data, { date, scope })`: reads `data/reply-skills.json` and builds review cards.
+- `summarizeSkillTrainingItems(items, date)`: returns top summary stats and lines.
+- `isTrainingDirtyText(text)`: flags obviously bad learned content, such as test numbers, long file hashes, download links, file metadata, `巴嘎`, `454654`.
+- `applySkillTrainingPatch(skill, patch, action)`: applies edits from the training page.
+- `handleSkillTraining(req, res)`: route handler.
+
+POST actions:
+
+- `approve`: approve as-is or with field edits.
+- `optimize`: save edited reply text/keywords/title and mark optimized.
+- `needs-review`: mark as `trainingStatus = needs_optimization`.
+- `disable`: set `enabled = false`.
+- `delete`: remove the skill from `data/reply-skills.json`.
+- `clear-overrides`: remove `manualOverrides` and clear `lastManualOverrideAt`.
+
+Training page behavior:
+
+- Shows summary cards:
+  - pending total
+  - issue count
+  - dirty learning count
+  - manual override count
+  - image count
+- Each card shows:
+  - source and status chips
+  - keywords/samples/latest override
+  - current stored reply and images
+  - editable title, keywords, reply text, note
+  - `可自动回复` and `无需回复` toggles
+  - action buttons for approval/optimization/cleanup
+
+Verification:
+
+- Restarted local dev server on the same port `5177` because `server.js` changed.
+- `npm run check` now includes `public/skill-training.js` and passed.
+- `git diff --check` passed.
+- `GET /local/skill-training?scope=today` returned:
+  - total `15`
+  - issueCount `15`
+  - dirtyCount `14`
+  - overrideCount `17`
+  - imageCount `12`
+- Invalid POST with an unknown skill id returns `400` and does not write.
+- Browser smoke test opened `/skill-training.html` and rendered the stats and action buttons.
+
+Do not regress:
+
+- Training page must write back to the same `data/reply-skills.json`, not a parallel store.
+- Do not auto-apply optimization without user action. This page is an approval layer.
+- Do not commit runtime dirty files unless user explicitly asks:
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+

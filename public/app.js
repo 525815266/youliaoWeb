@@ -929,6 +929,8 @@ function handleClientSettingsMenuClick(event) {
     showClientOptionsModal();
   } else if (action === "database") {
     showDatabaseModal();
+  } else if (action === "skill-training") {
+    window.open("/skill-training.html", "_blank", "noopener,noreferrer");
   } else if (action === "pause") {
     toggleClientPause();
   } else if (action === "logout") {

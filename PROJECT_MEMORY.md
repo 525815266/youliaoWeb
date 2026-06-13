@@ -4432,3 +4432,134 @@ Invoke-RestMethod -Uri "http://localhost:5177/health"
 
 注意：本次只改聊天头部展示，不改右侧用户信息面板、会话列表数据加载、红点或消息接口。
 
+## 67. 2026-06-13 skill 训练中心独立页面
+
+### 1. 用户反馈
+
+用户认为当前 skill 自动学习质量不好，希望单独出一个页面来训练：
+
+- 总结今天这些客服回复和系统学到的 skill。
+- 把可能需要改的学习项列出来。
+- 由用户批复是否需要优化。
+- 用户能改写文案，让系统以后学得更准。
+
+### 2. 设计原则
+
+本次不再让自动学习“悄悄变强”，而是增加人工 review 层：
+
+- 自动学习仍然写入 `data/reply-skills.json`。
+- 训练中心只读取并整理这些学习项。
+- 真正改 skill 必须由用户在训练页点击批复动作。
+- 批复后直接写回同一个 skill 文件，右侧 skill 回复和 AI 推荐会继续使用这些结果。
+
+### 3. 新增文件
+
+- `public/skill-training.html`
+- `public/skill-training.css`
+- `public/skill-training.js`
+
+入口：
+
+- 右上角客户端设置菜单新增 `skill 训练`。
+- 点击后打开 `/skill-training.html`，不会打断当前客服工作台。
+
+### 4. 新增本地接口
+
+相关文件：
+
+- `server.js`
+
+新增接口：
+
+- `GET /local/skill-training?date=YYYY-MM-DD&scope=today|all`
+- `POST /local/skill-training`
+
+`GET` 行为：
+
+- 读取 `data/reply-skills.json`。
+- 按 Asia/Shanghai 日期整理今日或全部 skill。
+- 自动识别并标记：
+  - `自动学习`
+  - `手动沉淀`
+  - `今日覆盖`
+  - `覆盖 N`
+  - `带图片`
+  - `疑似脏学习`
+  - `话术过长`
+  - `待优化`
+  - `已批准`
+  - `已优化`
+  - `已停用`
+- 返回 `summary` 和 `items` 给训练页面。
+
+`POST` 支持动作：
+
+- `approve`：批准原样或带编辑内容批准。
+- `optimize`：保存优化后的标题、关键词、回复文案、自动回复开关等。
+- `needs-review`：标记为待优化。
+- `disable`：停用这条 skill。
+- `delete`：删除异常学习记录。
+- `clear-overrides`：清空某条 skill 的 `manualOverrides` 学习覆盖。
+
+### 5. 脏学习判断
+
+服务端新增 `isTrainingDirtyText(text)`，会优先标记以下内容：
+
+- 纯数字或测试类短语。
+- 超长文案。
+- 下载链接、文件名、文件大小、CRC32、MD5、SHA、压缩包等明显非客服话术。
+- `巴嘎`、`454654` 等明显异常学习样本。
+
+这次实际接口验证中，训练中心总结到：
+
+- `15` 条待审 skill。
+- `15` 条需要复核。
+- `14` 条疑似脏学习。
+- `17` 条学习覆盖。
+- `12` 条带图片。
+
+说明当前自动学习确实已经混入了需要人工清洗的内容。
+
+### 6. 页面能力
+
+训练页每条 skill 展示：
+
+- 标题、来源、平台、意图、最近时间。
+- 风险/状态标签。
+- 关键词、样本、最近人工覆盖。
+- 当前入库话术。
+- 已保存图片缩略图。
+- 可编辑的标题、关键词、回复文案、备注。
+- `可自动回复` 和 `无需回复` 开关。
+
+可执行动作：
+
+- `填入当前`
+- `填入最近人工回复`
+- `标记待优化`
+- `批准原样`
+- `保存优化`
+- `清空覆盖`
+- `停用`
+- `删除`
+
+### 7. 验证
+
+已执行：
+
+```powershell
+npm run check
+git diff --check
+Invoke-RestMethod -Uri "http://localhost:5177/health"
+Invoke-RestMethod -Uri "http://localhost:5177/local/skill-training?scope=today"
+```
+
+结果：
+
+- `node --check server.js && node --check public/app.js && node --check public/skill-training.js` 通过。
+- 训练接口可返回今日 summary 和 items。
+- 无效提交测试返回 `400`，不会误写数据。
+- 浏览器打开 `http://localhost:5177/skill-training.html` 可正常渲染统计、待审卡片和批复按钮。
+
+注意：因为新增了 `server.js` 路由，本次已重启本地 `5177` 的 `node server.js`，仍使用原端口，不换端口。
+

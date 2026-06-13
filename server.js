@@ -451,6 +451,295 @@ async function handleReplySkillLearn(req, res) {
   }
 }
 
+function getShanghaiDateKey(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const partMap = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${partMap.year}-${partMap.month}-${partMap.day}`;
+}
+
+function parseSkillTimestamp(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getSkillCreatedAt(skill) {
+  const explicit = parseSkillTimestamp(skill.createdAt || skill.updatedAt || skill.lastManualOverrideAt || skill.lastAutoRevisedAt || skill.lastOptimizedAt);
+  if (explicit) return explicit;
+  const idMatch = String(skill.id || "").match(/learned-(\d{10,})/);
+  if (!idMatch) return null;
+  const timestamp = Number(idMatch[1]);
+  if (!Number.isFinite(timestamp)) return null;
+  return new Date(timestamp);
+}
+
+function getSkillActivityDates(skill) {
+  const dates = [
+    getSkillCreatedAt(skill),
+    parseSkillTimestamp(skill.updatedAt),
+    parseSkillTimestamp(skill.lastManualOverrideAt),
+    parseSkillTimestamp(skill.lastAutoRevisedAt),
+    parseSkillTimestamp(skill.lastOptimizedAt),
+    ...(Array.isArray(skill.manualOverrides) ? skill.manualOverrides.map((item) => parseSkillTimestamp(item.at)) : [])
+  ].filter(Boolean);
+  return dates.sort((a, b) => b.getTime() - a.getTime());
+}
+
+function getSkillServerText(skill) {
+  const steps = Array.isArray(skill.replySteps) ? skill.replySteps : [];
+  const text = steps
+    .filter((step) => step && step.type !== "image")
+    .map((step) => String(step.content || "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+  return text || String(skill.fallback || "").trim();
+}
+
+function getSkillServerImageUrls(skill) {
+  const steps = Array.isArray(skill.replySteps) ? skill.replySteps : [];
+  return steps
+    .filter((step) => step && step.type === "image")
+    .map((step) => String(step.url || step.content || "").trim())
+    .filter(Boolean);
+}
+
+function splitSkillListField(value) {
+  if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean);
+  return String(value || "")
+    .split(/[\n,，、\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function isTrainingDirtyText(text) {
+  const value = String(text || "").trim();
+  if (!value) return true;
+  if (/^\d{3,}$/.test(value)) return true;
+  if (value.length > 700) return true;
+  return /(下载链接|文件名称|文件大小|CRC32|MD5|SHA1|SHA256|Kaspersky|\.rar|测试版|http:\/\/4275\.com|巴嘎|454654)/i.test(value);
+}
+
+function getSkillTrainingReasons(skill, text, latestDateKey, selectedDateKey) {
+  const reasons = [];
+  const source = String(skill.source || "");
+  const overrides = Array.isArray(skill.manualOverrides) ? skill.manualOverrides : [];
+  const todayOverrides = overrides.filter((item) => getShanghaiDateKey(item.at) === selectedDateKey);
+  const imageCount = getSkillServerImageUrls(skill).length;
+
+  if (source === "learned") reasons.push({ level: "info", label: "自动学习" });
+  if (source === "manual") reasons.push({ level: "ok", label: "手动沉淀" });
+  if (todayOverrides.length) reasons.push({ level: "warn", label: `今日覆盖 ${todayOverrides.length}` });
+  if (overrides.length >= 3) reasons.push({ level: "warn", label: `覆盖 ${overrides.length}` });
+  if (String(latestDateKey) === String(selectedDateKey)) reasons.push({ level: "info", label: "今日变动" });
+  if (imageCount) reasons.push({ level: "info", label: `${imageCount} 张图片` });
+  if (isTrainingDirtyText(text) || splitSkillListField(skill.keywords).some(isTrainingDirtyText)) {
+    reasons.push({ level: "danger", label: "疑似脏学习" });
+  }
+  if (text.length > 420) reasons.push({ level: "warn", label: "话术过长" });
+  if (skill.trainingStatus === "needs_optimization") reasons.push({ level: "warn", label: "待优化" });
+  if (skill.trainingStatus === "approved") reasons.push({ level: "ok", label: "已批准" });
+  if (skill.trainingStatus === "optimized") reasons.push({ level: "ok", label: "已优化" });
+  if (skill.enabled === false) reasons.push({ level: "muted", label: "已停用" });
+  return reasons;
+}
+
+function getLatestSkillOverride(skill) {
+  const overrides = Array.isArray(skill.manualOverrides) ? skill.manualOverrides : [];
+  return [...overrides].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0))[0] || null;
+}
+
+function buildSkillTrainingItems(data, options = {}) {
+  const selectedDate = options.date || getShanghaiDateKey();
+  const scope = options.scope || "today";
+  const skills = Array.isArray(data.skills) ? data.skills : [];
+  const items = skills.map((skill) => {
+    const activityDates = getSkillActivityDates(skill);
+    const latestDate = activityDates[0] || null;
+    const latestDateKey = latestDate ? getShanghaiDateKey(latestDate) : "";
+    const text = getSkillServerText(skill);
+    const latestOverride = getLatestSkillOverride(skill);
+    const reasons = getSkillTrainingReasons(skill, text, latestDateKey, selectedDate);
+    const hasIssue = reasons.some((item) => ["danger", "warn"].includes(item.level));
+    const isToday = latestDateKey === selectedDate || (Array.isArray(skill.manualOverrides) && skill.manualOverrides.some((item) => getShanghaiDateKey(item.at) === selectedDate));
+    const include = scope === "all" || isToday || hasIssue || skill.trainingStatus === "needs_optimization";
+    if (!include) return null;
+    return {
+      id: String(skill.id || ""),
+      title: String(skill.title || "未命名 skill"),
+      source: String(skill.source || ""),
+      enabled: skill.enabled !== false,
+      allowAutoReply: Boolean(skill.allowAutoReply),
+      noReply: Boolean(skill.noReply),
+      priority: Number(skill.priority || 0),
+      hitCount: Number(skill.hitCount || 0),
+      revisionCount: Number(skill.revisionCount || 0),
+      platformKey: String(skill.platformKey || ""),
+      intentKey: String(skill.intentKey || ""),
+      trainingStatus: String(skill.trainingStatus || ""),
+      reviewedAt: String(skill.reviewedAt || ""),
+      latestAt: latestDate ? latestDate.toISOString() : "",
+      keywords: Array.isArray(skill.keywords) ? skill.keywords : [],
+      samples: Array.isArray(skill.samples) ? skill.samples : [],
+      currentText: text,
+      proposedText: isTrainingDirtyText(text) ? "" : text,
+      imageUrls: getSkillServerImageUrls(skill),
+      manualOverrideCount: Array.isArray(skill.manualOverrides) ? skill.manualOverrides.length : 0,
+      latestOverride: latestOverride ? {
+        at: latestOverride.at || "",
+        prompt: latestOverride.prompt || "",
+        reply: latestOverride.reply || "",
+        imageUrls: Array.isArray(latestOverride.imageUrls) ? latestOverride.imageUrls : [],
+        count: Number(latestOverride.count || 1)
+      } : null,
+      reasons,
+      recommendation: hasIssue
+        ? "建议先改写、停用或删除这条学习记录。"
+        : "可以批准原样，后续推荐会继续参考。"
+    };
+  }).filter(Boolean);
+
+  return items.sort((a, b) => {
+    const dangerDelta = Number(b.reasons.some((item) => item.level === "danger")) - Number(a.reasons.some((item) => item.level === "danger"));
+    if (dangerDelta) return dangerDelta;
+    const warnDelta = Number(b.reasons.some((item) => item.level === "warn")) - Number(a.reasons.some((item) => item.level === "warn"));
+    if (warnDelta) return warnDelta;
+    return new Date(b.latestAt || 0) - new Date(a.latestAt || 0);
+  });
+}
+
+function summarizeSkillTrainingItems(items, date) {
+  const issueCount = items.filter((item) => item.reasons.some((reason) => ["danger", "warn"].includes(reason.level))).length;
+  const dirtyCount = items.filter((item) => item.reasons.some((reason) => reason.level === "danger")).length;
+  const learnedCount = items.filter((item) => item.source === "learned").length;
+  const overrideCount = items.reduce((sum, item) => sum + Number(item.manualOverrideCount || 0), 0);
+  const imageCount = items.reduce((sum, item) => sum + (Array.isArray(item.imageUrls) ? item.imageUrls.length : 0), 0);
+  const lines = [
+    `${date} 共整理 ${items.length} 条待审 skill。`,
+    `自动学习 ${learnedCount} 条，学习覆盖 ${overrideCount} 条，带图片 ${imageCount} 条。`,
+    issueCount ? `其中 ${issueCount} 条建议人工复核，${dirtyCount} 条疑似脏学习优先处理。` : "当前没有明显异常项，可以逐条批准。"
+  ];
+  return {
+    total: items.length,
+    issueCount,
+    dirtyCount,
+    learnedCount,
+    overrideCount,
+    imageCount,
+    lines
+  };
+}
+
+function applySkillTrainingPatch(skill, patch = {}, action = "approve") {
+  const now = new Date().toISOString();
+  const next = { ...skill };
+  if (patch.title !== undefined) next.title = String(patch.title || next.title || "未命名 skill").trim();
+  if (patch.keywords !== undefined) next.keywords = splitSkillListField(patch.keywords).slice(0, 24);
+  if (patch.samples !== undefined) next.samples = splitSkillListField(patch.samples).slice(0, 14);
+  if (patch.platformKey !== undefined) next.platformKey = String(patch.platformKey || "").trim();
+  if (patch.intentKey !== undefined) next.intentKey = String(patch.intentKey || "").trim();
+  if (patch.allowAutoReply !== undefined) next.allowAutoReply = Boolean(patch.allowAutoReply);
+  if (patch.noReply !== undefined) next.noReply = Boolean(patch.noReply);
+  if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled);
+  if (patch.replyText !== undefined) {
+    const replyText = String(patch.replyText || "").trim();
+    const imageUrls = patch.imageUrls !== undefined
+      ? splitSkillListField(patch.imageUrls)
+      : getSkillServerImageUrls(skill);
+    next.replySteps = [
+      replyText ? { type: "text", content: replyText, url: "", label: "" } : null,
+      ...imageUrls.map((url, index) => ({ type: "image", content: "", url, label: `skill 图片 ${index + 1}` }))
+    ].filter(Boolean);
+    next.fallback = replyText;
+  }
+  if (action === "optimized") {
+    next.revisionCount = Number(next.revisionCount || 0) + 1;
+    next.lastOptimizedAt = now;
+  }
+  next.trainingStatus = action;
+  next.reviewedAt = now;
+  next.trainingNote = String(patch.note || next.trainingNote || "").trim();
+  next.updatedAt = now;
+  return next;
+}
+
+async function handleSkillTraining(req, res) {
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+  const data = readReplySkills();
+
+  if (req.method === "GET") {
+    const date = url.searchParams.get("date") || getShanghaiDateKey();
+    const scope = url.searchParams.get("scope") || "today";
+    const items = buildSkillTrainingItems(data, { date, scope });
+    sendJson(res, 200, {
+      success: true,
+      date,
+      scope,
+      summary: summarizeSkillTrainingItems(items, date),
+      items
+    });
+    return;
+  }
+
+  if (req.method !== "POST") {
+    sendJson(res, 405, { success: false, message: "Method not allowed" });
+    return;
+  }
+
+  try {
+    const body = await readBody(req);
+    const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
+    const action = String(payload.action || "").trim();
+    const skillId = String(payload.skillId || "").trim();
+    const skillIndex = data.skills.findIndex((skill) => String(skill.id || "") === skillId);
+    if (skillIndex < 0) throw new Error("没有找到要训练的 skill");
+
+    if (action === "delete") {
+      data.skills.splice(skillIndex, 1);
+    } else if (action === "disable") {
+      data.skills[skillIndex] = applySkillTrainingPatch(data.skills[skillIndex], { ...(payload.patch || {}), enabled: false }, "disabled");
+    } else if (action === "needs-review") {
+      data.skills[skillIndex] = applySkillTrainingPatch(data.skills[skillIndex], payload.patch || {}, "needs_optimization");
+    } else if (action === "clear-overrides") {
+      data.skills[skillIndex] = {
+        ...data.skills[skillIndex],
+        manualOverrides: [],
+        lastManualOverrideAt: null,
+        trainingStatus: "overrides_cleared",
+        reviewedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+    } else if (action === "approve") {
+      data.skills[skillIndex] = applySkillTrainingPatch(data.skills[skillIndex], payload.patch || {}, "approved");
+    } else if (action === "optimize") {
+      data.skills[skillIndex] = applySkillTrainingPatch(data.skills[skillIndex], payload.patch || {}, "optimized");
+    } else {
+      throw new Error("不支持的训练动作");
+    }
+
+    const next = writeReplySkills(data);
+    const date = payload.date || getShanghaiDateKey();
+    const scope = payload.scope || "today";
+    const items = buildSkillTrainingItems(next, { date, scope });
+    sendJson(res, 200, {
+      success: true,
+      message: "skill 训练已保存",
+      date,
+      scope,
+      summary: summarizeSkillTrainingItems(items, date),
+      items
+    });
+  } catch (error) {
+    sendJson(res, 400, { success: false, message: error.message || "skill 训练失败" });
+  }
+}
+
 function firstNonEmpty(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "");
 }
@@ -1589,6 +1878,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url.startsWith("/local/reply-skills/learn")) {
     await handleReplySkillLearn(req, res);
+    return;
+  }
+
+  if (req.url.startsWith("/local/skill-training")) {
+    await handleSkillTraining(req, res);
     return;
   }
 
