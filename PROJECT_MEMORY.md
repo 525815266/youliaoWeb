@@ -61,6 +61,7 @@
 61. [2026-06-12 右侧工具栏、Skill 学习与红点滚动修复](#61-2026-06-12-右侧工具栏skill-学习与红点滚动修复)
 62. [2026-06-13 底部会话分类红点与未读跳转修复](#62-2026-06-13-底部会话分类红点与未读跳转修复)
 63. [2026-06-13 SQLite 回退恢复与图片发送性能修复](#63-2026-06-13-sqlite-回退恢复与图片发送性能修复)
+68. [2026-06-13 Skill 队列式训练与相似学习聚类](#68-2026-06-13-skill-队列式训练与相似学习聚类)
 
 ## 1. 项目目标
 
@@ -4562,4 +4563,147 @@ Invoke-RestMethod -Uri "http://localhost:5177/local/skill-training?scope=today"
 - 浏览器打开 `http://localhost:5177/skill-training.html` 可正常渲染统计、待审卡片和批复按钮。
 
 注意：因为新增了 `server.js` 路由，本次已重启本地 `5177` 的 `node server.js`，仍使用原端口，不换端口。
+
+## 68. 2026-06-13 Skill 队列式训练与相似学习聚类
+
+### 1. 用户反馈
+
+用户指出训练中心仍然不智能：
+
+- 不应该“回复一次就训练一次”。
+- 相似回复应先归并成一类训练样本。
+- 客户首次提问、客户追问、客服补充引导是不同阶段，不能互相覆盖。
+- 客服采用推荐后又手动修改，或客户后续继续追问时，不能把后续回复反向优化掉一开始正确的 skill。
+- 图片被偶然学进去后，需要能在训练页删掉或改掉。
+- 训练页面应该一次只显示一条，处理后自动进入下一条，不要保存后跳到顶部。
+
+### 2. 学习策略修复
+
+相关文件：
+
+- `public/app.js`
+- `server.js`
+- `public/skill-training.js`
+- `public/skill-training.css`
+- `public/skill-training.html`
+
+核心变化：
+
+- `getSkillReplyProfile()` 不再因为 `manualOverrides` 累计 3 次就自动使用覆盖话术。
+- 覆盖样本只有在 `override.approved === true`、`override.trainingStatus === "approved"`、`skill.useManualOverrides === true` 或显式 `forceLearned` 时才会替代基线。
+- `learnFromManualReply()` 未命中正式 skill 时，不再直接创建可用的正式自动学习 skill。
+- 新的未命中学习会写入候选池：
+  - `learningMode = "review_queue"`
+  - `trainingStatus = "needs_optimization"`
+  - 新候选默认 `enabled = false`
+  - 新候选默认 `allowAutoReply = false`
+- 同类候选按 `learningBucketKey` 聚合，组成规则为：
+  - 平台：如 `taobao`、`jd`、`pdd`
+  - 意图：如 `order_missing`、`bind_failed`、`withdraw_query`
+  - 阶段：`first_answer` 或 `customer_followup`
+  - 关键词签名
+- `learnMatchedSkillOverride()` 命中已有 skill 时只追加训练覆盖样本，并把 skill 标记为待优化；不再自动提高优先级、打开自动回复或反写正式话术。
+
+### 3. 对话阶段
+
+新增：
+
+- `getLearningStageForMessage(latest)`
+- `buildLearningBucketKey(prompt, contextMeta, learningStage)`
+- `findLearnedSkillForBucket(prompt, contextMeta, learningStage)`
+- `mergeManualTrainingOverride(overrides, override)`
+
+阶段规则：
+
+- 如果客户消息之前最近一次有效消息是客服回复，则标记为 `customer_followup`。
+- 否则标记为 `first_answer`。
+- 这样客户追问后的补充解释，不会覆盖首次答复流程。
+
+### 4. 训练中心队列 UI
+
+训练页从“多卡片列表”改为“单条审核队列”：
+
+- 页面只渲染一条 `.training-card`。
+- 顶部显示 `第 X / N 条`。
+- 左右按钮支持上一条/下一条。
+- 进度条用小胶囊显示风险状态。
+- 保存优化、批准、删除、停用、清空覆盖后自动推进到下一条。
+- 普通刷新会尽量保留当前审核位置。
+- 方向键左右可以切换训练项。
+
+训练卡片分三栏：
+
+- `相似场景`：关键词、样本、阶段、最近人工回复、相似问法。
+- `当前入库`：当前正式话术、当前图片、人工回复变体。
+- `审核编辑`：标题、平台、意图、关键词、样本问题、回复文案、图片 URL、备注、自动回复/无需回复开关。
+
+图片处理：
+
+- `imageUrls` 现在是独立编辑字段。
+- 可从当前 skill、最近人工回复或某个回复变体填入图片。
+- 保存优化时服务端按 `imageUrls` 重建图片步骤，所以误学进去的图片可以删掉。
+
+### 5. AI 整理
+
+训练卡片新增 `AI 整理`：
+
+- 读取和工作台一致的 localStorage AI 渠道配置。
+- 支持 sub2、DeepSeek、CodeBuddy 的 OpenAI 兼容中转。
+- 只让 AI 生成候选 JSON：
+  - `title`
+  - `keywords`
+  - `samples`
+  - `replyText`
+  - `note`
+  - `allowAutoReply`
+  - `noReply`
+- AI 不会直接写入 skill 文件，必须用户再点 `保存优化` 或 `批准启用`。
+
+### 6. 服务端训练摘要
+
+`server.js` 新增训练摘要 helpers：
+
+- `normalizeTrainingComparableText()`
+- `uniqueTrainingList()`
+- `getTrainingStageLabel()`
+- `buildSkillManualTrainingSummary()`
+- `chooseSkillTrainingProposalText()`
+- `chooseSkillTrainingImages()`
+
+`GET /local/skill-training` 现在返回：
+
+- `promptVariants`
+- `replyVariants`
+- `stageLabels`
+- `storedImageUrls`
+- `learningMode`
+- `learningBucketKey`
+- `learningStage`
+
+`manualOverrides` 保留上限从 12 条提升到 24 条，方便聚类训练时看到更多真实人工样本。
+
+### 7. 验证
+
+已执行：
+
+```powershell
+npm run check
+git diff --check
+Invoke-RestMethod -Uri "http://localhost:5177/health"
+Invoke-RestMethod -Uri "http://localhost:5177/local/skill-training?scope=today"
+```
+
+浏览器烟测：
+
+- 使用 Playwright 打开 `http://localhost:5177/skill-training.html`。
+- 页面只渲染 `1` 条训练卡片。
+- 队列显示 `第 1 / 14 条`。
+- 接口项已带 `replyVariants` 和 `promptVariants`。
+- 训练页没有 JS 页面错误；仅 favicon 404。
+
+注意：
+
+- `data/reply-skills.json` 是运行时学习数据，本次不提交。
+- `logs/api-capture.ndjson` 是运行抓包日志，本次不提交。
+- 本次已重启本地 `5177` 服务，仍使用原端口。
 

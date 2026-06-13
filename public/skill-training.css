@@ -254,6 +254,88 @@
   gap: 10px;
 }
 
+.training-queue {
+  display: grid;
+  gap: 10px;
+}
+
+.training-queue-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #d6e6f7;
+  border-radius: 6px;
+  background: #f8fbff;
+}
+
+.training-queue-bar > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.training-queue-bar strong {
+  color: #172846;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.training-queue-bar span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.training-queue-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.training-queue-rail {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 18px;
+  padding: 0 2px;
+}
+
+.queue-dot {
+  width: 22px;
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: #cad8ea;
+  transition: width 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.queue-dot.warn {
+  background: #f5c56e;
+}
+
+.queue-dot.danger {
+  background: #f28d97;
+}
+
+.queue-dot.ok {
+  background: #8bd2a6;
+}
+
+.queue-dot.is-active {
+  width: 34px;
+  background: var(--you-blue);
+  box-shadow: 0 0 0 3px rgba(22, 141, 242, 0.14);
+}
+
+.queue-ellipsis {
+  color: #8a97aa;
+  font-size: 12px;
+}
+
 .training-card {
   display: grid;
   gap: 10px;
@@ -301,7 +383,7 @@
 
 .training-card-grid {
   display: grid;
-  grid-template-columns: minmax(240px, 0.9fr) minmax(260px, 1fr) minmax(320px, 1.15fr);
+  grid-template-columns: minmax(250px, 0.95fr) minmax(270px, 1fr) minmax(340px, 1.2fr);
   gap: 10px;
   align-items: stretch;
 }
@@ -318,6 +400,10 @@
   margin: 0 0 8px;
   color: #24344d;
   font-size: 13px;
+}
+
+.training-cluster {
+  background: #f9fcff;
 }
 
 .training-kv {
@@ -371,6 +457,68 @@
   font-size: 12px;
 }
 
+.training-mini-list,
+.training-variants {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px dashed #d6e2ef;
+}
+
+.training-mini-list > span,
+.training-variants > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.training-mini-list p {
+  margin: 0;
+  color: #263348;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.training-variant {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  min-height: 54px;
+  padding: 8px 58px 8px 8px;
+  border: 1px solid #dbe8f5;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.training-variant strong {
+  color: #0d63c7;
+  font-size: 12px;
+}
+
+.training-variant p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #1f2e45;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.variant-fill {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  height: 26px;
+  border: 1px solid #bdd8f4;
+  border-radius: 5px;
+  color: #0d63c7;
+  background: #f0f7ff;
+  font-size: 12px;
+}
+
 .training-images {
   display: flex;
   flex-wrap: wrap;
@@ -400,6 +548,12 @@
   gap: 8px;
 }
 
+.training-editor-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(90px, 0.6fr) minmax(110px, 0.7fr);
+  gap: 8px;
+}
+
 .training-editor label {
   display: grid;
   gap: 4px;
@@ -426,6 +580,15 @@
   line-height: 1.5;
 }
 
+.training-editor textarea[data-field="samples"],
+.training-editor textarea[data-field="imageUrls"] {
+  min-height: 64px;
+}
+
+.training-editor textarea[data-field="replyText"] {
+  min-height: 112px;
+}
+
 .training-toggles {
   display: flex;
   align-items: center;
@@ -442,11 +605,18 @@
 }
 
 .training-card-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  padding-top: 2px;
+  margin: 0 -12px -12px;
+  padding: 8px 12px;
+  border-top: 1px solid #dbe8f5;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: rgba(255, 255, 255, 0.96);
 }
 
 .training-action-spacer {
@@ -503,6 +673,10 @@
     grid-template-columns: 1fr;
   }
 
+  .training-editor-row {
+    grid-template-columns: 1fr;
+  }
+
   .training-check {
     margin-left: 0;
   }
@@ -511,7 +685,8 @@
 @media (max-width: 680px) {
   .training-topbar,
   .training-list-head,
-  .training-card-head {
+  .training-card-head,
+  .training-queue-bar {
     align-items: stretch;
     flex-direction: column;
   }

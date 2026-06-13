@@ -8844,7 +8844,9 @@ function getSkillReplyProfile(skill, options = {}) {
     override &&
     (
       options.forceLearned ||
-      overrideConfidence >= 3
+      override.approved === true ||
+      override.trainingStatus === "approved" ||
+      skill.useManualOverrides === true
     )
   );
   const steps = shouldUseOverride
@@ -9001,6 +9003,83 @@ function canLearnAsMatchedSkill(skill, latest, prompt, contextMeta, matchedOptio
   return Number(match.score || 0) >= 18;
 }
 
+function getLearningStageForMessage(latest) {
+  if (!latest) return "first_answer";
+  const latestKey = getMessageKey(latest, 0);
+  const latestIndex = state.messages.findIndex((message, index) => getMessageKey(message, index) === latestKey);
+  if (latestIndex <= 0) return "first_answer";
+  const previousAction = state.messages
+    .slice(0, latestIndex)
+    .reverse()
+    .find((message) => message && ["incoming", "outgoing"].includes(message.direction) && !message.isSystemNotice);
+  if (previousAction?.direction === "outgoing") return "customer_followup";
+  return "first_answer";
+}
+
+function buildLearningBucketKey(prompt, contextMeta = {}, learningStage = "") {
+  const keywords = extractLearningKeywords(prompt)
+    .map(normalizeForMatch)
+    .filter(Boolean)
+    .slice(0, 4);
+  return [
+    "learn",
+    contextMeta.platformKey || "all",
+    contextMeta.intentKey || "general",
+    learningStage || "first_answer",
+    keywords.slice(0, 3).join("_") || normalizeForMatch(prompt).slice(0, 18)
+  ].join(":");
+}
+
+function findLearnedSkillForBucket(prompt, contextMeta = {}, learningStage = "") {
+  const bucketKey = buildLearningBucketKey(prompt, contextMeta, learningStage);
+  const exact = state.replySkills.find((skill) => String(skill.learningBucketKey || "") === bucketKey);
+  if (exact) return exact;
+  const fallback = findLearnedSkillForPrompt(prompt);
+  if (!fallback) return null;
+  if (contextMeta.platformKey && getSkillPlatformKeys(fallback).length && !getSkillPlatformKeys(fallback).includes(contextMeta.platformKey)) return null;
+  if (contextMeta.intentKey && getSkillIntentKeys(fallback).length && !getSkillIntentKeys(fallback).includes(contextMeta.intentKey)) return null;
+  if (fallback.learningStage && learningStage && fallback.learningStage !== learningStage) return null;
+  return fallback;
+}
+
+function uniqueSkillStrings(values, limit = 24) {
+  const seen = new Set();
+  const result = [];
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    const key = normalizeForMatch(text);
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push(text);
+  });
+  return result.slice(0, limit);
+}
+
+function mergeManualTrainingOverride(overrides = [], override) {
+  const normalizedPrompt = normalizeForMatch(override.prompt);
+  const normalizedReply = normalizeForMatch(override.reply);
+  const imageKey = (override.imageUrls || []).map((url) => normalizeImageUrl(url)).filter(Boolean).join("|");
+  const duplicateIndex = overrides.findIndex((item) => (
+    normalizeForMatch(item.prompt) === normalizedPrompt &&
+    normalizeForMatch(item.reply) === normalizedReply &&
+    (Array.isArray(item.imageUrls) ? item.imageUrls.map((url) => normalizeImageUrl(url)).filter(Boolean).join("|") : "") === imageKey &&
+    String(item.platformKey || "") === String(override.platformKey || "") &&
+    String(item.intentKey || "") === String(override.intentKey || "") &&
+    String(item.learningStage || "") === String(override.learningStage || "")
+  ));
+  if (duplicateIndex >= 0) {
+    return overrides.map((item, index) => index === duplicateIndex
+      ? { ...item, ...override, count: Number(item.count || 1) + 1 }
+      : item);
+  }
+  return [{ ...override, count: 1 }, ...overrides];
+}
+
+function getManualOverrideTotalCount(overrides = []) {
+  return overrides.reduce((sum, item) => sum + Math.max(1, Number(item.count || 1)), 0);
+}
+
 async function learnFromManualReply(content, imageUrls = [], options = {}) {
   if (!state.skillAutoLearn) return;
   const latest = getLatestActionableInboundMessage();
@@ -9037,24 +9116,54 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
     return;
   }
 
-  const existing = findLearnedSkillForPrompt(prompt);
-  const nextHitCount = Number(existing?.hitCount || existing?.learnCount || 0) + 1;
+  const learningStage = getLearningStageForMessage(latest);
+  const learningBucketKey = buildLearningBucketKey(prompt, {
+    ...contextMeta,
+    platformKey: detectedPlatformKey,
+    intentKey: detectedIntentKey
+  }, learningStage);
+  const existing = findLearnedSkillForBucket(prompt, {
+    ...contextMeta,
+    platformKey: detectedPlatformKey,
+    intentKey: detectedIntentKey
+  }, learningStage);
+  const override = {
+    at: new Date().toISOString(),
+    prompt,
+    reply,
+    imageUrls: images,
+    contactId: getContactId(state.activeContact),
+    messageKey: getMessageKey(latest, 0),
+    platformKey: detectedPlatformKey,
+    intentKey: detectedIntentKey,
+    learningStage
+  };
+  const overrides = mergeManualTrainingOverride(Array.isArray(existing?.manualOverrides) ? existing.manualOverrides : [], override).slice(0, 24);
+  const nextHitCount = getManualOverrideTotalCount(overrides);
+  const hasStableBase = Array.isArray(existing?.replySteps) && existing.replySteps.length;
 
   const skill = {
-    id: existing?.id,
+    id: existing?.id || `learned-${Date.now()}`,
     title: existing?.title || `自动学习：${prompt.slice(0, 18)}`,
     source: "learned",
-    enabled: true,
-    allowAutoReply: existing?.allowAutoReply || nextHitCount >= 3,
+    enabled: existing ? existing.enabled !== false : false,
+    allowAutoReply: Boolean(existing?.allowAutoReply),
     noReply: false,
-    priority: Math.max(Number(existing?.priority || 45), nextHitCount >= 3 ? 70 : 45),
+    priority: Math.max(Number(existing?.priority || 45), 45),
     hitCount: nextHitCount,
     platformKey: existing?.platformKey || detectedPlatformKey,
     intentKey: existing?.intentKey || detectedIntentKey,
+    learningMode: "review_queue",
+    learningBucketKey,
+    learningStage,
+    trainingStatus: "needs_optimization",
     keywords: [...new Set([...(existing?.keywords || []), ...extractLearningKeywords(prompt)])].slice(0, 20),
-    samples: [...new Set([...(existing?.samples || []), prompt])].slice(0, 10),
-    replySteps: steps,
-    fallback: reply || existing?.fallback || ""
+    samples: uniqueSkillStrings([...(existing?.samples || []), prompt, ...overrides.map((item) => item.prompt)], 14),
+    manualOverrides: overrides,
+    lastManualOverrideAt: override.at,
+    revisionCount: Number(existing?.revisionCount || 0) + 1,
+    replySteps: hasStableBase ? existing.replySteps : steps,
+    fallback: existing?.fallback || reply || ""
   };
 
   try {
@@ -9066,7 +9175,7 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
     const payload = await response.json();
     if (response.ok && Array.isArray(payload.skills)) {
       state.replySkills = payload.skills;
-      log("reply skill learned", { prompt, reply, images, hitCount: nextHitCount });
+      log("reply skill queued for training", { prompt, reply, images, hitCount: nextHitCount, learningBucketKey, learningStage });
     }
   } catch (error) {
     log("reply skill learn failed", { error: error.message, prompt });
@@ -9076,13 +9185,15 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
 async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, latest, platformKey = "", intentKey = "" }) {
   const overrides = Array.isArray(skill.manualOverrides) ? [...skill.manualOverrides] : [];
   const latestKey = latest ? getMessageKey(latest, 0) : "";
+  const learningStage = getLearningStageForMessage(latest);
   const imageKey = images.map((url) => normalizeImageUrl(url)).filter(Boolean).join("|");
   const duplicateIndex = overrides.findIndex((item) => (
     normalizeForMatch(item.prompt) === normalizeForMatch(prompt) &&
     normalizeForMatch(item.reply) === normalizeForMatch(reply) &&
     (Array.isArray(item.imageUrls) ? item.imageUrls.map((url) => normalizeImageUrl(url)).filter(Boolean).join("|") : "") === imageKey &&
     String(item.platformKey || "") === String(platformKey || "") &&
-    String(item.intentKey || "") === String(intentKey || "")
+    String(item.intentKey || "") === String(intentKey || "") &&
+    String(item.learningStage || "") === String(learningStage || "")
   ));
   const override = {
     at: new Date().toISOString(),
@@ -9092,7 +9203,8 @@ async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, 
     contactId: getContactId(state.activeContact),
     messageKey: latestKey,
     platformKey,
-    intentKey
+    intentKey,
+    learningStage
   };
 
   if (duplicateIndex >= 0) {
@@ -9108,20 +9220,17 @@ async function learnMatchedSkillOverride(skill, { prompt, reply, images, steps, 
   const totalOverrideCount = overrides.reduce((sum, item) => sum + Number(item.count || 1), 0);
   const nextSkill = {
     ...skill,
-    manualOverrides: overrides.slice(0, 12),
+    manualOverrides: overrides.slice(0, 24),
     lastManualOverrideAt: override.at,
     samples: [...new Set([...(skill.samples || []), prompt])].slice(0, 14),
     keywords: [...new Set([...(skill.keywords || []), ...extractLearningKeywords(prompt)])].slice(0, 24),
     revisionCount: Number(skill.revisionCount || 0) + 1,
     platformKey: skill.platformKey || platformKey,
-    intentKey: skill.intentKey || intentKey
+    intentKey: skill.intentKey || intentKey,
+    learningMode: "review_queue",
+    learningStage: skill.learningStage || learningStage,
+    trainingStatus: "needs_optimization"
   };
-
-  if (totalOverrideCount >= 3) {
-    nextSkill.priority = Math.max(Number(skill.priority || 50), 75);
-    nextSkill.allowAutoReply = skill.allowAutoReply !== false;
-    nextSkill.lastAutoRevisedAt = override.at;
-  }
 
   try {
     await replaceReplySkill(nextSkill);

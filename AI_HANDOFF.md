@@ -2518,3 +2518,151 @@ Do not regress:
   - `data/reply-skills.json`
   - `logs/api-capture.ndjson`
 
+## 2026-06-13 Handoff: Skill Training Queue And Clustered Learning
+
+User correction:
+
+- Skill learning was still too dumb.
+- Do not train one skill from every single manual reply.
+- Similar customer questions and similar manual replies must be clustered first.
+- Initial answers and later customer follow-up answers are different stages and must not overwrite each other.
+- AI may help organize candidates, but it must not silently write final skill changes.
+- The training page should show one item at a time, then advance after approve/optimize/delete/disable/clear.
+
+Files changed:
+
+- `public/app.js`
+- `server.js`
+- `public/skill-training.html`
+- `public/skill-training.css`
+- `public/skill-training.js`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Frontend learning changes in `public/app.js`:
+
+- `getSkillReplyProfile()` no longer uses a manual override merely because `count >= 3`.
+- Manual override text can replace the baseline only if:
+  - `override.approved === true`
+  - `override.trainingStatus === "approved"`
+  - `skill.useManualOverrides === true`
+  - or caller passes `forceLearned`
+- `learnFromManualReply()` now writes unmatched manual replies into a review queue:
+  - `learningMode = "review_queue"`
+  - `trainingStatus = "needs_optimization"`
+  - new learned candidates default `enabled = false`
+  - new learned candidates default `allowAutoReply = false`
+- `learnMatchedSkillOverride()` now only appends review samples and marks the skill as needing optimization. It no longer auto-raises priority, enables auto-reply, or rewrites formal reply steps after 3 overrides.
+
+New frontend helpers:
+
+- `getLearningStageForMessage(latest)`
+- `buildLearningBucketKey(prompt, contextMeta, learningStage)`
+- `findLearnedSkillForBucket(prompt, contextMeta, learningStage)`
+- `uniqueSkillStrings(values, limit)`
+- `mergeManualTrainingOverride(overrides, override)`
+- `getManualOverrideTotalCount(overrides)`
+
+Learning bucket fields:
+
+- platform: `taobao`, `jd`, `pdd`, etc.
+- intent: `order_missing`, `bind_failed`, `withdraw_query`, etc.
+- stage:
+  - `first_answer`
+  - `customer_followup`
+- keyword signature from `extractLearningKeywords(prompt)`
+
+Server training summary changes in `server.js`:
+
+- `normalizeLearnedSkill()` preserves:
+  - `learningMode`
+  - `learningBucketKey`
+  - `learningStage`
+  - `trainingStatus`
+  - `trainingNote`
+  - `reviewedAt`
+  - `updatedAt`
+- `manualOverrides` retention increased from 12 to 24.
+- `buildSkillManualTrainingSummary(skill)` returns clustered:
+  - prompt variants
+  - reply variants
+  - image variants
+  - stage labels
+- `buildSkillTrainingItems()` now includes:
+  - `promptVariants`
+  - `replyVariants`
+  - `stageLabels`
+  - `storedImageUrls`
+  - `learningMode`
+  - `learningBucketKey`
+  - `learningStage`
+- `chooseSkillTrainingProposalText()` prefers the strongest manual reply variant only for dirty/needs-review/disabled candidate items.
+- `chooseSkillTrainingImages()` exposes manual override images when the base skill has no stored images.
+- `applySkillTrainingPatch()` saves `imageUrls` independently and enables candidates on `approved` / `optimized`.
+
+Training page behavior:
+
+- URL remains `http://localhost:5177/skill-training.html`.
+- Page renders one `.training-card` at a time, not a list of all cards.
+- Header shows `第 X / N 条`.
+- Queue rail shows risk state with small dots.
+- `上一条` / `下一条` buttons and left/right arrow keys navigate the queue.
+- After POST actions, `advanceAfterAction()` moves to the next visible item without jumping the page to top.
+- `isCompletedItem()` removes `approved`, `optimized`, `disabled`, and `overrides_cleared` from the default “只看需要处理” queue.
+
+Training page editor:
+
+- Editable fields:
+  - title
+  - platformKey
+  - intentKey
+  - keywords
+  - samples
+  - replyText
+  - imageUrls
+  - note
+  - allowAutoReply
+  - noReply
+- Local fill actions:
+  - current stored text/images
+  - latest manual reply
+  - latest manual images
+  - individual reply variants
+
+AI organize:
+
+- Button: `AI 整理`.
+- Uses the same localStorage provider keys as the main workbench:
+  - `youchat.ai.provider`
+  - `youchat.ai.providers`
+- Fallback presets exist in `public/skill-training.js` for sub2, DeepSeek, and CodeBuddy.
+- Calls `/ai/chat/completions` and expects JSON fields:
+  - `title`
+  - `keywords`
+  - `samples`
+  - `replyText`
+  - `note`
+  - `allowAutoReply`
+  - `noReply`
+- AI result only fills the editor. It does not save until the user clicks approve/optimize.
+
+Verification:
+
+- Restarted `node server.js` on the same port `5177`.
+- `npm run check` passed.
+- `git diff --check` passed with only CRLF warnings.
+- `GET /local/skill-training?scope=today` returned items with `replyVariants` and `promptVariants`.
+- Playwright smoke test:
+  - rendered exactly one non-skeleton training card
+  - queue count was `第 1 / 14 条`
+  - no page JS error; favicon 404 only
+
+Do not regress:
+
+- Do not restore the old `count >= 3` automatic override rule.
+- Do not make new learned candidates enabled/auto-reply before review.
+- Do not remove `learningStage` from duplicate matching, or customer follow-up replies can pollute first-answer skills again.
+- Do not commit runtime files:
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+

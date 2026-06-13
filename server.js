@@ -400,7 +400,14 @@ function normalizeLearnedSkill(skill) {
   if (Array.isArray(skill.platformKeys)) normalized.platformKeys = skill.platformKeys.map(String).filter(Boolean).slice(0, 6);
   if (skill.intentKey) normalized.intentKey = String(skill.intentKey);
   if (Array.isArray(skill.intentKeys)) normalized.intentKeys = skill.intentKeys.map(String).filter(Boolean).slice(0, 8);
-  if (Array.isArray(skill.manualOverrides)) normalized.manualOverrides = skill.manualOverrides.slice(0, 12);
+  if (Array.isArray(skill.manualOverrides)) normalized.manualOverrides = skill.manualOverrides.slice(0, 24);
+  if (skill.learningMode) normalized.learningMode = String(skill.learningMode);
+  if (skill.learningBucketKey) normalized.learningBucketKey = String(skill.learningBucketKey);
+  if (skill.learningStage) normalized.learningStage = String(skill.learningStage);
+  if (skill.trainingStatus) normalized.trainingStatus = String(skill.trainingStatus);
+  if (skill.trainingNote) normalized.trainingNote = String(skill.trainingNote);
+  if (skill.reviewedAt) normalized.reviewedAt = String(skill.reviewedAt);
+  if (skill.updatedAt) normalized.updatedAt = String(skill.updatedAt);
   if (Number.isFinite(Number(skill.revisionCount))) normalized.revisionCount = Number(skill.revisionCount);
   if (skill.lastManualOverrideAt) normalized.lastManualOverrideAt = String(skill.lastManualOverrideAt);
   if (skill.lastAutoRevisedAt) normalized.lastAutoRevisedAt = String(skill.lastAutoRevisedAt);
@@ -518,6 +525,120 @@ function splitSkillListField(value) {
     .filter(Boolean);
 }
 
+function normalizeTrainingComparableText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[，。！？、,.!?;；:："'“”‘’（）()【】[\]{}]/g, "")
+    .trim();
+}
+
+function uniqueTrainingList(values, limit = 12) {
+  const seen = new Set();
+  const result = [];
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    const key = normalizeTrainingComparableText(text);
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push(text);
+  });
+  return result.slice(0, limit);
+}
+
+function getTrainingStageLabel(stage) {
+  const map = {
+    first_answer: "首次答复",
+    customer_followup: "客户追问",
+    after_service_reply: "客服补充",
+    no_reply_guidance: "未回复引导"
+  };
+  return map[String(stage || "")] || "";
+}
+
+function getSkillOverrideImages(override) {
+  return Array.isArray(override?.imageUrls)
+    ? override.imageUrls.map((url) => String(url || "").trim()).filter(Boolean)
+    : [];
+}
+
+function buildSkillManualTrainingSummary(skill) {
+  const overrides = Array.isArray(skill.manualOverrides) ? skill.manualOverrides : [];
+  const replyMap = new Map();
+  const promptValues = [];
+  const imageValues = [];
+  const stageValues = [];
+
+  overrides.forEach((override) => {
+    const count = Math.max(1, Number(override?.count || 1));
+    const prompt = String(override?.prompt || "").trim();
+    const reply = String(override?.reply || "").trim();
+    const images = getSkillOverrideImages(override);
+    if (prompt) promptValues.push(prompt);
+    images.forEach((url) => imageValues.push(url));
+    if (override?.learningStage) stageValues.push(override.learningStage);
+
+    const key = [
+      normalizeTrainingComparableText(reply) || "[图片回复]",
+      images.map(normalizeTrainingComparableText).join("|"),
+      String(override?.platformKey || ""),
+      String(override?.intentKey || ""),
+      String(override?.learningStage || "")
+    ].join("::");
+    const existing = replyMap.get(key) || {
+      reply,
+      imageUrls: [],
+      prompts: [],
+      count: 0,
+      latestAt: "",
+      platformKey: String(override?.platformKey || ""),
+      intentKey: String(override?.intentKey || ""),
+      learningStage: String(override?.learningStage || "")
+    };
+    existing.count += count;
+    existing.imageUrls = uniqueTrainingList([...existing.imageUrls, ...images], 8);
+    existing.prompts = uniqueTrainingList([...existing.prompts, prompt], 6);
+    if (!existing.reply && reply) existing.reply = reply;
+    if (!existing.latestAt || new Date(override?.at || 0) > new Date(existing.latestAt || 0)) {
+      existing.latestAt = String(override?.at || "");
+    }
+    replyMap.set(key, existing);
+  });
+
+  const replyVariants = [...replyMap.values()]
+    .sort((a, b) => (
+      Number(b.count || 0) - Number(a.count || 0) ||
+      new Date(b.latestAt || 0).getTime() - new Date(a.latestAt || 0).getTime()
+    ))
+    .slice(0, 6);
+  const totalCount = overrides.reduce((sum, item) => sum + Math.max(1, Number(item?.count || 1)), 0);
+
+  return {
+    totalCount,
+    rawCount: overrides.length,
+    promptVariants: uniqueTrainingList(promptValues, 8),
+    replyVariants,
+    imageUrls: uniqueTrainingList(imageValues, 12),
+    stageLabels: uniqueTrainingList(stageValues.map(getTrainingStageLabel).filter(Boolean), 4)
+  };
+}
+
+function chooseSkillTrainingProposalText(skill, currentText, manualSummary) {
+  const bestVariant = manualSummary?.replyVariants?.find((item) => String(item.reply || "").trim());
+  if (bestVariant?.reply && (isTrainingDirtyText(currentText) || String(skill.trainingStatus || "") === "needs_optimization" || skill.enabled === false)) {
+    return bestVariant.reply;
+  }
+  return isTrainingDirtyText(currentText) ? "" : currentText;
+}
+
+function chooseSkillTrainingImages(skill, manualSummary) {
+  const current = getSkillServerImageUrls(skill);
+  if (current.length) return current;
+  const variantImages = manualSummary?.replyVariants?.flatMap((item) => item.imageUrls || []) || [];
+  return uniqueTrainingList([...(manualSummary?.imageUrls || []), ...variantImages], 12);
+}
+
 function isTrainingDirtyText(text) {
   const value = String(text || "").trim();
   if (!value) return true;
@@ -532,14 +653,18 @@ function getSkillTrainingReasons(skill, text, latestDateKey, selectedDateKey) {
   const overrides = Array.isArray(skill.manualOverrides) ? skill.manualOverrides : [];
   const todayOverrides = overrides.filter((item) => getShanghaiDateKey(item.at) === selectedDateKey);
   const imageCount = getSkillServerImageUrls(skill).length;
+  const manualSummary = buildSkillManualTrainingSummary(skill);
 
   if (source === "learned") reasons.push({ level: "info", label: "自动学习" });
   if (source === "manual") reasons.push({ level: "ok", label: "手动沉淀" });
+  if (skill.learningMode === "review_queue") reasons.push({ level: "warn", label: "待训练候选" });
   if (todayOverrides.length) reasons.push({ level: "warn", label: `今日覆盖 ${todayOverrides.length}` });
-  if (overrides.length >= 3) reasons.push({ level: "warn", label: `覆盖 ${overrides.length}` });
+  if (manualSummary.totalCount >= 2) reasons.push({ level: "warn", label: `相似样本 ${manualSummary.totalCount}` });
+  if (manualSummary.replyVariants.length >= 2) reasons.push({ level: "warn", label: `话术变体 ${manualSummary.replyVariants.length}` });
+  if (manualSummary.stageLabels.length) reasons.push({ level: "info", label: manualSummary.stageLabels[0] });
   if (String(latestDateKey) === String(selectedDateKey)) reasons.push({ level: "info", label: "今日变动" });
-  if (imageCount) reasons.push({ level: "info", label: `${imageCount} 张图片` });
-  if (isTrainingDirtyText(text) || splitSkillListField(skill.keywords).some(isTrainingDirtyText)) {
+  if (imageCount || manualSummary.imageUrls.length) reasons.push({ level: "info", label: `${Math.max(imageCount, manualSummary.imageUrls.length)} 张图片` });
+  if ((text || !(imageCount || manualSummary.imageUrls.length)) && (isTrainingDirtyText(text) || splitSkillListField(skill.keywords).some(isTrainingDirtyText))) {
     reasons.push({ level: "danger", label: "疑似脏学习" });
   }
   if (text.length > 420) reasons.push({ level: "warn", label: "话术过长" });
@@ -565,10 +690,11 @@ function buildSkillTrainingItems(data, options = {}) {
     const latestDateKey = latestDate ? getShanghaiDateKey(latestDate) : "";
     const text = getSkillServerText(skill);
     const latestOverride = getLatestSkillOverride(skill);
+    const manualSummary = buildSkillManualTrainingSummary(skill);
     const reasons = getSkillTrainingReasons(skill, text, latestDateKey, selectedDate);
     const hasIssue = reasons.some((item) => ["danger", "warn"].includes(item.level));
     const isToday = latestDateKey === selectedDate || (Array.isArray(skill.manualOverrides) && skill.manualOverrides.some((item) => getShanghaiDateKey(item.at) === selectedDate));
-    const include = scope === "all" || isToday || hasIssue || skill.trainingStatus === "needs_optimization";
+    const include = scope === "all" || isToday || hasIssue || skill.trainingStatus === "needs_optimization" || skill.learningMode === "review_queue";
     if (!include) return null;
     return {
       id: String(skill.id || ""),
@@ -582,21 +708,30 @@ function buildSkillTrainingItems(data, options = {}) {
       revisionCount: Number(skill.revisionCount || 0),
       platformKey: String(skill.platformKey || ""),
       intentKey: String(skill.intentKey || ""),
+      learningMode: String(skill.learningMode || ""),
+      learningBucketKey: String(skill.learningBucketKey || ""),
+      learningStage: String(skill.learningStage || ""),
       trainingStatus: String(skill.trainingStatus || ""),
       reviewedAt: String(skill.reviewedAt || ""),
       latestAt: latestDate ? latestDate.toISOString() : "",
       keywords: Array.isArray(skill.keywords) ? skill.keywords : [],
       samples: Array.isArray(skill.samples) ? skill.samples : [],
       currentText: text,
-      proposedText: isTrainingDirtyText(text) ? "" : text,
-      imageUrls: getSkillServerImageUrls(skill),
-      manualOverrideCount: Array.isArray(skill.manualOverrides) ? skill.manualOverrides.length : 0,
+      proposedText: chooseSkillTrainingProposalText(skill, text, manualSummary),
+      imageUrls: chooseSkillTrainingImages(skill, manualSummary),
+      storedImageUrls: getSkillServerImageUrls(skill),
+      manualOverrideCount: manualSummary.totalCount,
+      manualOverrideRawCount: manualSummary.rawCount,
+      promptVariants: manualSummary.promptVariants,
+      replyVariants: manualSummary.replyVariants,
+      stageLabels: manualSummary.stageLabels,
       latestOverride: latestOverride ? {
         at: latestOverride.at || "",
         prompt: latestOverride.prompt || "",
         reply: latestOverride.reply || "",
         imageUrls: Array.isArray(latestOverride.imageUrls) ? latestOverride.imageUrls : [],
-        count: Number(latestOverride.count || 1)
+        count: Number(latestOverride.count || 1),
+        learningStage: String(latestOverride.learningStage || "")
       } : null,
       reasons,
       recommendation: hasIssue
@@ -644,10 +779,11 @@ function applySkillTrainingPatch(skill, patch = {}, action = "approve") {
   if (patch.samples !== undefined) next.samples = splitSkillListField(patch.samples).slice(0, 14);
   if (patch.platformKey !== undefined) next.platformKey = String(patch.platformKey || "").trim();
   if (patch.intentKey !== undefined) next.intentKey = String(patch.intentKey || "").trim();
+  if (patch.learningStage !== undefined) next.learningStage = String(patch.learningStage || "").trim();
   if (patch.allowAutoReply !== undefined) next.allowAutoReply = Boolean(patch.allowAutoReply);
   if (patch.noReply !== undefined) next.noReply = Boolean(patch.noReply);
   if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled);
-  if (patch.replyText !== undefined) {
+  if (patch.replyText !== undefined || patch.imageUrls !== undefined) {
     const replyText = String(patch.replyText || "").trim();
     const imageUrls = patch.imageUrls !== undefined
       ? splitSkillListField(patch.imageUrls)
@@ -657,6 +793,13 @@ function applySkillTrainingPatch(skill, patch = {}, action = "approve") {
       ...imageUrls.map((url, index) => ({ type: "image", content: "", url, label: `skill 图片 ${index + 1}` }))
     ].filter(Boolean);
     next.fallback = replyText;
+  }
+  if (["approved", "optimized"].includes(action)) {
+    next.enabled = patch.enabled !== undefined ? Boolean(patch.enabled) : true;
+    next.learningMode = "approved";
+  }
+  if (action === "needs_optimization" && !next.learningMode) {
+    next.learningMode = "review_queue";
   }
   if (action === "optimized") {
     next.revisionCount = Number(next.revisionCount || 0) + 1;
