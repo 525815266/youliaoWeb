@@ -2124,3 +2124,97 @@ Do not commit runtime files:
 - `data/reply-skills.json`
 - `logs/api-capture.ndjson`
 
+## 2026-06-13 Handoff: Red-Point Filtering And FnOS Containers
+
+### Red-Point Web Fix
+
+Files changed:
+
+- `public/app.js`
+- `public/styles.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Behavior changed:
+
+- `#redOnly` checkbox now reloads messages from the server with `redOnly`.
+- `fetchMessagePage(contact,page,size,{ redOnly })` sends `onlyRepointMsg: true` in red-only mode.
+- `renderMessages()` no longer treats every incoming message as red point.
+- Red-only empty first page does not fall back to `activeContact.records`, so normal preview messages do not leak into red-only mode.
+- Client settings modal now includes a read-only “显示红点” section.
+
+Native/API evidence:
+
+- Original service XML exposes `ChatContent/GetList(... onlyRepointMsg)` and `Account/GetRedPointConfig`.
+- `GET /Account/GetRedPointConfig` returns real red-point config fields like `takeBalError`, `queryError`, `orderBindError`, `voice`, `redPack`, `transfer`, `addFriend`, `unknowMsg`.
+- `GET /Contact/GetRedPointConfig` returns msgType codes such as `11,1,19,4,0,9,28,26,27`.
+
+Important implementation notes:
+
+- Do not restore the old local filter `message.isRedPoint || message.direction === "incoming"`.
+- Keep red-point settings read-only until a real save endpoint is confirmed.
+- `/System/GetOptions` does not contain 图5 red-point settings.
+
+### FnOS / Docker State
+
+Host:
+
+- `192.168.9.83`
+- SSH user `Boom`
+- Working password found: `950331..`
+
+YouChat compose path:
+
+- `/vol1/1000/Docker/youchat`
+- Compose files:
+  - `docker-compose.yml`
+  - `compose.mysql.yaml`
+- Project name: `youliaoapp`
+
+Current intended backup path:
+
+- `/vol02/1000-1-713f7ca0/来自：飞牛私有云/youliaobackup`
+
+Do not change this path unless the user asks. On 2026-06-13 the user re-authorized the cloud mount and explicitly said to keep using this source directory.
+
+Issue found:
+
+- `youchat-control` and `youchat-backup` were exited with code 255.
+- `docker inspect` error:
+  `error while creating mount source path '/vol02/1000-1-713f7ca0/来自：飞牛私有云/youliaobackup': mkdir /vol02/1000-1-713f7ca0/来自：飞牛私有云: operation not permitted`
+- Root cause: FnOS cloud-storage authorization/mount temporarily unavailable, not a YouChat app crash.
+
+Resolution already done:
+
+- User re-authorized the cloud mount.
+- Ran compose up for the two stopped services using existing config.
+- Verified all five YouChat containers are Up:
+  - `youchat-autologin`
+  - `youchat-control`
+  - `youchat-mysql`
+  - `youchat-backup`
+  - `youchat-service`
+- Verified `/api/Contact/GetContactList` returns real data from `http://127.0.0.1:18080`.
+- Verified backup source dir exists, is writable, and contains scheduled backup files through `20260613-033003`.
+
+Useful commands:
+
+```bash
+cd /vol1/1000/Docker/youchat
+echo 950331.. | sudo -S -p "" docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep youchat
+echo 950331.. | sudo -S -p "" docker inspect youchat-control youchat-backup --format "{{.Name}} status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}"
+echo 950331.. | sudo -S -p "" docker compose -p youliaoapp -f docker-compose.yml -f compose.mysql.yaml up -d youchat-control youchat-backup
+```
+
+Control API auth:
+
+- Header is `X-Control-Token: <YOUCHAT_CONTROL_TOKEN>`.
+- `Authorization: Bearer ...` does not work.
+
+Git reminder:
+
+- Stage only code/docs.
+- Do not stage:
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+

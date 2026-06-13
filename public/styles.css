@@ -4797,6 +4797,138 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
+.red-point-config-panel {
+  gap: 10px;
+}
+
+.red-point-config-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.red-point-config-head div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.red-point-config-head strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.red-point-config-head span,
+.red-point-meta,
+.red-point-keywords strong {
+  color: #6f7d91;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.red-point-config-head em {
+  border: 1px solid #cfe0f5;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #1967b7;
+  background: #f2f8ff;
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.red-point-group-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.red-point-config-group {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.red-point-config-group h4 {
+  margin: 0;
+  color: #344055;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.red-point-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.red-point-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  border: 1px solid #dce6f2;
+  border-radius: 5px;
+  padding: 3px 8px;
+  color: #526174;
+  background: #fbfdff;
+  font-size: 12px;
+}
+
+.red-point-chip input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--you-blue);
+}
+
+.red-point-chip.is-on {
+  border-color: #acd2ff;
+  color: #075da8;
+  background: #edf7ff;
+}
+
+.red-point-chip.is-off {
+  opacity: 0.62;
+}
+
+.red-point-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.red-point-meta span {
+  min-width: 0;
+}
+
+.red-point-keywords {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #edf1f7;
+  padding-top: 8px;
+}
+
+.red-point-keywords div {
+  display: grid;
+  gap: 5px;
+}
+
+.red-point-keywords p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.red-point-keywords p span {
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: #31506f;
+  background: #f2f6fb;
+  font-size: 12px;
+}
+
 .client-option-fields {
   display: grid;
   gap: 8px;

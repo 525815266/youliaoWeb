@@ -4034,3 +4034,97 @@ npm run fnos:health
 - 不要把 `logs/api-capture.ndjson` 提交。
 - 如果以后又出现 skill 被图片污染，先看某个 override 的 `count` 是否达到 3，再看 `lastAppliedSuggestion*` 上下文是否被绕过。
 
+## 2026-06-13：红点筛选对齐原生与飞牛容器恢复
+
+### 1. 红点筛选规则修正
+
+原 Web 错误规则：
+
+- 勾选“只显示红点消息”后，本地用 `message.isRedPoint || message.direction === "incoming"` 过滤。
+- 这会把所有客户发来的普通消息都当红点显示，和原生客户端不一致。
+
+原生客户端证据：
+
+- `YouChatService.xml` 里 `ChatContentService.GetList(... onlyRepointMsg)` 明确用于只取红点消息。
+- 原生 `chatHistory` bundle 在切换 checkbox 时调用 `/ChatContent/GetList`，并传 `onlyRepointMsg`。
+- `/Account/GetRedPointConfig` 是 GET，返回后台“显示红点”的真实配置。
+
+当前实现：
+
+- `redOnly` 变更后会重新请求消息第一页，而不是只前端过滤。
+- `fetchMessagePage()` 根据 `redOnly` 传 `onlyRepointMsg: true/false`。
+- 红点模式不再回退展示 `activeContact.records` 预览，避免服务端无命中时又显示普通消息。
+- `renderMessages()` 不再把 `incoming` 当作红点，直接渲染服务端返回的当前分页。
+
+### 2. 客户端设置新增只读红点配置
+
+右上角客户端设置仍保留 `/System/GetOptions` 原生系统设置，同时新增“显示红点”只读区：
+
+- 读取 `/Account/GetRedPointConfig`。
+- 读取 `/Contact/GetRedPointConfig` 补充 `msgType` 编号。
+- 按原管理页语义分组展示：订单、查券/提现、指令/消息、消息提示、其他。
+- 展示关键词列表，例如 `fuzzyMiniTitleList`。
+- 未确认保存接口前，不在 Web 里伪造红点配置保存。
+
+### 3. 飞牛 youliaoapp 容器检查
+
+用户截图显示两个辅助容器红点：
+
+- `youchat-control`
+- `youchat-backup`
+
+SSH：
+
+- 主机：`192.168.9.83`
+- 用户：`Boom`
+- 可用密码：`950331..`
+
+检查结论：
+
+- 主业务容器正常：`youchat-service`、`youchat-mysql`、`youchat-autologin` 都在运行。
+- `youchat-service` 暴露 `18080 -> 8080`，业务 API `/api/Contact/GetContactList` 可返回真实数据。
+- MySQL 容器 healthy，数据库包含 `1556504756803862529`。
+- `youchat-control` 和 `youchat-backup` 退出原因不是代码错误，而是飞牛云盘授权失效导致 Docker 创建备份挂载源失败：
+  `mkdir /vol02/1000-1-713f7ca0/来自：飞牛私有云: operation not permitted`
+
+用户重新授权飞牛云盘后：
+
+- 源目录 `/vol02/1000-1-713f7ca0/来自：飞牛私有云/youliaobackup` 恢复可读写。
+- 未修改 `.env`，继续使用原备份路径。
+- 执行 compose 恢复后，5 个 youchat 容器均为 Up：
+  `youchat-autologin`、`youchat-control`、`youchat-mysql`、`youchat-backup`、`youchat-service`。
+- `youchat-control` 挂载仍指向原源目录。
+
+### 4. 飞牛诊断命令
+
+常用状态检查：
+
+```powershell
+@'
+import paramiko, sys
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+host='192.168.9.83'; user='Boom'; pwd='950331..'
+client=paramiko.SSHClient(); client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+client.connect(host, username=user, password=pwd, look_for_keys=False, allow_agent=False)
+cmd='echo 950331.. | sudo -S -p "" docker ps --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}" | grep youchat || true'
+stdin, stdout, stderr = client.exec_command(cmd)
+print(stdout.read().decode('utf-8','replace'))
+client.close()
+'@ | python -
+```
+
+业务 API 检查：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://192.168.9.83:18080/api/Contact/GetContactList" -Body @{ pageIndex=1; pageSize=1 }
+Invoke-RestMethod -Method Get -Uri "http://192.168.9.83:18080/api/Account/GetRedPointConfig"
+```
+
+控制 API token header 是：
+
+```text
+X-Control-Token: <YOUCHAT_CONTROL_TOKEN>
+```
+
+不是 `Authorization: Bearer ...`。
+

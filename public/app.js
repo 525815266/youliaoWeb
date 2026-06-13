@@ -466,6 +466,9 @@ const state = {
   clientPaused: localStorage.getItem(CLIENT_PAUSED_STORAGE_KEY) === "true",
   clientOptions: null,
   clientOptionsLoading: false,
+  redPointConfig: null,
+  redPointConfigLoading: false,
+  redPointConfigError: "",
   globalSearch: {
     keyword: "",
     contacts: "",
@@ -725,7 +728,13 @@ function bindEvents() {
   el.quickReplyTool.addEventListener("click", () => setToolTab("quick"));
   el.orderTool.addEventListener("click", () => setToolTab("order"));
   el.skillReplyTool.addEventListener("click", () => setToolTab("skill"));
-  el.redOnly.addEventListener("change", renderMessages);
+  el.redOnly.addEventListener("change", () => {
+    state.messageHasMore = false;
+    loadMessages(1, "replace", {
+      forceBottom: true,
+      redOnly: el.redOnly.checked
+    });
+  });
   el.accessIn.addEventListener("click", accessIn);
   el.transferAi.addEventListener("click", transferAi);
   el.toolContent.addEventListener("click", handleToolClick);
@@ -961,10 +970,86 @@ const CLIENT_DATABASE_TYPE_OPTIONS = [
   { value: 0, label: "自定义数据库" },
   { value: 2, label: "跟随服务端" }
 ];
+const RED_POINT_CONFIG_GROUPS = [
+  {
+    title: "订单",
+    items: [
+      ["firstOrder", "首次下单"],
+      ["orderSuccess", "下单成功"],
+      ["orderNo", "订单号"],
+      ["orderInvalid", "订单失效"],
+      ["orderBindError", "订单绑定失败"],
+      ["orderRefund", "订单维权"],
+      ["orderSettle", "订单结算"],
+      ["orderReward", "订单奖励"]
+    ]
+  },
+  {
+    title: "查券 / 提现",
+    items: [
+      ["queryCoupon", "查券"],
+      ["querySuccess", "查券成功"],
+      ["queryError", "查券异常"],
+      ["takeBalSuccess", "提现成功"],
+      ["takeBalError", "提现失败"],
+      ["takeBalCheck", "提现审核"],
+      ["firstTakeBal", "首次提现"],
+      ["mdExchange", "兑换免单"]
+    ]
+  },
+  {
+    title: "指令 / 消息",
+    items: [
+      ["callKefu", "呼叫客服"],
+      ["superCmd", "超级指令"],
+      ["otherCmd", "其他指令"],
+      ["aiQA", "智能回复"],
+      ["voice", "语音"],
+      ["redPack", "红包"],
+      ["transfer", "转账"],
+      ["unsolicitedMsg", "后台主动发送的消息"]
+    ]
+  },
+  {
+    title: "消息提示",
+    items: [
+      ["redPackCard", "红包卡片"],
+      ["addFriend", "好友添加"],
+      ["groupCard", "群卡片"],
+      ["guidePlaceOrder", "催查券/催下单"],
+      ["firstQuery", "首次查询"],
+      ["firstQueryReward", "首次查询奖励"],
+      ["notPromot", "未参加推广"],
+      ["unknowMsg", "系统无法识别的消息"]
+    ]
+  },
+  {
+    title: "其他",
+    items: [
+      ["firstOrderReward", "首单奖励"],
+      ["signInSuccess", "签到成功"],
+      ["signInError", "签到失败"],
+      ["shoppingGuide", "购物导购"]
+    ]
+  }
+];
+const RED_POINT_KEYWORD_FIELDS = [
+  ["fuzzyList", "模糊关键词"],
+  ["preciseList", "精准关键词"],
+  ["fuzzyMiniTitleList", "小程序标题模糊"],
+  ["preciseMiniTitleList", "小程序标题精准"],
+  ["fuzzyCardTitleList", "卡片标题模糊"],
+  ["preciseCardTitleList", "卡片标题精准"],
+  ["fuzzyCardContentList", "卡片内容模糊"],
+  ["preciseCardContentList", "卡片内容精准"]
+];
 
 async function showClientOptionsModal() {
   state.clientOptionsLoading = true;
   state.clientOptions = null;
+  state.redPointConfigLoading = true;
+  state.redPointConfig = null;
+  state.redPointConfigError = "";
   openToolModal({
     type: "client-options",
     size: "settings",
@@ -974,18 +1059,66 @@ async function showClientOptionsModal() {
     onConfirm: saveClientOptionsFromModal
   });
 
-  try {
-    const payload = await api("/System/GetOptions", {});
+  const [optionsResult, redPointResult] = await Promise.allSettled([
+    api("/System/GetOptions", {}),
+    fetchRedPointConfig()
+  ]);
+
+  if (optionsResult.status === "fulfilled") {
+    const payload = optionsResult.value;
     state.clientOptions = getData(payload) || payload || {};
     log("client options", summarize(state.clientOptions));
-  } catch (error) {
-    state.clientOptions = { __error: error.message };
-  } finally {
-    state.clientOptionsLoading = false;
-    if (state.activeModal?.type === "client-options") {
-      el.toolModalBody.innerHTML = renderClientOptionsModal();
-    }
+  } else {
+    state.clientOptions = { __error: optionsResult.reason?.message || String(optionsResult.reason) };
   }
+
+  if (redPointResult.status === "fulfilled") {
+    state.redPointConfig = redPointResult.value;
+    log("red point config", summarize(state.redPointConfig));
+  } else {
+    state.redPointConfigError = redPointResult.reason?.message || String(redPointResult.reason);
+  }
+
+  state.clientOptionsLoading = false;
+  state.redPointConfigLoading = false;
+  if (state.activeModal?.type === "client-options") {
+    el.toolModalBody.innerHTML = renderClientOptionsModal();
+  }
+}
+
+async function fetchRedPointConfig() {
+  const [accountResult, contactResult] = await Promise.allSettled([
+    api("/Account/GetRedPointConfig", {}, { method: "GET" }),
+    api("/Contact/GetRedPointConfig", {}, { method: "GET" })
+  ]);
+
+  if (accountResult.status !== "fulfilled") {
+    throw accountResult.reason;
+  }
+
+  const settings = extractRedPointSettings(accountResult.value);
+  const msgTypes = contactResult.status === "fulfilled"
+    ? extractRedPointMsgTypes(contactResult.value)
+    : [];
+  return {
+    settings,
+    msgTypes,
+    contactConfigError: contactResult.status === "rejected" ? contactResult.reason?.message || String(contactResult.reason) : ""
+  };
+}
+
+function extractRedPointSettings(payload) {
+  let data = getData(payload) || payload || {};
+  if (data && typeof data === "object" && !Array.isArray(data) && data.data && typeof data.data === "object" && !Array.isArray(data.data)) {
+    data = data.data;
+  }
+  return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+}
+
+function extractRedPointMsgTypes(payload) {
+  const data = getData(payload);
+  if (Array.isArray(data)) return data;
+  return getRecords(payload);
 }
 
 function renderClientOptionsModal() {
@@ -1033,6 +1166,8 @@ function renderClientOptionsModal() {
             checked: Boolean(commonOptions.alertSysNotice)
           })}
         </div>
+
+        ${renderRedPointConfigSection()}
 
         <div class="client-settings-divider">
           <span>定时任务</span>
@@ -1139,6 +1274,82 @@ function renderClientOptionsModal() {
       </section>
     </div>
   `;
+}
+
+function renderRedPointConfigSection() {
+  const loading = state.redPointConfigLoading;
+  const error = state.redPointConfigError;
+  const config = state.redPointConfig?.settings || {};
+  const msgTypes = state.redPointConfig?.msgTypes || [];
+  const enabledCount = RED_POINT_CONFIG_GROUPS
+    .flatMap((group) => group.items)
+    .filter(([key]) => Boolean(config[key])).length;
+  const totalCount = RED_POINT_CONFIG_GROUPS.flatMap((group) => group.items).length;
+  const keywordRows = RED_POINT_KEYWORD_FIELDS
+    .map(([key, label]) => [label, normalizeConfigList(config[key])])
+    .filter(([, values]) => values.length);
+
+  return `
+    <div class="client-settings-divider">
+      <span>显示红点</span>
+    </div>
+    <section class="client-settings-panel red-point-config-panel">
+      <div class="red-point-config-head">
+        <div>
+          <strong>悠聊红点配置</strong>
+          <span>勾选类型命中后，消息会在悠聊中显示红点；聊天区勾选“只显示红点消息”时直接按该配置请求服务端。</span>
+        </div>
+        <em>${loading ? "读取中" : error ? "读取失败" : `已开启 ${enabledCount}/${totalCount}`}</em>
+      </div>
+      ${loading ? '<div class="client-modal-loading compact">正在读取 /Account/GetRedPointConfig...</div>' : ""}
+      ${error ? `<div class="client-modal-error compact"><strong>红点配置读取失败</strong><p>${escapeHtml(error)}</p></div>` : ""}
+      ${!loading && !error ? `
+        <div class="red-point-group-grid">
+          ${RED_POINT_CONFIG_GROUPS.map((group) => renderRedPointConfigGroup(group, config)).join("")}
+        </div>
+        <div class="red-point-meta">
+          <span>msgType: ${msgTypes.length ? escapeHtml(msgTypes.join(" / ")) : "无"}</span>
+          ${state.redPointConfig?.contactConfigError ? `<span>Contact 配置读取失败: ${escapeHtml(state.redPointConfig.contactConfigError)}</span>` : ""}
+        </div>
+        ${keywordRows.length ? `
+          <div class="red-point-keywords">
+            ${keywordRows.map(([label, values]) => `
+              <div>
+                <strong>${escapeHtml(label)}</strong>
+                <p>${values.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</p>
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
+      ` : ""}
+      <p class="modal-hint">当前只读取原生红点配置。服务端文档只暴露 GetRedPointConfig，未确认保存接口前不在 Web 里伪造修改。</p>
+    </section>
+  `;
+}
+
+function renderRedPointConfigGroup(group, config) {
+  return `
+    <div class="red-point-config-group">
+      <h4>${escapeHtml(group.title)}</h4>
+      <div class="red-point-chip-list">
+        ${group.items.map(([key, label]) => {
+          const checked = Boolean(config[key]);
+          return `
+            <label class="red-point-chip ${checked ? "is-on" : "is-off"}" title="${escapeAttr(key)}">
+              <input type="checkbox" disabled ${checked ? "checked" : ""}>
+              <span>${escapeHtml(label)}</span>
+            </label>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function normalizeConfigList(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+  if (value === undefined || value === null || value === "") return [];
+  return splitListValue(value).map((item) => String(item || "").trim()).filter(Boolean);
 }
 
 function getClientOptionGroup(options, namespace) {
@@ -4531,12 +4742,14 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
   const previousHasMore = state.messageHasMore;
   const forceBottom = Boolean(options.forceBottom);
   const keepPosition = Boolean(options.keepPosition);
+  const redOnly = Boolean(options.redOnly ?? el.redOnly?.checked);
   state.messageLoading = true;
   if (mode === "append" || (!state.messages.length && mode !== "merge")) renderMessages("none");
 
   try {
     const result = await fetchMessagePage(contact, page, MESSAGE_PAGE_SIZE, {
-      endTime: page > 1 ? getMessageCursorTime(state.messages[0]) : ""
+      endTime: page > 1 ? getMessageCursorTime(state.messages[0]) : "",
+      redOnly
     });
     if (String(getContactId(state.activeContact) || "") !== String(contactId)) {
       state.messageLoading = false;
@@ -4561,10 +4774,16 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
         nextCount: nextMessages.length
       });
     } else if (page === 1) {
-      const previewRecords = mergeMessages(state.activeContact?.records || []);
-      state.messages = mode === "merge" && state.messages.length ? mergeMessages([...state.messages, ...previewRecords]) : previewRecords;
-      if (mode !== "merge") state.messagePage = 1;
-      state.messageHasMore = mode === "merge" ? previousHasMore : false;
+      if (redOnly) {
+        state.messages = [];
+        if (mode !== "merge") state.messagePage = 1;
+        state.messageHasMore = false;
+      } else {
+        const previewRecords = mergeMessages(state.activeContact?.records || []);
+        state.messages = mode === "merge" && state.messages.length ? mergeMessages([...state.messages, ...previewRecords]) : previewRecords;
+        if (mode !== "merge") state.messagePage = 1;
+        state.messageHasMore = mode === "merge" ? previousHasMore : false;
+      }
     } else {
       state.messageHasMore = false;
     }
@@ -4589,8 +4808,12 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
     }
   } catch (error) {
     if (page === 1) {
-      const previewRecords = mergeMessages(state.activeContact?.records || []);
-      state.messages = mode === "merge" && state.messages.length ? mergeMessages([...state.messages, ...previewRecords]) : previewRecords;
+      if (redOnly) {
+        state.messages = [];
+      } else {
+        const previewRecords = mergeMessages(state.activeContact?.records || []);
+        state.messages = mode === "merge" && state.messages.length ? mergeMessages([...state.messages, ...previewRecords]) : previewRecords;
+      }
     }
     state.messageLoading = false;
     state.messageHasMore = mode === "merge" ? previousHasMore : false;
@@ -4606,10 +4829,11 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
 async function fetchMessagePage(contact, page, size, options = {}) {
   const contactId = getContactId(contact);
   const endTime = options.endTime || "";
+  const redOnly = Boolean(options.redOnly);
   const liveListParams = {
     contactId,
     size,
-    onlyRepointMsg: false,
+    onlyRepointMsg: redOnly,
     endTime
   };
   const endpointAttempts = [
@@ -4624,7 +4848,7 @@ async function fetchMessagePage(contact, page, size, options = {}) {
         endTime,
         current: page,
         size,
-        withConfig: false
+        onlyRepointMsg: redOnly
       }
     },
     {
@@ -4633,7 +4857,8 @@ async function fetchMessagePage(contact, page, size, options = {}) {
         contactId,
         endTime,
         current: page,
-        size
+        size,
+        ...(redOnly ? { withConfig: true } : {})
       }
     },
     {
@@ -4643,7 +4868,7 @@ async function fetchMessagePage(contact, page, size, options = {}) {
         endTime,
         current: page,
         size,
-        onlyRepointMsg: false
+        onlyRepointMsg: redOnly
       }
     }
   ];
@@ -4675,7 +4900,7 @@ async function fetchMessagePage(contact, page, size, options = {}) {
         size,
         contentid: "",
         keyWord: "",
-        onlyRepointMsg: false
+        onlyRepointMsg: redOnly
       });
       return {
         payload,
@@ -4950,30 +5175,28 @@ function buildMessageKey(message, index, stableId = "") {
 }
 
 function renderMessages(scrollMode = "none") {
+  const redOnly = Boolean(el.redOnly?.checked);
   if (!state.messages.length) {
+    const emptyText = redOnly
+      ? "当前会话没有服务端红点配置命中的消息。"
+      : "当前会话暂无真实聊天记录，或接口返回为空。";
     el.messageList.innerHTML = `
       <div class="message-load-row">
         <button class="mini-action" type="button" data-action="load-more-messages" ${state.messageHasMore ? "" : "disabled"}>${state.messageLoading ? "加载中..." : "加载更多"}</button>
       </div>
-      <div class="empty-state">当前会话暂无真实聊天记录，或接口返回为空。</div>
+      <div class="empty-state">${emptyText}</div>
     `;
     return;
   }
 
-  const redOnly = el.redOnly.checked;
-  const messages = redOnly ? state.messages.filter((message) => message.isRedPoint || message.direction === "incoming") : state.messages;
+  const messages = state.messages;
   const filterSummary = redOnly
-    ? `<div class="message-filter-summary">已加载 ${state.messages.length} 条，当前红点筛选显示 ${messages.length} 条</div>`
+    ? `<div class="message-filter-summary">已按悠聊红点配置加载 ${messages.length} 条</div>`
     : "";
-  const filteredEmpty = redOnly && !messages.length
-    ? '<div class="empty-state">已加载真实聊天记录，但当前没有符合红点筛选的消息。</div>'
-    : "";
-
   el.messageList.innerHTML = [
     `<div class="message-load-row"><button class="mini-action" type="button" data-action="load-more-messages" ${state.messageHasMore && !state.messageLoading ? "" : "disabled"}>${state.messageLoading ? "加载中..." : state.messageHasMore ? "加载更多" : "没有更早记录"}</button></div>`,
     filterSummary,
     '<div class="day-divider">聊天记录</div>',
-    filteredEmpty,
     ...messages.map((message) => renderMessageBubble(message))
   ].join("");
 
