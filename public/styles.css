@@ -1152,21 +1152,23 @@ textarea:focus-visible {
   padding: 6px 10px;
   border-top: 1px solid var(--line);
   background: linear-gradient(#fff, #f8fbff);
+  overflow: visible;
 }
 
 .conversation-tab {
   position: relative;
   display: flex;
-  grid-template-columns: auto auto;
   align-items: center;
   justify-content: center;
   gap: 4px;
   min-width: 0;
+  padding: 0 10px;
   border: 1px solid #d4dfed;
   border-right: 0;
   color: #25364d;
   background: #fff;
   font-size: 13px;
+  overflow: visible;
 }
 
 .conversation-tab:first-child {
@@ -1185,17 +1187,24 @@ textarea:focus-visible {
 
 .conversation-tab i {
   position: absolute;
-  right: 8px;
-  top: 5px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
+  right: 7px;
+  top: -6px;
+  z-index: 2;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 2px solid #fff;
   border-radius: 999px;
   color: #fff;
   background: #ef4444;
   font-size: 10px;
+  font-weight: 700;
   font-style: normal;
-  line-height: 15px;
+  line-height: 14px;
+  text-align: center;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 5px rgba(239, 68, 68, 0.28);
 }
 
 .conversation-tab.is-active {
@@ -1205,17 +1214,6 @@ textarea:focus-visible {
   background: #f8fcff;
   box-shadow: inset 0 0 0 1px rgba(22, 141, 242, 0.08);
   z-index: 1;
-}
-
-.conversation-tab.has-unread::after {
-  content: "";
-  position: absolute;
-  top: 6px;
-  right: 9px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #ef4444;
 }
 
 .chat-pane {
@@ -1430,6 +1428,12 @@ textarea:focus-visible {
   gap: 8px;
   max-width: min(680px, 82%);
   align-items: start;
+}
+
+.message.is-jump-highlight .message-content {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.14);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .message.outgoing,

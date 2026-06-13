@@ -59,6 +59,7 @@
 59. [2026-06-12 飞牛 SQLite 再次回退与一键恢复脚本](#59-2026-06-12-飞牛-sqlite-再次回退与一键恢复脚本)
 60. [2026-06-12 左侧会话列表动态加载截断修复](#60-2026-06-12-左侧会话列表动态加载截断修复)
 61. [2026-06-12 右侧工具栏、Skill 学习与红点滚动修复](#61-2026-06-12-右侧工具栏skill-学习与红点滚动修复)
+62. [2026-06-13 底部会话分类红点与未读跳转修复](#62-2026-06-13-底部会话分类红点与未读跳转修复)
 
 ## 1. 项目目标
 
@@ -4127,4 +4128,57 @@ X-Control-Token: <YOUCHAT_CONTROL_TOKEN>
 ```
 
 不是 `Authorization: Bearer ...`。
+
+## 62. 2026-06-13 底部会话分类红点与未读跳转修复
+
+### 1. 问题
+
+底部会话分类按钮（当前、留言、历史）上的红点数字显示不清楚，尤其是 `历史 (5741)` 这类长计数场景，原实现同时渲染数字角标和 `.conversation-tab.has-unread::after` 小圆点，导致红色元素叠在一起，白色数字发糊、拥挤。
+
+另一个问题是：分类按钮有红点时，点击 `当前`、`历史` 等按钮只会切换列表或刷新列表，不会像原客户端习惯那样定位到未读/红点消息。
+
+### 2. 当前实现
+
+相关文件：
+
+- `public/app.js`
+- `public/styles.css`
+
+行为规则：
+
+- `renderConversationTabs()` 统一通过 `getListUnreadCount(tab)` 读取底部红点数量。
+- `getContactUnreadCount()` 同时兼容 `unread`、`unRead`、`redDot`、`unReadCount`、`redPoint`、`redpoint`，避免接口字段差异导致列表和底部红点不同步。
+- 点击带红点的底部分类时，会执行 `jumpToUnreadInActiveList(tab)`：
+  - 如果当前分类已经激活，直接在当前列表中找第一个未读会话。
+  - 如果是切换到其他分类，先 `loadContacts()` 加载该分类，再找第一个未读会话。
+  - 如果当前已加载列表里没有未读会话，但列表还有更多页，会继续 append 加载最多 6 页来找未读会话。
+  - 找到未读会话后调用 `selectContactById(contactId, { jumpUnread: true })`，加载真实聊天记录并滚动到第一条 `data-red-point="true"` 消息。
+- `selectContactById()` 新增 `jumpUnread` 选项：
+  - 普通点击会话仍然按原逻辑打开最新消息并清红点。
+  - 红点分类跳转时先加载和定位红点消息，再执行 `markContactRead(..., { sync: true })` 和后续同步。
+- 新增 `messagesFromPreview` 状态，区分“会话列表 records 预览消息”和“真实 `/ChatContent/GetList` 聊天记录”。红点跳转时如果当前只是预览态，会强制拉真实聊天页，避免把列表预览误当完整聊天记录。
+
+### 3. UI 修复
+
+- 移除 `.conversation-tab.has-unread::after`，不再叠加额外红点。
+- `.conversation-tab i` 改为清晰的红色数字胶囊：
+  - `min-width: 18px`
+  - `height: 18px`
+  - 白色描边
+  - `font-variant-numeric: tabular-nums`
+  - `99+` 封顶
+- 底部标签容器和按钮设置 `overflow: visible`，角标抬到右上角时不会被裁剪。
+- 跳到红点消息后，目标消息会短暂添加 `.is-jump-highlight`，用红色边框和淡阴影提示当前位置。
+
+### 4. 验证
+
+已执行：
+
+```powershell
+npm run check
+```
+
+结果：通过。
+
+注意：`data/reply-skills.json` 与 `logs/api-capture.ndjson` 是运行时脏文件，本次不提交。
 

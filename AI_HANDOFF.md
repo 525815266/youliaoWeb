@@ -2218,3 +2218,45 @@ Git reminder:
   - `data/reply-skills.json`
   - `logs/api-capture.ndjson`
 
+## 2026-06-13 Handoff: Bottom Tab Red Badges And Unread Jump
+
+Files changed:
+
+- `public/app.js`
+- `public/styles.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Behavior:
+
+- Bottom conversation tabs (`当前` / `留言` / `历史`) now show unread/red badge numbers clearly.
+- Clicking a bottom tab with a red badge jumps to the first unread/red-point conversation and then to the first rendered `data-red-point="true"` message.
+- Switching to another red-badge tab first loads that tab's contact list, then runs the unread jump.
+- If the loaded contact list does not yet contain an unread contact but has more pages, `findUnreadContactInActiveList()` appends up to 6 pages looking for one.
+
+Important functions:
+
+- `getContactUnreadCount(contact)`: canonical unread count reader. It checks `unread`, `unRead`, `redDot`, `unReadCount`, `redPoint`, and `redpoint`.
+- `getListUnreadCount(tab)`: tab badge count reader; for active tab it also re-sums currently loaded contacts.
+- `jumpToUnreadInActiveList(tab)`: bottom-tab click unread flow.
+- `findUnreadContactInActiveList(tab)`: loads more list pages while searching for unread contact.
+- `selectContactById(id, { jumpUnread: true })`: special unread-jump path. Normal contact click still opens at bottom and marks read normally.
+- `jumpToUnreadInLoadedMessages()`: forces real chat load if current messages are only contact-preview records.
+- `messagesFromPreview`: state flag that distinguishes `activeContact.records` preview messages from real `/ChatContent/GetList` records.
+
+Style notes:
+
+- Removed `.conversation-tab.has-unread::after`; do not bring it back because it overlaps the numeric badge.
+- `.conversation-tab i` is the single red numeric pill badge, capped at `99+`.
+- `.message.is-jump-highlight .message-content` gives the destination message a short red highlight.
+
+Verification:
+
+- `npm run check` passed.
+
+Git reminder:
+
+- Runtime files were still dirty and must not be committed unless explicitly requested:
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+

@@ -433,6 +433,7 @@ const state = {
   messageHasMore: false,
   messageLoading: false,
   messageAutoLoading: false,
+  messagesFromPreview: false,
   faqs: [],
   faqCategories: [],
   faqCategory: "",
@@ -516,6 +517,7 @@ const state = {
   listServerCounts: { current: 0, guestbook: 0, history: 0 },
   listCountSources: { current: "", guestbook: "", history: "" },
   listUnreadCounts: { current: 0, guestbook: 0, history: 0 },
+  pendingUnreadJumpTab: "",
   friendRequests: [],
   friendRequestTotal: 0,
   friendRequestBadgeTotal: 0,
@@ -768,16 +770,20 @@ function bindEvents() {
   document.querySelectorAll("[data-list-tab]").forEach((button) => {
     button.addEventListener("click", async () => {
       const nextTab = button.dataset.listTab;
-      if (nextTab === state.listTab && nextTab === "current" && hasUnreadMessageAnchor()) {
-        scrollToFirstUnreadMessage();
+      const hasUnread = getListUnreadCount(nextTab) > 0;
+      const sameTab = nextTab === state.listTab;
+      if (sameTab && hasUnread) {
+        await jumpToUnreadInActiveList(nextTab);
         return;
       }
       state.listTab = nextTab;
       state.contactListPage = 1;
       state.contactListHasMore = false;
       state.contactListAutoLoading = false;
+      state.pendingUnreadJumpTab = hasUnread ? nextTab : "";
       renderConversationTabs();
       await loadContacts();
+      if (hasUnread) await jumpToUnreadInActiveList(nextTab);
     });
   });
 }
@@ -2867,9 +2873,10 @@ function renderConversationTabs() {
     const tab = button.dataset.listTab;
     const labels = { current: "当前", guestbook: "留言", history: "历史" };
     const count = getConversationTabCount(tab);
-    const unread = Number(state.listUnreadCounts[tab] || 0);
+    const unread = getListUnreadCount(tab);
     button.classList.toggle("is-active", tab === state.listTab);
     button.classList.toggle("has-unread", unread > 0);
+    button.setAttribute("aria-label", `${labels[tab] || tab}${count ? ` ${count}` : ""}${unread ? `，${unread} 条未读` : ""}`);
     button.title = "";
     button.innerHTML = `
       <span>${labels[tab] || tab}</span>
@@ -3833,8 +3840,32 @@ function closeFriendRequestsDialog() {
   overlay?.classList.add("is-hidden");
 }
 
+function getContactUnreadCount(contact) {
+  return [
+    contact?.unread,
+    contact?.unRead,
+    contact?.redDot,
+    contact?.unReadCount,
+    contact?.redPoint,
+    contact?.redpoint
+  ].reduce((max, value) => {
+    const count = Number(value || 0);
+    return Number.isFinite(count) ? Math.max(max, count) : max;
+  }, 0);
+}
+
 function sumContactUnread(contacts) {
-  return contacts.reduce((sum, contact) => sum + Number(contact.unread || contact.unRead || contact.redDot || contact.unReadCount || 0), 0);
+  return contacts.reduce((sum, contact) => sum + getContactUnreadCount(contact), 0);
+}
+
+function getListUnreadCount(tab = state.listTab) {
+  const stored = Number(state.listUnreadCounts[tab] || 0);
+  if (tab === state.listTab) return Math.max(stored, sumContactUnread(state.contacts));
+  return stored;
+}
+
+function getFirstUnreadContact(contacts = state.contacts) {
+  return contacts.find((contact) => getContactUnreadCount(contact) > 0) || null;
 }
 
 function loadClearedContactState() {
@@ -3987,6 +4018,7 @@ function archiveAndClearCurrentList() {
   state.listCounts.history = Number(state.listServerCounts.history || 0);
   resetContactScopedState();
   state.messages = [];
+  state.messagesFromPreview = false;
   renderAll();
 }
 
@@ -4082,7 +4114,7 @@ function renderContacts() {
 
   el.contactList.innerHTML = state.contacts.map((contact) => {
     const active = state.activeContact && String(getContactId(state.activeContact)) === String(getContactId(contact));
-    const unread = Number(contact.unread || 0);
+    const unread = getContactUnreadCount(contact);
     const isPinned = Boolean(contact.isTodo);
     const contactId = getContactId(contact);
     const hoverActions = getContactHoverActions(contact, contactId);
@@ -4096,7 +4128,7 @@ function renderContacts() {
         </span>
         <span class="contact-side">
           <span>${escapeHtml(contact.time || "")}</span>
-          ${unread ? `<span class="unread-badge">${unread}</span>` : ""}
+          ${unread ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}
         </span>
         <span class="contact-last">${escapeHtml(contact.lastContent || "暂无最新消息")}</span>
         ${isPinned ? '<span class="pin-corner" title="待办置顶"></span>' : ""}
@@ -4136,6 +4168,7 @@ function renderMessagesFromContactPreview() {
   state.messagePage = 1;
   state.messageHasMore = false;
   state.messageLoading = false;
+  state.messagesFromPreview = true;
   renderMessages();
 }
 
@@ -4447,32 +4480,41 @@ function getConsumableMessageIdCandidates(message) {
   });
 }
 
-async function selectContactById(id) {
+async function selectContactById(id, options = {}) {
   const nextContact = state.contacts.find((contact) => String(getContactId(contact)) === String(id));
   if (!nextContact) return;
+  const jumpUnread = Boolean(options.jumpUnread);
 
   if (String(getContactId(state.activeContact)) === String(id)) {
-    markContactRead(nextContact, { sync: true });
-    renderContacts();
-    scheduleMessageListBottom({ force: true, watchImages: true });
+    if (jumpUnread) {
+      const jumped = await jumpToUnreadInLoadedMessages();
+      markContactRead(nextContact, { sync: true });
+      renderContacts();
+      if (!jumped) scheduleMessageListBottom({ force: true, watchImages: true });
+    } else {
+      markContactRead(nextContact, { sync: true });
+      renderContacts();
+      scheduleMessageListBottom({ force: true, watchImages: true });
+    }
     return;
   }
 
   state.activeContact = nextContact;
   resetContactScopedState();
   renderMessagesFromContactPreview();
-  markContactRead(nextContact, { sync: true });
+  if (!jumpUnread) markContactRead(nextContact, { sync: true });
   renderContacts();
   renderActive();
   renderToolContent();
 
   await Promise.all([
-    loadMessages(1, "replace", { forceBottom: true }),
+    loadMessages(1, "replace", jumpUnread ? { jumpUnread: true } : { forceBottom: true }),
     loadContactInfo(),
     loadToolDataForActiveTab()
   ]);
+  if (jumpUnread) markContactRead(nextContact, { sync: true });
   scheduleAutoAiSuggestion({ source: "select-contact", delay: 300 });
-  scheduleMessageListBottom({ force: true, watchImages: true });
+  if (!jumpUnread) scheduleMessageListBottom({ force: true, watchImages: true });
   syncConsumedMessages(state.activeContact).catch((error) => {
     log("consume message sync failed", {
       contactId: getContactId(state.activeContact),
@@ -4482,17 +4524,72 @@ async function selectContactById(id) {
 }
 
 function hasUnreadMessageAnchor() {
-  return Boolean(el.messageList.querySelector("[data-red-point='true']"));
+  return Boolean(el.messageList?.querySelector("[data-red-point='true']"));
 }
 
 function scrollToFirstUnreadMessage() {
+  const target = el.messageList?.querySelector("[data-red-point='true']");
+  if (!target) return false;
   requestAnimationFrame(() => {
-    const target = el.messageList.querySelector("[data-red-point='true']");
-    if (!target) return;
-    target.scrollIntoView({ block: "center" });
+    target.scrollIntoView({ block: "center", inline: "nearest" });
     target.classList.add("is-jump-highlight");
     window.setTimeout(() => target.classList.remove("is-jump-highlight"), 1200);
   });
+  return true;
+}
+
+async function jumpToUnreadInActiveList(tab = state.listTab) {
+  if (tab !== state.listTab) return false;
+  state.pendingUnreadJumpTab = tab;
+  const contact = await findUnreadContactInActiveList(tab);
+  if (!contact || tab !== state.listTab) {
+    state.pendingUnreadJumpTab = "";
+    return false;
+  }
+  const contactId = getContactId(contact);
+  const card = el.contactList.querySelector(`[data-contact-id="${CSS.escape(String(contactId))}"]`);
+  card?.scrollIntoView({ block: "nearest" });
+  card?.focus({ preventScroll: true });
+  await selectContactById(contactId, { jumpUnread: true });
+  state.pendingUnreadJumpTab = "";
+  return true;
+}
+
+async function findUnreadContactInActiveList(tab = state.listTab) {
+  let contact = getFirstUnreadContact(state.contacts);
+  let attempts = 0;
+  while (!contact && state.listTab === tab && state.contactListHasMore && attempts < 6) {
+    attempts += 1;
+    state.contactListAutoLoading = true;
+    try {
+      await loadContacts({
+        mode: "append",
+        page: (state.contactListPage || 1) + 1,
+        preserveScroll: true,
+        skipCounts: true
+      });
+    } finally {
+      state.contactListAutoLoading = false;
+    }
+    contact = getFirstUnreadContact(state.contacts);
+  }
+  return contact;
+}
+
+async function jumpToUnreadInLoadedMessages() {
+  if (!state.messagesFromPreview && scrollToFirstUnreadMessage()) return true;
+  if (!state.activeContact) return false;
+  if (state.messagesFromPreview || !state.messages.length) {
+    await loadMessages(1, "replace", { jumpUnread: true });
+    if (scrollToFirstUnreadMessage()) return true;
+  }
+  let attempts = 0;
+  while (!hasUnreadMessageAnchor() && state.messageHasMore && attempts < 5) {
+    attempts += 1;
+    await loadMessages((state.messagePage || 1) + 1, "append", { jumpUnread: true });
+    if (scrollToFirstUnreadMessage()) return true;
+  }
+  return false;
 }
 
 function resetContactScopedState() {
@@ -4742,6 +4839,7 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
   const previousHasMore = state.messageHasMore;
   const forceBottom = Boolean(options.forceBottom);
   const keepPosition = Boolean(options.keepPosition);
+  const jumpUnread = Boolean(options.jumpUnread);
   const redOnly = Boolean(options.redOnly ?? el.redOnly?.checked);
   state.messageLoading = true;
   if (mode === "append" || (!state.messages.length && mode !== "merge")) renderMessages("none");
@@ -4758,6 +4856,7 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
     const records = result.records;
     const total = result.total;
     const previousCount = state.messages.length;
+    let nextMessagesFromPreview = false;
 
     if (records.length) {
       const shouldMerge = mode === "append" || mode === "merge";
@@ -4776,31 +4875,40 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
     } else if (page === 1) {
       if (redOnly) {
         state.messages = [];
+        nextMessagesFromPreview = false;
         if (mode !== "merge") state.messagePage = 1;
         state.messageHasMore = false;
       } else {
         const previewRecords = mergeMessages(state.activeContact?.records || []);
         state.messages = mode === "merge" && state.messages.length ? mergeMessages([...state.messages, ...previewRecords]) : previewRecords;
+        nextMessagesFromPreview = true;
         if (mode !== "merge") state.messagePage = 1;
         state.messageHasMore = mode === "merge" ? previousHasMore : false;
       }
     } else {
       state.messageHasMore = false;
     }
+    state.messagesFromPreview = nextMessagesFromPreview;
 
     state.messageLoading = false;
-    const shouldScrollBottom = forceBottom || (mode === "replace" && (!keepPosition || wasNearBottom));
+    const shouldScrollBottom = !jumpUnread && (forceBottom || (mode === "replace" && (!keepPosition || wasNearBottom)));
     renderMessages(shouldScrollBottom ? "bottom" : "none");
     if (mode === "append") {
-      restorePrependScroll(el.messageList, previousScrollHeight, previousScrollTop, { watchImages: true });
+      if (!jumpUnread || !scrollToFirstUnreadMessage()) {
+        restorePrependScroll(el.messageList, previousScrollHeight, previousScrollTop, { watchImages: true });
+      }
     } else if (mode === "merge") {
-      if (wasNearBottom) {
+      if (jumpUnread && scrollToFirstUnreadMessage()) {
+        // Unread jump owns this scroll request.
+      } else if (wasNearBottom) {
         scrollElementToBottom(el.messageList, { watchImages: true });
       } else {
         restoreScrollTop(el.messageList, previousScrollTop, { watchImages: true });
       }
     } else if (keepPosition && !shouldScrollBottom) {
       restoreScrollTop(el.messageList, previousScrollTop, { watchImages: true });
+    } else if (jumpUnread) {
+      scrollToFirstUnreadMessage();
     }
     if ((mode === "replace" || mode === "merge") && records.length) {
       maybeBuildSkillSuggestion({ autoReply: mode === "merge" }).catch((error) => log("skill suggestion failed", { error: error.message }));
@@ -4810,17 +4918,21 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
     if (page === 1) {
       if (redOnly) {
         state.messages = [];
+        state.messagesFromPreview = false;
       } else {
         const previewRecords = mergeMessages(state.activeContact?.records || []);
         state.messages = mode === "merge" && state.messages.length ? mergeMessages([...state.messages, ...previewRecords]) : previewRecords;
+        state.messagesFromPreview = true;
       }
     }
     state.messageLoading = false;
     state.messageHasMore = mode === "merge" ? previousHasMore : false;
-    const shouldScrollBottom = forceBottom || (mode === "replace" && (!keepPosition || wasNearBottom));
+    const shouldScrollBottom = !jumpUnread && (forceBottom || (mode === "replace" && (!keepPosition || wasNearBottom)));
     renderMessages(shouldScrollBottom ? "bottom" : "none");
     if (keepPosition && !shouldScrollBottom) {
       restoreScrollTop(el.messageList, previousScrollTop, { watchImages: true });
+    } else if (jumpUnread) {
+      scrollToFirstUnreadMessage();
     }
     toast(`聊天记录接口失败：${error.message}`, true);
   }
