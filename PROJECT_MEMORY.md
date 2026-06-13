@@ -4277,3 +4277,94 @@ npm run fnos:health
 
 注意：因为 `server.js` 改了 OSS 代理超时，正在运行的 `http://localhost:5177` 服务需要重启后才会使用新的服务端超时；前端 `public/app.js` 需要刷新页面后生效。
 
+## 65. 2026-06-13 当前会话头部与会话列表用户类型标签修复
+
+### 1. 用户反馈
+
+用户指出 Web 当前会话头部和原生客户端不一致：
+
+- 当前会话头部显示拥挤，曾出现 `所属机器人: null`、空备注括号等无效信息。
+- 当前会话头像上叠了一个文字，默认头像观感不如客户端。
+- 左侧会话列表需要在昵称后面显示用户类型小标签：
+  - `个微`
+  - `公众号`
+  - `企微`
+- 当前用户主要有 `个微` 和 `公众号`，但 Web 需要预留 `企微`。
+
+### 2. 本次修复
+
+相关文件：
+
+- `public/app.js`
+- `public/styles.css`
+- `public/index.html`
+
+会话列表：
+
+- 新增真实字段识别用户类型：
+  - `getContactRobotType(contact)`
+  - `getContactTypeLabel(contact)`
+  - `getContactTypeClass(contact)`
+  - `renderContactTypeBadge(contact)`
+- 类型判断规则：
+  - `robotType=6` 显示 `公众号`
+  - `robotType=2/9` 显示 `企微`
+  - 其他微信 PC/手机类默认显示 `个微`
+  - 如果未来接口直接给 `robotTypeName/contactTypeName/accountTypeName`，包含 `公众号` 或 `企微` 时也会识别。
+- `normalizeContact()` 保留并规范化 `robotType`、`robotName`，标签完全来自真实接口字段，不造假身份。
+- 左侧列表昵称行改为：
+  - 昵称
+  - 紧贴昵称的小标签
+  - 第二行显示备注、机器人名或微信号，且会过滤和昵称完全重复的信息。
+
+当前会话头部：
+
+- `renderActive()` 改成原生客户端式两行：
+  - 第一行：昵称 + 有效备注
+  - 第二行：`微信号 ...，用户ID ...`
+- 新增展示值清洗：
+  - `cleanDisplayText(value)`
+  - `firstDisplayValue(...values)`
+  - `isSameDisplayText(left, right)`
+- 这些函数只影响 UI 展示，过滤空值、`null`、`undefined`、`NaN` 等无效字符串，避免头部出现 `null` 或空括号。
+- 如果备注和昵称完全一样，头部不再重复显示 `昵称（同昵称）`。
+
+头像：
+
+- `renderContactAvatar()` 支持显式传入空 `fallbackText`。
+- `handleAvatarImageError()` 支持空 fallback，不再强制回退到 `客`。
+- 当前会话头像无图时使用 CSS 默认头像图形，不再把首字盖在头像上。
+- `public/index.html` 初始静态头像也同步改成无文字默认头像，避免页面刚加载时闪出 `客` 字。
+
+### 3. 样式细节
+
+- 新增 `.contact-title-row`，保证长昵称截断、小标签不被挤没。
+- 新增 `.contact-type-badge`：
+  - `个微`：蓝色轻量标签
+  - `公众号`：红色轻量标签
+  - `企微`：绿色轻量标签
+- 当前头部昵称强制单行省略，备注也不换行，避免挤压第二行微信号和用户 ID。
+
+### 4. 验证
+
+已执行：
+
+```powershell
+npm run check
+git diff --check
+Invoke-RestMethod -Uri "http://localhost:5177/health"
+```
+
+结果：
+
+- `node --check server.js && node --check public/app.js` 通过。
+- `git diff --check` 无空白错误。
+- 本地服务 `http://localhost:5177` 健康检查正常，API 仍指向 `http://192.168.9.83:18080/api`。
+- 使用真实接口连接 Web 工作台验证：
+  - 会话列表真实加载。
+  - 当前头像文字为空。
+  - 当前头部保持两行结构。
+  - 左侧会话列表显示 `个微` 标签。
+
+注意：本次只改前端展示层，不改服务端、数据库、会话分页、红点接口。
+

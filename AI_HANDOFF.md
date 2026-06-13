@@ -2316,3 +2316,71 @@ Git reminder:
   - `data/reply-skills.json`
   - `logs/api-capture.ndjson`
 
+## 2026-06-13 Handoff: Active Header And Contact Type Badges
+
+User issue:
+
+- Active conversation header looked unlike the native client.
+- Header showed invalid values such as `null` / empty remark brackets in some cases.
+- Active fallback avatar displayed a text character over the blue avatar.
+- Left conversation list needed a small user-type badge immediately after the contact name:
+  - `个微`
+  - `公众号`
+  - `企微`
+
+Files changed:
+
+- `public/app.js`
+- `public/styles.css`
+- `public/index.html`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Important functions:
+
+- `normalizeContact(item, index)` now preserves normalized `robotType` and display-clean `robotName`.
+- `getContactRobotType(contact)` reads real API fields:
+  - `contact.robotType`
+  - `contact.robot.robotType`
+  - `deviceTypeValue`
+  - `deviceType`
+  - `accountType`
+  - `contactType`
+  - `type`
+- `getContactTypeLabel(contact)`:
+  - `robotType=6` => `公众号`
+  - `robotType=2/9` => `企微`
+  - otherwise => `个微`
+  - also respects text fields containing `公众号` / `企微`.
+- `renderContactTypeBadge(contact)` renders the inline list badge.
+- `getContactListDetail(contact)` now avoids showing a second line that is exactly the same as the display name.
+- `cleanDisplayText()`, `firstDisplayValue()`, and `isSameDisplayText()` filter UI display only. They do not mutate source API data.
+- `renderActive()` now displays:
+  - first line: display name + non-duplicate remark
+  - second line: `微信号 ...，用户ID ...`
+- `renderContactAvatar()` accepts `fallbackText: ""`.
+- `handleAvatarImageError()` supports blank avatar fallback instead of forcing `客`.
+
+Style notes:
+
+- `.contact-title-row` keeps name + badge on one line.
+- `.contact-type-badge` has distinct restrained styles for personal, public account, and work wechat.
+- `.contact-avatar.active-contact-avatar` uses CSS pseudo-elements for the default active avatar icon.
+- `.active-contact .active-remark` is forced to `white-space: nowrap`; do not remove this, or long remarks wrap and push the native-like header into three lines.
+
+Verification:
+
+- `npm run check` passed.
+- `git diff --check` passed, only CRLF warnings.
+- `Invoke-RestMethod http://localhost:5177/health` returned `ok: true`.
+- Browser smoke test connected to real API through `http://localhost:5177` and confirmed:
+  - active avatar text is empty
+  - active title height is one line
+  - left contact badges render from real list data
+
+Git reminder:
+
+- Runtime files were dirty and must not be committed:
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+

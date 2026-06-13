@@ -4050,6 +4050,8 @@ function touchActiveContact(lastContent, options = {}) {
 function normalizeContact(item, index) {
   const id = item.id || item.contactId || item.userId || item.contactID || `contact-${index}`;
   const robot = item.robot || {};
+  const robotType = firstValue(item.robotType, robot.robotType, item.deviceTypeValue, item.deviceType, item.accountType, item.contactType);
+  const robotName = firstDisplayValue(item.robotName, robot.robotRemark, robot.robotName, item.robotRemark);
   const records = Array.isArray(item.records)
     ? item.records.map((record, recordIndex) => normalizeMessage({ contactId: id, ...record }, recordIndex))
     : [];
@@ -4077,9 +4079,10 @@ function normalizeContact(item, index) {
     ...item,
     id,
     records,
-    userNick: item.userNick || item.nickName || item.userRemark || item.userName || item.name || `客户 ${id}`,
-    accountName: item.accountName || item.account?.userName || "",
-    robotName: item.robotName || robot.robotRemark || robot.robotName || item.robotRemark || "",
+    userNick: firstDisplayValue(item.userNick, item.nickName, item.userRemark, item.userName, item.name) || `客户 ${id}`,
+    accountName: firstDisplayValue(item.accountName, item.account?.userName),
+    robotName,
+    robotType,
     lastContent: item.lastContent || item.content || item.lastMsg || item.message || records[records.length - 1]?.content || "",
     unread: item.unRead ?? item.redDot ?? item.unReadCount ?? item.unread ?? 0,
     time: formatTime(sortTime || rawTime),
@@ -4093,7 +4096,7 @@ function normalizeContact(item, index) {
     tags: [
       item.isTodo ? "待办" : "",
       item.isNotice ? "通知" : "",
-      robot.robotRemark || robot.robotName || ""
+      robotName
     ].filter(Boolean)
   };
 }
@@ -4104,6 +4107,56 @@ function sortContacts(contacts) {
     if (todoDelta) return todoDelta;
     return Number(b.sortTime || 0) - Number(a.sortTime || 0);
   });
+}
+
+function getContactRobotType(contact) {
+  const robot = contact?.robot || {};
+  return firstValue(
+    contact?.robotType,
+    robot.robotType,
+    contact?.deviceTypeValue,
+    contact?.deviceType,
+    contact?.accountType,
+    contact?.contactType,
+    contact?.type
+  );
+}
+
+function getContactTypeLabel(contact) {
+  const rawType = getContactRobotType(contact);
+  const numericType = Number(rawType);
+  if (numericType === 6) return "公众号";
+  if (numericType === 2 || numericType === 9) return "企微";
+  const typeText = firstDisplayValue(contact?.robotTypeName, contact?.contactTypeName, contact?.accountTypeName, robotTypeName(rawType));
+  if (typeText.includes("公众号")) return "公众号";
+  if (typeText.includes("企微")) return "企微";
+  return "个微";
+}
+
+function getContactTypeClass(contact) {
+  const label = getContactTypeLabel(contact);
+  if (label === "公众号") return "is-public";
+  if (label === "企微") return "is-work";
+  return "is-personal";
+}
+
+function renderContactTypeBadge(contact, className = "") {
+  const label = getContactTypeLabel(contact);
+  const extraClass = className ? ` ${escapeAttr(className)}` : "";
+  return `<span class="contact-type-badge ${escapeAttr(getContactTypeClass(contact))}${extraClass}">${escapeHtml(label)}</span>`;
+}
+
+function getContactListDetail(contact) {
+  const displayName = getContactDisplayName(contact);
+  const detail = [
+    contact?.userRemark,
+    contact?.robotName,
+    getContactUserName(contact)
+  ].find((value) => {
+    const text = cleanDisplayText(value);
+    return text && !isSameDisplayText(text, displayName);
+  });
+  return firstDisplayValue(detail, "悠聊客户");
 }
 
 function renderContacts() {
@@ -4123,12 +4176,17 @@ function renderContacts() {
     const contactId = getContactId(contact);
     const hoverActions = getContactHoverActions(contact, contactId);
     const avatar = renderContactAvatar(contact);
+    const displayName = getContactDisplayName(contact);
+    const detail = getContactListDetail(contact);
     return `
       <div class="contact-card ${active ? "is-active" : ""} ${isPinned ? "is-pinned" : ""} ${unread ? "has-unread" : ""}" data-contact-id="${escapeAttr(contactId)}" role="button" tabindex="0">
         ${avatar}
         <span class="contact-main">
-          <strong>${escapeHtml(contact.userNick)}</strong>
-          <span>${escapeHtml(contact.userRemark || contact.robotName || contact.userName || "悠聊客户")}</span>
+          <span class="contact-title-row">
+            <strong>${escapeHtml(displayName)}</strong>
+            ${renderContactTypeBadge(contact)}
+          </span>
+          <span class="contact-detail">${escapeHtml(detail)}</span>
         </span>
         <span class="contact-side">
           <span>${escapeHtml(contact.time || "")}</span>
@@ -4682,7 +4740,7 @@ function getAvatarFromRecord(record) {
 }
 
 function getContactDisplayName(contact, info = getActiveContactInfo(contact)) {
-  return firstValue(
+  return firstDisplayValue(
     contact?.userNick,
     contact?.nickName,
     info?.nickName,
@@ -4708,7 +4766,9 @@ function renderContactAvatar(contact, options = {}) {
   const className = options.className || "";
   const classes = ["contact-photo", className].filter(Boolean).join(" ");
   const fallbackClasses = ["contact-avatar", className].filter(Boolean).join(" ");
-  const fallbackText = options.fallbackText || getInitial(options.fallbackName || getContactDisplayName(contact, options.info));
+  const fallbackText = options.fallbackText !== undefined
+    ? options.fallbackText
+    : getInitial(options.fallbackName || getContactDisplayName(contact, options.info));
   if (tagName === "img") {
     return `<img${id} class="${escapeAttr(classes)}" src="${escapeAttr(avatar)}" alt="" data-avatar-fallback="${escapeAttr(fallbackText)}" data-avatar-class="${escapeAttr(fallbackClasses)}">`;
   }
@@ -4717,10 +4777,12 @@ function renderContactAvatar(contact, options = {}) {
 
 function handleAvatarImageError(event) {
   const image = event.target;
-  if (!(image instanceof HTMLImageElement) || !image.dataset.avatarFallback) return;
+  const hasFallback = image instanceof HTMLImageElement
+    && Object.prototype.hasOwnProperty.call(image.dataset, "avatarFallback");
+  if (!hasFallback) return;
   const fallback = document.createElement("span");
   fallback.className = image.dataset.avatarClass || image.className.replace("contact-photo", "contact-avatar");
-  fallback.textContent = image.dataset.avatarFallback || "客";
+  fallback.textContent = image.dataset.avatarFallback;
   if (image.id) fallback.id = image.id;
   image.replaceWith(fallback);
   if (fallback.id === "activeAvatar") el.activeAvatar = fallback;
@@ -4745,7 +4807,7 @@ function getContactId(contact) {
 }
 
 function getContactUserName(contact) {
-  return firstValue(contact?.userName, contact?.wxid, contact?.userIdStr, contact?.userId, "");
+  return firstDisplayValue(contact?.userName, contact?.wxid, contact?.userIdStr, contact?.userId);
 }
 
 function getAccountId(contact = state.activeContact) {
@@ -4769,7 +4831,7 @@ function getActiveContactInfo(contact = state.activeContact) {
 }
 
 function getContactUserId(contact, info = getActiveContactInfo(contact)) {
-  return firstValue(
+  return firstDisplayValue(
     contact?.userIdStr,
     info?.userIdStr,
     contact?.idStr,
@@ -4781,7 +4843,7 @@ function getContactUserId(contact, info = getActiveContactInfo(contact)) {
 }
 
 function getContactRemark(contact, info = getActiveContactInfo(contact)) {
-  return firstValue(
+  return firstDisplayValue(
     info?.remark,
     info?.userRemark,
     info?.memo,
@@ -4796,7 +4858,7 @@ function getContactRemark(contact, info = getActiveContactInfo(contact)) {
 function renderActive() {
   const contact = state.activeContact;
   if (!contact) {
-    el.activeAvatar.outerHTML = '<span id="activeAvatar" class="contact-avatar">客</span>';
+    el.activeAvatar.outerHTML = '<span id="activeAvatar" class="contact-avatar active-photo active-contact-avatar active-avatar-empty" aria-hidden="true"></span>';
     el.activeAvatar = $("activeAvatar");
     el.activeTitle.textContent = "请选择会话";
     el.activeMeta.textContent = "连接服务后选择左侧客户开始处理";
@@ -4804,13 +4866,15 @@ function renderActive() {
   }
 
   renderActiveAvatar(contact);
-  el.activeTitle.textContent = contact.userNick || "客户";
+  const displayName = getContactDisplayName(contact);
   const userId = getContactUserId(contact) || "-";
-  const remark = getContactRemark(contact);
+  const userName = getContactUserName(contact) || "-";
+  const rawRemark = getContactRemark(contact);
+  const remark = isSameDisplayText(rawRemark, displayName) ? "" : rawRemark;
   const displayRemark = remark ? `（${remark}）` : "";
-  el.activeTitle.innerHTML = `${escapeHtml(contact.userNick || "客户")}${displayRemark ? `<span class="active-remark">${escapeHtml(displayRemark)}</span>` : ""}`;
+  el.activeTitle.innerHTML = `${escapeHtml(displayName)}${displayRemark ? `<span class="active-remark">${escapeHtml(displayRemark)}</span>` : ""}`;
   el.activeMeta.textContent = [
-    `微信号 ${contact.userName || "-"}`,
+    `微信号 ${userName}`,
     `用户ID ${userId}`
   ].filter(Boolean).join("，");
 }
@@ -4818,7 +4882,8 @@ function renderActive() {
 function renderActiveAvatar(contact) {
   const html = renderContactAvatar(contact, {
     id: "activeAvatar",
-    className: "active-photo"
+    className: "active-photo active-contact-avatar",
+    fallbackText: ""
   });
   if (el.activeAvatar.outerHTML !== html) {
     el.activeAvatar.outerHTML = html;
@@ -10178,6 +10243,29 @@ function kv(label, value, copyable = false) {
 
 function firstValue(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "");
+}
+
+function cleanDisplayText(value) {
+  if (value === undefined || value === null) return "";
+  const text = String(value).trim();
+  if (!text) return "";
+  const lowered = text.toLowerCase();
+  if (lowered === "null" || lowered === "undefined" || lowered === "nan") return "";
+  return text;
+}
+
+function firstDisplayValue(...values) {
+  for (const value of values) {
+    const text = cleanDisplayText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function isSameDisplayText(left, right) {
+  const leftText = cleanDisplayText(left);
+  const rightText = cleanDisplayText(right);
+  return Boolean(leftText && rightText && leftText === rightText);
 }
 
 function unwrapPayloadData(payload) {
