@@ -51,7 +51,7 @@ function $(id) {
 }
 
 function init() {
-  ["toastHost", "trainingDate", "onlyIssues", "summaryGrid", "summaryLines", "trainingCount", "trainingList", "refreshTraining"].forEach((id) => {
+  ["toastHost", "trainingDate", "onlyIssues", "summaryGrid", "summaryLines", "trainingCount", "trainingList", "refreshTraining", "sampleTraining"].forEach((id) => {
     el[id] = $(id);
   });
   el.trainingDate.value = state.date;
@@ -62,6 +62,7 @@ function init() {
 
 function bindEvents() {
   el.refreshTraining.addEventListener("click", () => loadTraining({ preserveIndex: true }));
+  el.sampleTraining.addEventListener("click", sampleTrainingReplies);
   el.trainingDate.addEventListener("change", () => {
     state.date = el.trainingDate.value || getTodayKey();
     state.currentIndex = 0;
@@ -106,6 +107,38 @@ async function loadTraining(options = {}) {
   } finally {
     state.loading = false;
     renderTraining();
+  }
+}
+
+async function sampleTrainingReplies() {
+  const previousId = getVisibleItems()[state.currentIndex]?.id || "";
+  el.sampleTraining.disabled = true;
+  el.sampleTraining.textContent = "采样中";
+  try {
+    const response = await fetch("/local/skill-training/sample", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        date: state.date,
+        scope: state.scope,
+        contactLimit: 18,
+        messageLimit: 80
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.success === false) throw new Error(payload.message || `HTTP ${response.status}`);
+    state.items = Array.isArray(payload.items) ? payload.items : [];
+    state.summary = payload.summary || state.summary;
+    const nextIndex = getVisibleItems().findIndex((item) => String(item.id) === String(previousId));
+    state.currentIndex = nextIndex >= 0 ? nextIndex : Math.min(state.currentIndex, Math.max(0, getVisibleItems().length - 1));
+    renderTraining();
+    const sampled = payload.sampled || {};
+    toast(`已采样 ${sampled.sampledPairs || 0} 组人工回复，新增 ${sampled.created || 0} 条，更新 ${sampled.updated || 0} 条。`);
+  } catch (error) {
+    toast(`闲时采样失败：${error.message}`, true);
+  } finally {
+    el.sampleTraining.disabled = false;
+    el.sampleTraining.textContent = "闲时采样";
   }
 }
 

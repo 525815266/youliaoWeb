@@ -4682,7 +4682,34 @@ Invoke-RestMethod -Uri "http://localhost:5177/local/skill-training?scope=today"
 
 `manualOverrides` 保留上限从 12 条提升到 24 条，方便聚类训练时看到更多真实人工样本。
 
-### 7. 验证
+### 7. 闲时采样
+
+新增接口：
+
+- `POST /local/skill-training/sample`
+
+用途：
+
+- 从真实悠聊 API 小批量拉联系人和聊天记录。
+- 识别 `source=0` 的客户消息与 `source=2` 的客服人工回复。
+- 把相邻的“客户问题 -> 人工回复”转换成训练候选。
+- 只写入 `review_queue` / `needs_optimization` 候选，不直接启用，不打开自动回复。
+
+默认前端按钮：
+
+- 训练页右上角新增 `闲时采样`。
+- 默认采样 `18` 个联系人，每个联系人最多 `80` 条消息。
+- 采样后刷新当前训练队列。
+
+内部测试能力：
+
+- `dryRun=true` 时只跑真实接口和聚类逻辑，不写 `data/reply-skills.json`。
+- 本次用 `dryRun` 验证小样本：
+  - 取到 `4` 个联系人。
+  - 识别 `2` 组客户消息与人工回复。
+  - 模拟新增 `2` 条候选。
+
+### 8. 验证
 
 已执行：
 
@@ -4691,6 +4718,7 @@ npm run check
 git diff --check
 Invoke-RestMethod -Uri "http://localhost:5177/health"
 Invoke-RestMethod -Uri "http://localhost:5177/local/skill-training?scope=today"
+Invoke-RestMethod -Method Post -Uri "http://localhost:5177/local/skill-training/sample" -Body '{"dryRun":true,"contactLimit":2,"messageLimit":30}' -ContentType "application/json"
 ```
 
 浏览器烟测：
@@ -4699,6 +4727,8 @@ Invoke-RestMethod -Uri "http://localhost:5177/local/skill-training?scope=today"
 - 页面只渲染 `1` 条训练卡片。
 - 队列显示 `第 1 / 14 条`。
 - 接口项已带 `replyVariants` 和 `promptVariants`。
+- `闲时采样` 按钮存在。
+- 底部操作区为 sticky。
 - 训练页没有 JS 页面错误；仅 favicon 404。
 
 注意：

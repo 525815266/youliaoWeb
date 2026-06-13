@@ -639,6 +639,148 @@ function chooseSkillTrainingImages(skill, manualSummary) {
   return uniqueTrainingList([...(manualSummary?.imageUrls || []), ...variantImages], 12);
 }
 
+function detectTrainingPlatformKey(text) {
+  const value = String(text || "").toLowerCase();
+  if (/\d{8}-\d{4,}/.test(value) || /(拼多多|pdd|pinduoduo|yangkeduo|多多)/i.test(value)) return "pdd";
+  if (/(京东|jd|jdmobile)/i.test(value)) return "jd";
+  if (/(淘宝|天猫|taobao|tmall|tbopen)/i.test(value)) return "taobao";
+  if (/(唯品会|vipshop)/i.test(value)) return "vip";
+  if (/(美团|meituan|大众点评)/i.test(value)) return "meituan";
+  if (/(饿了么|eleme)/i.test(value)) return "eleme";
+  if (/(抖音|douyin|aweme)/i.test(value)) return "douyin";
+  if (/(快手|kuaishou|kwai|gifshow)/i.test(value)) return "kuaishou";
+  return "";
+}
+
+function detectTrainingIntentKey(text) {
+  const value = normalizeTrainingComparableText(text);
+  if (/(查不到|查不出|没返利|无返利|没成功|订单没有|不提示|没绑定|怎么没绑定)/.test(value)) return "order_missing";
+  if (/(还没提示|还没显示|没等到订单|还没跟单|订单还没出|怎么还没出)/.test(value)) return "order_waiting";
+  if (/(绑定失败|绑定不了|怎么绑定|未绑定|绑定方法|支付宝账号|绑定支付宝)/.test(value)) return "bind_failed";
+  if (/(提现|提取|余额提现|提现入口|提现多久到账|提现审核|提现到支付宝)/.test(value)) return "withdraw_query";
+  if (/(什么时候到账|多久到账|待返利|已返利|返利|到账没|到帐没)/.test(value)) return "rebate_status";
+  if (/(在线客服|联系客服|人工客服|客服链接|客服在哪)/.test(value)) return "manual_service";
+  return "general";
+}
+
+function extractTrainingKeywords(text) {
+  const normalized = String(text || "").replace(/[，。！？、,.!?]/g, " ").trim();
+  const pieces = normalized.split(/\s+/).filter((item) => item.length >= 2);
+  const fallback = normalized.length > 12 ? [normalized.slice(0, 12), normalized.slice(-8)] : [normalized];
+  return uniqueTrainingList(pieces.length ? pieces : fallback, 8);
+}
+
+function buildServerLearningBucketKey(prompt, platformKey = "", intentKey = "", learningStage = "first_answer") {
+  const keywords = extractTrainingKeywords(prompt)
+    .map(normalizeTrainingComparableText)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join("_");
+  return ["learn", platformKey || "all", intentKey || "general", learningStage || "first_answer", keywords || normalizeTrainingComparableText(prompt).slice(0, 18)].join(":");
+}
+
+function queueTrainingCandidate(data, sample) {
+  const prompt = String(sample.prompt || "").trim();
+  const reply = String(sample.reply || "").trim();
+  const imageUrls = uniqueTrainingList(sample.imageUrls || [], 8);
+  if (prompt.length < 2 || (reply.length < 2 && !imageUrls.length)) return { skipped: true };
+
+  const platformKey = sample.platformKey || detectTrainingPlatformKey(`${prompt}\n${reply}`);
+  const intentKey = sample.intentKey || detectTrainingIntentKey(`${prompt}\n${reply}`);
+  const learningStage = sample.learningStage || "first_answer";
+  const learningBucketKey = buildServerLearningBucketKey(prompt, platformKey, intentKey, learningStage);
+  const now = new Date().toISOString();
+  const override = {
+    at: now,
+    prompt,
+    reply,
+    imageUrls,
+    contactId: sample.contactId || "",
+    messageKey: sample.messageKey || "",
+    platformKey,
+    intentKey,
+    learningStage
+  };
+
+  data.skills = Array.isArray(data.skills) ? data.skills : [];
+  let index = data.skills.findIndex((skill) => String(skill.learningBucketKey || "") === learningBucketKey);
+  if (index < 0) {
+    const promptKey = normalizeTrainingComparableText(prompt);
+    index = data.skills.findIndex((skill) => (
+      ["learned", "manual"].includes(String(skill.source || "")) &&
+      String(skill.platformKey || "") === platformKey &&
+      String(skill.intentKey || "") === intentKey &&
+      String(skill.learningStage || "") === learningStage &&
+      (Array.isArray(skill.samples) ? skill.samples : []).some((item) => normalizeTrainingComparableText(item).includes(promptKey) || promptKey.includes(normalizeTrainingComparableText(item)))
+    ));
+  }
+
+  const existing = index >= 0 ? data.skills[index] : null;
+  const overrides = Array.isArray(existing?.manualOverrides) ? existing.manualOverrides.slice() : [];
+  const mergedOverrides = mergeTrainingOverrideList(overrides, override).slice(0, 24);
+  const totalCount = mergedOverrides.reduce((sum, item) => sum + Math.max(1, Number(item.count || 1)), 0);
+  const steps = [
+    reply ? { type: "text", content: reply, url: "", label: "" } : null,
+    ...imageUrls.map((url, imageIndex) => ({ type: "image", content: "", url, label: `采样图片 ${imageIndex + 1}` }))
+  ].filter(Boolean);
+
+  const nextSkill = {
+    ...(existing || {}),
+    id: existing?.id || `sampled-${Date.now()}-${crypto.createHash("sha1").update(learningBucketKey).digest("hex").slice(0, 8)}`,
+    title: existing?.title || `待训练：${prompt.slice(0, 18)}`,
+    source: "learned",
+    enabled: existing ? existing.enabled !== false : false,
+    allowAutoReply: Boolean(existing?.allowAutoReply),
+    noReply: Boolean(existing?.noReply),
+    priority: Math.max(Number(existing?.priority || 45), 45),
+    hitCount: totalCount,
+    platformKey: existing?.platformKey || platformKey,
+    intentKey: existing?.intentKey || intentKey,
+    learningMode: "review_queue",
+    learningBucketKey,
+    learningStage,
+    trainingStatus: "needs_optimization",
+    keywords: uniqueTrainingList([...(existing?.keywords || []), ...extractTrainingKeywords(prompt)], 24),
+    samples: uniqueTrainingList([...(existing?.samples || []), prompt, ...mergedOverrides.map((item) => item.prompt)], 14),
+    manualOverrides: mergedOverrides,
+    lastManualOverrideAt: now,
+    revisionCount: Number(existing?.revisionCount || 0) + 1,
+    replySteps: Array.isArray(existing?.replySteps) && existing.replySteps.length ? existing.replySteps : steps,
+    fallback: existing?.fallback || reply || "",
+    updatedAt: now
+  };
+
+  if (index >= 0) {
+    data.skills[index] = nextSkill;
+    return { updated: true };
+  }
+  data.skills.unshift(nextSkill);
+  return { created: true };
+}
+
+function mergeTrainingOverrideList(overrides, override) {
+  const normalizedPrompt = normalizeTrainingComparableText(override.prompt);
+  const normalizedReply = normalizeTrainingComparableText(override.reply);
+  const imageKey = (override.imageUrls || []).map(normalizeTrainingComparableText).join("|");
+  const duplicateIndex = overrides.findIndex((item) => (
+    normalizeTrainingComparableText(item.prompt) === normalizedPrompt &&
+    normalizeTrainingComparableText(item.reply) === normalizedReply &&
+    getSkillOverrideImages(item).map(normalizeTrainingComparableText).join("|") === imageKey &&
+    String(item.platformKey || "") === String(override.platformKey || "") &&
+    String(item.intentKey || "") === String(override.intentKey || "") &&
+    String(item.learningStage || "") === String(override.learningStage || "")
+  ));
+  if (duplicateIndex >= 0) {
+    overrides[duplicateIndex] = {
+      ...overrides[duplicateIndex],
+      ...override,
+      count: Number(overrides[duplicateIndex].count || 1) + 1
+    };
+    return overrides;
+  }
+  return [override, ...overrides];
+}
+
 function isTrainingDirtyText(text) {
   const value = String(text || "").trim();
   if (!value) return true;
@@ -816,6 +958,35 @@ async function handleSkillTraining(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const data = readReplySkills();
 
+  if (url.pathname === "/local/skill-training/sample") {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { success: false, message: "Method not allowed" });
+      return;
+    }
+    try {
+      const body = await readBody(req);
+      const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
+      const targetData = payload.dryRun ? JSON.parse(JSON.stringify(data)) : data;
+      const result = await sampleManualRepliesForTraining(targetData, payload);
+      const next = payload.dryRun ? targetData : writeReplySkills(targetData);
+      const date = payload.date || getShanghaiDateKey();
+      const scope = payload.scope || "today";
+      const items = buildSkillTrainingItems(next, { date, scope });
+      sendJson(res, 200, {
+        success: true,
+        message: "已采样人工回复并加入训练候选",
+        sampled: result,
+        date,
+        scope,
+        summary: summarizeSkillTrainingItems(items, date),
+        items
+      });
+    } catch (error) {
+      sendJson(res, 400, { success: false, message: error.message || "闲时采样失败" });
+    }
+    return;
+  }
+
   if (req.method === "GET") {
     const date = url.searchParams.get("date") || getShanghaiDateKey();
     const scope = url.searchParams.get("scope") || "today";
@@ -893,6 +1064,191 @@ function getPayloadData(payload) {
   if (payload.result !== undefined) return payload.result;
   if (payload.response !== undefined) return payload.response;
   return payload;
+}
+
+function getPayloadRecords(payload) {
+  const data = getPayloadData(payload);
+  if (Array.isArray(data)) return data;
+  const candidates = [data?.records, data?.rows, data?.list, data?.items, data?.data, data?.result];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+    if (candidate && typeof candidate === "object") {
+      const nested = candidate.records || candidate.rows || candidate.list || candidate.items || candidate.data;
+      if (Array.isArray(nested)) return nested;
+    }
+  }
+  return [];
+}
+
+function appendFormValue(form, key, value) {
+  if (value === undefined || value === null) return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => appendFormValue(form, key, item));
+    return;
+  }
+  form.append(key, String(value));
+}
+
+async function postYouChatApi(pathname, payload = {}, apiBase = DEFAULT_API_BASE) {
+  const base = String(apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
+  const target = new URL(`${base}${pathname.startsWith("/") ? pathname : `/${pathname}`}`);
+  const form = new FormData();
+  Object.entries(payload || {}).forEach(([key, value]) => appendFormValue(form, key, value));
+  const upstream = await fetchWithTimeout(target, {
+    method: "POST",
+    body: form
+  }, Math.min(API_PROXY_TIMEOUT_MS, 30000), `YouChat sample ${pathname}`);
+  const text = await upstream.text();
+  let parsed;
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { success: false, message: text };
+  }
+  if (!upstream.ok || parsed?.success === false) {
+    throw new Error(parsed?.message || `HTTP ${upstream.status}`);
+  }
+  return parsed;
+}
+
+function getSampleContactId(contact) {
+  return firstNonEmpty(contact?.id, contact?.contactId, contact?.contactID, contact?.userId, contact?.customerId, contact?.wxid);
+}
+
+function getSampleMessageTime(message) {
+  const value = firstNonEmpty(message?.sendTime, message?.createTime, message?.time, message?.timestamp, message?.msgTime, message?.addTime);
+  const numberValue = Number(value);
+  if (Number.isFinite(numberValue) && numberValue > 0) return numberValue < 100000000000 ? numberValue * 1000 : numberValue;
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getSampleMessageText(message) {
+  return String(firstNonEmpty(message?.content, message?.msg, message?.message, message?.text, message?.title, "") || "").trim();
+}
+
+function getSampleMessageImage(message) {
+  const value = firstNonEmpty(message?.img, message?.image, message?.imageUrl, message?.url, message?.picUrl, "");
+  const text = String(value || getSampleMessageText(message)).trim();
+  return /^https?:\/\//i.test(text) && /\.(png|jpe?g|gif|webp)(?:$|\?)/i.test(text) ? text : "";
+}
+
+function getSampleMessageSource(message) {
+  const source = firstNonEmpty(message?.source, message?.msgSource, message?.fromType, message?.direction);
+  return String(source ?? "");
+}
+
+function isSampleIncomingMessage(message) {
+  const source = getSampleMessageSource(message);
+  if (source === "0" || source === "customer" || source === "incoming") return true;
+  return message?.isCustomer === true || message?.direction === "incoming";
+}
+
+function isSampleOutgoingManualMessage(message) {
+  const source = getSampleMessageSource(message);
+  if (source === "2" || source === "service" || source === "outgoing") return true;
+  return message?.isCustomerService === true || message?.direction === "outgoing";
+}
+
+function isSampleSystemText(text) {
+  const value = normalizeTrainingComparableText(text);
+  if (!value) return true;
+  return /(会话.*结束|接待客服|系统关闭|转接|自动回复|机器人|撤回了一条消息)/.test(value);
+}
+
+function getSampleMessageKey(message, fallback = "") {
+  return String(firstNonEmpty(message?.id, message?.msgId, message?.messageId, message?.chatContentId, fallback) || "");
+}
+
+async function sampleManualRepliesForTraining(data, options = {}) {
+  const contactLimit = Math.max(1, Math.min(Number(options.contactLimit || 18), 60));
+  const messageLimit = Math.max(20, Math.min(Number(options.messageLimit || 80), 160));
+  const contactPayloads = [
+    { pageIndex: 1, pageSize: contactLimit },
+    { pageIndex: 1, pageSize: contactLimit, isHistory: true }
+  ];
+  const contacts = [];
+  const contactSeen = new Set();
+  const errors = [];
+
+  for (const payload of contactPayloads) {
+    try {
+      const result = await postYouChatApi("/Contact/GetContactList", payload, options.apiBase);
+      getPayloadRecords(result).forEach((contact) => {
+        const contactId = String(getSampleContactId(contact) || "");
+        if (!contactId || contactSeen.has(contactId)) return;
+        contactSeen.add(contactId);
+        contacts.push(contact);
+      });
+    } catch (error) {
+      errors.push(`contact:${error.message}`);
+    }
+  }
+
+  let sampledPairs = 0;
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const contact of contacts.slice(0, contactLimit)) {
+    const contactId = String(getSampleContactId(contact) || "");
+    if (!contactId) continue;
+    try {
+      const result = await postYouChatApi("/ChatContent/GetList", {
+        contactId,
+        size: messageLimit,
+        current: 1,
+        onlyRepointMsg: false
+      }, options.apiBase);
+      const messages = getPayloadRecords(result)
+        .slice()
+        .sort((a, b) => getSampleMessageTime(a) - getSampleMessageTime(b));
+      let lastIncoming = null;
+      let lastOutgoingSeen = false;
+      for (const message of messages) {
+        const text = getSampleMessageText(message);
+        if (isSampleIncomingMessage(message) && !isSampleSystemText(text)) {
+          lastIncoming = message;
+          lastOutgoingSeen = false;
+          continue;
+        }
+        if (!isSampleOutgoingManualMessage(message) || !lastIncoming || lastOutgoingSeen) continue;
+        const reply = text;
+        const image = getSampleMessageImage(message);
+        if (isSampleSystemText(reply) && !image) continue;
+        const prompt = getSampleMessageText(lastIncoming);
+        const learningStage = (() => {
+          const incomingIndex = messages.indexOf(lastIncoming);
+          const previous = messages.slice(0, incomingIndex).reverse().find((item) => isSampleIncomingMessage(item) || isSampleOutgoingManualMessage(item));
+          return previous && isSampleOutgoingManualMessage(previous) ? "customer_followup" : "first_answer";
+        })();
+        const queued = queueTrainingCandidate(data, {
+          prompt,
+          reply,
+          imageUrls: image ? [image] : [],
+          contactId,
+          messageKey: getSampleMessageKey(message, `${contactId}:${sampledPairs}`),
+          learningStage
+        });
+        sampledPairs += 1;
+        if (queued.created) created += 1;
+        else if (queued.updated) updated += 1;
+        else skipped += 1;
+        lastOutgoingSeen = true;
+      }
+    } catch (error) {
+      errors.push(`contact ${contactId}:${error.message}`);
+    }
+  }
+
+  return {
+    contacts: contacts.length,
+    sampledPairs,
+    created,
+    updated,
+    skipped,
+    errors: errors.slice(0, 8)
+  };
 }
 
 function extractUploadEndpoint(config) {

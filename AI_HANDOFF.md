@@ -2646,15 +2646,53 @@ AI organize:
   - `noReply`
 - AI result only fills the editor. It does not save until the user clicks approve/optimize.
 
+Idle/manual-reply sampling:
+
+- New endpoint: `POST /local/skill-training/sample`.
+- Frontend button on `skill-training.html`: `闲时采样`.
+- The endpoint uses real YouChat APIs:
+  - `/Contact/GetContactList`
+  - `/ChatContent/GetList`
+- It detects adjacent pairs:
+  - incoming customer message: usually `source=0`
+  - outgoing manual service reply: usually `source=2`
+- It queues pairs through `queueTrainingCandidate(data, sample)`.
+- New sampled items are still review-only:
+  - `learningMode = "review_queue"`
+  - `trainingStatus = "needs_optimization"`
+  - new candidates default `enabled = false`
+  - new candidates default `allowAutoReply = false`
+- UI default samples:
+  - `contactLimit = 18`
+  - `messageLimit = 80`
+- Internal validation can use `dryRun=true`; this runs real API sampling but does not write `data/reply-skills.json`.
+
+Server sampling helpers:
+
+- `postYouChatApi(pathname, payload, apiBase)`
+- `getPayloadRecords(payload)`
+- `sampleManualRepliesForTraining(data, options)`
+- `queueTrainingCandidate(data, sample)`
+- `detectTrainingPlatformKey(text)`
+- `detectTrainingIntentKey(text)`
+- `buildServerLearningBucketKey(prompt, platformKey, intentKey, learningStage)`
+- `mergeTrainingOverrideList(overrides, override)`
+
 Verification:
 
 - Restarted `node server.js` on the same port `5177`.
 - `npm run check` passed.
 - `git diff --check` passed with only CRLF warnings.
 - `GET /local/skill-training?scope=today` returned items with `replyVariants` and `promptVariants`.
+- `POST /local/skill-training/sample` with `dryRun=true`, `contactLimit=2`, `messageLimit=30` succeeded:
+  - `contacts=4`
+  - `sampledPairs=2`
+  - simulated `created=2`
 - Playwright smoke test:
   - rendered exactly one non-skeleton training card
   - queue count was `第 1 / 14 条`
+  - `闲时采样` button existed
+  - action footer was `position: sticky`
   - no page JS error; favicon 404 only
 
 Do not regress:
