@@ -7,6 +7,7 @@ const signalR = require("@microsoft/signalr");
 
 const PORT = Number(process.env.PORT || 5177);
 const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "http://192.168.9.83:18080/api";
+const FNOS_MYSQL_CONNECTION_STRING = process.env.YOUCHAT_MYSQL_CONNECTION_STRING || "Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;Allow User Variables=true;";
 const PUBLIC_DIR = path.join(__dirname, "public");
 const CLIENT_WWWROOT = process.env.YOUCHAT_DESKTOP_WWWROOT || "C:\\Program Files\\youchat-desktop\\wwwroot";
 const SIGNALR_BROWSER_FILE = path.join(__dirname, "node_modules", "@microsoft", "signalr", "dist", "browser", "signalr.min.js");
@@ -1109,6 +1110,163 @@ async function postYouChatApi(pathname, payload = {}, apiBase = DEFAULT_API_BASE
     throw new Error(parsed?.message || `HTTP ${upstream.status}`);
   }
   return parsed;
+}
+
+function getYouChatDatabaseMode(databaseType) {
+  const type = Number(databaseType);
+  if (type === 0) return "mysql";
+  if (type === 1) return "sqlserver";
+  if (type === 2) return "sqlite";
+  return "unknown";
+}
+
+async function getYouChatContactCount(body = {}, apiBase = DEFAULT_API_BASE) {
+  const payload = await postYouChatApi("/Contact/GetContactList", body, apiBase);
+  const data = getPayloadData(payload);
+  if (data === null || data === undefined) return 0;
+  if (typeof data === "number") return data;
+  if (typeof data === "string" && /^\d+$/.test(data)) return Number(data);
+  if (Number.isFinite(Number(data?.total))) return Number(data.total);
+  const records = getPayloadRecords(payload);
+  return records.length;
+}
+
+async function getFnOSDatabaseHealth(options = {}) {
+  const apiBase = options.apiBase || DEFAULT_API_BASE;
+  const minHistoryCount = Number(options.minHistoryCount || 1000);
+  const summary = {
+    apiBase,
+    ok: true,
+    databaseType: null,
+    databaseMode: "unknown",
+    connectionStringPresent: false,
+    totalContacts: 0,
+    historyContacts: 0,
+    guestbookContacts: 0,
+    currentAccount2: 0,
+    checkedAt: new Date().toISOString(),
+    errors: []
+  };
+
+  try {
+    const optionsPayload = await postYouChatApi("/System/GetOptions", {}, apiBase);
+    const databaseOptions = optionsPayload?.data?.dataBaseOptions || {};
+    summary.databaseType = Number(databaseOptions.databaseType);
+    summary.databaseMode = getYouChatDatabaseMode(summary.databaseType);
+    summary.connectionStringPresent = Boolean(String(databaseOptions.connectionString || "").trim());
+    if (summary.databaseType !== 0) {
+      summary.ok = false;
+      summary.errors.push("FnOS 服务端当前不是 MySQL 模式。");
+    }
+  } catch (error) {
+    summary.ok = false;
+    summary.errors.push(`System/GetOptions 失败：${error.message}`);
+  }
+
+  try {
+    summary.totalContacts = await getYouChatContactCount({ pageIndex: 1, pageSize: 20 }, apiBase);
+    if (summary.totalContacts <= 0) {
+      summary.ok = false;
+      summary.errors.push("联系人总数为空。");
+    }
+  } catch (error) {
+    summary.ok = false;
+    summary.errors.push(`联系人总数检查失败：${error.message}`);
+  }
+
+  try {
+    summary.historyContacts = await getYouChatContactCount({ pageIndex: 1, pageSize: 20, isHistory: "true" }, apiBase);
+    if (summary.historyContacts < minHistoryCount) {
+      summary.ok = false;
+      summary.errors.push(`历史联系人数量异常：${summary.historyContacts}`);
+    }
+  } catch (error) {
+    summary.ok = false;
+    summary.errors.push(`历史联系人检查失败：${error.message}`);
+  }
+
+  try {
+    summary.guestbookContacts = await getYouChatContactCount({ pageIndex: 1, pageSize: 20, isGuestbook: "true" }, apiBase);
+  } catch (error) {
+    summary.errors.push(`留言联系人检查失败：${error.message}`);
+  }
+
+  try {
+    summary.currentAccount2 = await getYouChatContactCount({ pageIndex: 1, pageSize: 20, accountId: 2 }, apiBase);
+  } catch (error) {
+    summary.errors.push(`当前账号探测失败：${error.message}`);
+  }
+
+  return summary;
+}
+
+async function restoreFnOSDatabaseToMySQL(options = {}) {
+  const apiBase = options.apiBase || DEFAULT_API_BASE;
+  const connectionString = String(options.connectionString || FNOS_MYSQL_CONNECTION_STRING).trim();
+  if (!connectionString) throw new Error("MySQL 连接串为空");
+
+  const before = await getFnOSDatabaseHealth({ apiBase, minHistoryCount: options.minHistoryCount });
+  const connectResult = await postYouChatApi("/System/ConnectDatabase", {
+    type: 0,
+    connectionString
+  }, apiBase);
+  if (!connectResult?.data) throw new Error(connectResult?.message || "ConnectDatabase 失败");
+
+  const saveResult = await postYouChatApi("/System/SetConnectionString", {
+    type: 0,
+    connectionString
+  }, apiBase);
+  if (!saveResult?.data) throw new Error(saveResult?.message || "SetConnectionString 失败");
+
+  const persisted = await postYouChatApi("/System/GetConnectionString", {}, apiBase);
+  const persistedType = Number(persisted?.data?.databaseType);
+  const persistedConnection = String(persisted?.data?.connectionString || "");
+  if (persistedType !== 0 || !/^Server=mysql/i.test(persistedConnection)) {
+    throw new Error(`连接串保存后仍异常：databaseType=${persistedType}`);
+  }
+
+  const after = await getFnOSDatabaseHealth({ apiBase, minHistoryCount: options.minHistoryCount });
+  if (after.databaseType !== 0) throw new Error("修复后服务端仍未切到 MySQL");
+
+  return {
+    before,
+    after,
+    persistedDatabaseType: persistedType,
+    restoredAt: new Date().toISOString()
+  };
+}
+
+async function handleFnOSDatabase(req, res) {
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+  try {
+    if (url.pathname === "/local/fnos/health") {
+      const health = await getFnOSDatabaseHealth({
+        apiBase: url.searchParams.get("apiBase") || DEFAULT_API_BASE
+      });
+      sendJson(res, 200, { success: true, health });
+      return;
+    }
+
+    if (url.pathname === "/local/fnos/restore-mysql") {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { success: false, message: "Method not allowed" });
+        return;
+      }
+      const body = await readBody(req);
+      const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
+      const result = await restoreFnOSDatabaseToMySQL(payload);
+      sendJson(res, 200, {
+        success: true,
+        message: "FnOS 数据库已切回 MySQL",
+        result
+      });
+      return;
+    }
+
+    sendJson(res, 404, { success: false, message: "Unknown FnOS database endpoint" });
+  } catch (error) {
+    sendJson(res, 400, { success: false, message: error.message || "FnOS 数据库操作失败" });
+  }
 }
 
 function getSampleContactId(contact) {
@@ -2377,6 +2535,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url.startsWith("/local/reply-skills/learn")) {
     await handleReplySkillLearn(req, res);
+    return;
+  }
+
+  if (req.url.startsWith("/local/fnos/")) {
+    await handleFnOSDatabase(req, res);
     return;
   }
 

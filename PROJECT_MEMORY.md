@@ -62,6 +62,7 @@
 62. [2026-06-13 底部会话分类红点与未读跳转修复](#62-2026-06-13-底部会话分类红点与未读跳转修复)
 63. [2026-06-13 SQLite 回退恢复与图片发送性能修复](#63-2026-06-13-sqlite-回退恢复与图片发送性能修复)
 68. [2026-06-13 Skill 队列式训练与相似学习聚类](#68-2026-06-13-skill-队列式训练与相似学习聚类)
+69. [2026-06-15 Web 数据库一键修复按钮](#69-2026-06-15-web-数据库一键修复按钮)
 
 ## 1. 项目目标
 
@@ -4736,4 +4737,165 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:5177/local/skill-training/
 - `data/reply-skills.json` 是运行时学习数据，本次不提交。
 - `logs/api-capture.ndjson` 是运行抓包日志，本次不提交。
 - 本次已重启本地 `5177` 服务，仍使用原端口。
+
+## 69. 2026-06-15 Web 数据库一键修复按钮
+
+### 1. 问题
+
+用户反馈飞牛后端数据库又崩溃，Web 和官方客户端数据数量异常。
+
+本次先执行：
+
+```powershell
+npm run fnos:health
+```
+
+确认服务端再次切到 SQLite：
+
+- `databaseType=2`
+- `databaseMode=sqlite`
+- `totalContacts=500`
+- `historyContacts=24`
+- `currentAccount2=8`
+
+随后执行：
+
+```powershell
+npm run fnos:restore:mysql
+npm run fnos:health
+```
+
+恢复后：
+
+- `databaseType=0`
+- `databaseMode=mysql`
+- `totalContacts=8072`
+- `historyContacts=5688`
+- `currentAccount2=62`
+
+### 2. 新增本地修复接口
+
+相关文件：
+
+- `server.js`
+
+新增常量：
+
+- `FNOS_MYSQL_CONNECTION_STRING`
+
+默认值仍是已验证可用的飞牛 MySQL 连接串：
+
+```text
+Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;Allow User Variables=true;
+```
+
+新增接口：
+
+- `GET /local/fnos/health`
+- `POST /local/fnos/restore-mysql`
+
+`GET /local/fnos/health` 会检查：
+
+- `/System/GetOptions` 的 `databaseType`
+- 联系人总数
+- 历史联系人数量
+- 留言联系人数量
+- `accountId=2` 当前会话探测数量
+
+`POST /local/fnos/restore-mysql` 会执行和脚本一致的真实悠聊接口链路：
+
+- `/System/ConnectDatabase`
+- `/System/SetConnectionString`
+- `/System/GetConnectionString`
+- `/System/GetOptions`
+- 再次检查联系人数量和历史数量
+
+### 3. Web 数据库管理按钮
+
+相关文件：
+
+- `public/app.js`
+- `public/styles.css`
+
+入口：
+
+- 右上角菜单 -> `数据库管理`
+
+弹窗顶部新增 `飞牛数据库状态` 面板：
+
+- 状态胶囊：
+  - `MySQL 正常`
+  - `需要修复`
+  - `检查失败`
+  - `检查中`
+  - `修复中`
+- 指标：
+  - 数据库模式
+  - 联系人
+  - 历史
+  - 当前探测
+- 按钮：
+  - `刷新状态`
+  - `一键切回 MySQL`
+
+按钮行为：
+
+- 打开数据库管理弹窗后会静默调用 `/local/fnos/health`。
+- 点击 `刷新状态` 会重新读取后端真实状态。
+- 点击 `一键切回 MySQL` 会弹确认框，然后调用 `/local/fnos/restore-mysql`。
+- 修复成功后会刷新会话数量和当前会话列表。
+- 下方原有 `删除聊天记录` 功能保留，确认输入逻辑不变。
+
+### 4. 本次接口验证
+
+重启本地 `5177` 后直接请求：
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5177/local/fnos/health"
+```
+
+当时接口再次看到 SQLite：
+
+- `databaseType=2`
+- `databaseMode=sqlite`
+- `totalContacts=510`
+- `historyContacts=24`
+- `currentAccount2=10`
+
+随后请求：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:5177/local/fnos/restore-mysql" -Body "{}" -ContentType "application/json"
+```
+
+修复接口成功返回：
+
+- 修复前：SQLite，历史 `24`
+- 修复后：MySQL，联系人 `8072`，历史 `5749`
+
+最终 `npm run fnos:health` 通过：
+
+- `databaseType=0`
+- `databaseMode=mysql`
+- `totalContacts=8072`
+- `historyContacts=5749`
+
+### 5. 浏览器烟测
+
+使用 Playwright 打开 `http://localhost:5177/`，直接调出 `showDatabaseModal()`：
+
+- 弹窗显示 `MySQL 正常`。
+- 指标显示：
+  - `mysql`
+  - `8,072`
+  - `5,749`
+  - `1`
+- `刷新状态` 和 `一键切回 MySQL` 按钮存在。
+- 面板宽度正常，无明显错位。
+
+注意：
+
+- 这只是把悠聊服务端运行配置切回 MySQL，不修改 Docker compose。
+- 如果后续又自动回退 SQLite，可以直接从 Web 数据库管理里点 `一键切回 MySQL`。
+- 若切回后仍异常，再继续检查飞牛容器、MySQL 表分区/排序规则和服务日志。
 

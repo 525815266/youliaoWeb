@@ -514,6 +514,12 @@ const state = {
     confirmText: "",
     deleting: false
   },
+  databaseRepair: {
+    health: null,
+    loading: false,
+    repairing: false,
+    error: ""
+  },
   activeContact: null,
   contextMenu: null,
   totalContacts: 0,
@@ -1512,6 +1518,7 @@ function showDatabaseModal() {
     onConfirm: deleteChatRecordsFromModal
   });
   updateDatabaseDeleteConfirmState();
+  loadDatabaseRepairStatus({ silent: true });
 }
 
 function renderDatabaseModal() {
@@ -1519,8 +1526,10 @@ function renderDatabaseModal() {
   return `
     <section class="database-delete-panel">
       <nav class="database-delete-tabs" aria-label="数据库管理功能">
-        <button type="button" class="is-active">删除聊天记录</button>
+        <button type="button" class="is-active">数据库修复</button>
+        <button type="button">删除聊天记录</button>
       </nav>
+      ${renderDatabaseRepairPanel()}
       <div class="database-delete-form">
         <label class="modal-field database-date-range">
           <span><i>*</i> 选择日期：</span>
@@ -7743,6 +7752,10 @@ function handleToolModalBodyClick(event) {
     if (hasNextNoticePage()) loadClientNotices(state.clientNotice.page + 1);
   } else if (action === "notice-consume") {
     consumeClientNotice(target.dataset.noticeId || "");
+  } else if (action === "database-health") {
+    loadDatabaseRepairStatus({ silent: false });
+  } else if (action === "database-repair") {
+    repairDatabaseFromModal();
   }
 }
 
@@ -10072,6 +10085,114 @@ function renderSkillReplyPanel() {
       </div>
     </section>
   `;
+}
+
+function renderDatabaseRepairPanel() {
+  const health = state.databaseRepair.health || null;
+  const mode = health?.databaseMode || "未知";
+  const ok = Boolean(health?.ok);
+  const statusClass = state.databaseRepair.error ? "danger" : ok ? "ok" : health ? "warn" : "muted";
+  const statusText = state.databaseRepair.loading
+    ? "检查中"
+    : state.databaseRepair.repairing
+      ? "修复中"
+      : state.databaseRepair.error
+        ? "检查失败"
+        : ok
+          ? "MySQL 正常"
+          : health
+            ? "需要修复"
+            : "未检查";
+  const errors = state.databaseRepair.error
+    ? [state.databaseRepair.error]
+    : Array.isArray(health?.errors) ? health.errors : [];
+  return `
+    <section class="database-repair-panel">
+      <div class="database-repair-head">
+        <div>
+          <strong>飞牛数据库状态</strong>
+          <span>当前 Web 和官方客户端数据异常时，优先确认这里是否仍是 MySQL。</span>
+        </div>
+        <span class="database-status-pill ${statusClass}">${escapeHtml(statusText)}</span>
+      </div>
+      <div class="database-status-grid">
+        <div><span>数据库</span><strong>${escapeHtml(mode)}</strong></div>
+        <div><span>联系人</span><strong>${formatDatabaseMetric(health?.totalContacts)}</strong></div>
+        <div><span>历史</span><strong>${formatDatabaseMetric(health?.historyContacts)}</strong></div>
+        <div><span>当前探测</span><strong>${formatDatabaseMetric(health?.currentAccount2)}</strong></div>
+      </div>
+      ${errors.length ? `<div class="database-repair-errors">${errors.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</div>` : ""}
+      <div class="database-repair-actions">
+        <button class="mini-action" type="button" data-client-modal-action="database-health" ${state.databaseRepair.loading || state.databaseRepair.repairing ? "disabled" : ""}>刷新状态</button>
+        <button class="mini-action primary" type="button" data-client-modal-action="database-repair" ${state.databaseRepair.repairing ? "disabled" : ""}>一键切回 MySQL</button>
+      </div>
+    </section>
+  `;
+}
+
+function formatDatabaseMetric(value) {
+  if (value === undefined || value === null || value === "") return "-";
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue.toLocaleString("zh-CN") : String(value);
+}
+
+async function loadDatabaseRepairStatus(options = {}) {
+  if (state.databaseRepair.loading || state.databaseRepair.repairing) return;
+  state.databaseRepair.loading = true;
+  state.databaseRepair.error = "";
+  if (state.activeModal?.type === "database") renderActiveModalBody();
+  try {
+    const response = await fetch("/local/fnos/health", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || payload.success === false) throw new Error(getMessage(payload) || `HTTP ${response.status}`);
+    state.databaseRepair.health = payload.health || null;
+    if (!options.silent) {
+      const healthy = Boolean(state.databaseRepair.health?.ok);
+      toast(healthy ? "数据库当前为 MySQL，状态正常。" : "数据库状态异常，可以点击一键修复。", !healthy);
+    }
+  } catch (error) {
+    state.databaseRepair.error = error.message;
+    if (!options.silent) toast(`数据库状态检查失败：${error.message}`, true);
+  } finally {
+    state.databaseRepair.loading = false;
+    if (state.activeModal?.type === "database") {
+      renderActiveModalBody();
+      updateDatabaseDeleteConfirmState();
+    }
+  }
+}
+
+async function repairDatabaseFromModal() {
+  if (state.databaseRepair.repairing) return;
+  const ok = window.confirm("确定要把飞牛悠聊服务端切回 MySQL 吗？修复期间可能会短暂影响接口读取。");
+  if (!ok) return;
+  state.databaseRepair.repairing = true;
+  state.databaseRepair.error = "";
+  renderActiveModalBody();
+  try {
+    const response = await fetch("/local/fnos/restore-mysql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.success === false) throw new Error(getMessage(payload) || `HTTP ${response.status}`);
+    state.databaseRepair.health = payload.result?.after || null;
+    toast("数据库已切回 MySQL，正在刷新会话数量。");
+    await Promise.allSettled([
+      loadContactCounts(),
+      loadContacts(1, { keepPosition: true })
+    ]);
+  } catch (error) {
+    state.databaseRepair.error = error.message;
+    toast(`数据库修复失败：${error.message}`, true);
+  } finally {
+    state.databaseRepair.repairing = false;
+    if (state.activeModal?.type === "database") {
+      renderActiveModalBody();
+      updateDatabaseDeleteConfirmState();
+    }
+  }
 }
 
 function filterReplySkills(suggestion = null) {

@@ -2704,3 +2704,114 @@ Do not regress:
   - `data/reply-skills.json`
   - `logs/api-capture.ndjson`
 
+## 2026-06-15 Handoff: Web FnOS Database Repair Button
+
+User issue:
+
+- FnOS YouChat backend switched to SQLite again.
+- Web and native client counts collapsed.
+- User asked to switch it back and add a Web button to repair it next time.
+
+Immediate backend recovery:
+
+- `npm run fnos:health` initially reported:
+  - `databaseType=2`
+  - `databaseMode=sqlite`
+  - `totalContacts=500`
+  - `historyContacts=24`
+  - `currentAccount2=8`
+- Ran:
+  - `npm run fnos:restore:mysql`
+  - `npm run fnos:health`
+- Recovered to:
+  - `databaseType=0`
+  - `databaseMode=mysql`
+  - `totalContacts=8072`
+  - `historyContacts=5688`
+  - `currentAccount2=62`
+
+Files changed:
+
+- `server.js`
+- `public/app.js`
+- `public/styles.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+New server API:
+
+- `GET /local/fnos/health`
+- `POST /local/fnos/restore-mysql`
+
+Server details:
+
+- `FNOS_MYSQL_CONNECTION_STRING` defaults to:
+  `Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;Allow User Variables=true;`
+- Can be overridden with env var:
+  - `YOUCHAT_MYSQL_CONNECTION_STRING`
+- New helpers:
+  - `getYouChatDatabaseMode(databaseType)`
+  - `getYouChatContactCount(body, apiBase)`
+  - `getFnOSDatabaseHealth(options)`
+  - `restoreFnOSDatabaseToMySQL(options)`
+  - `handleFnOSDatabase(req, res)`
+
+Restore flow:
+
+- Calls real YouChat APIs:
+  - `/System/ConnectDatabase`
+  - `/System/SetConnectionString`
+  - `/System/GetConnectionString`
+  - `/System/GetOptions`
+- Then re-checks:
+  - contact total
+  - history total
+  - guestbook total
+  - `accountId=2` probe
+
+Web UI:
+
+- Entry remains:
+  - top-right menu -> `数据库管理`
+- `showDatabaseModal()` now calls `loadDatabaseRepairStatus({ silent: true })`.
+- Database modal now renders `renderDatabaseRepairPanel()` above the existing delete-chat form.
+- Buttons:
+  - `刷新状态` -> `loadDatabaseRepairStatus({ silent: false })`
+  - `一键切回 MySQL` -> `repairDatabaseFromModal()`
+- After repair succeeds:
+  - stores `payload.result.after` in `state.databaseRepair.health`
+  - calls `loadContactCounts()`
+  - calls `loadContacts(1, { keepPosition: true })`
+
+UI state:
+
+- `state.databaseRepair`:
+  - `health`
+  - `loading`
+  - `repairing`
+  - `error`
+
+Verification:
+
+- Restarted local `node server.js` on port `5177`.
+- `GET /local/fnos/health` first detected SQLite again:
+  - `databaseType=2`
+  - `historyContacts=24`
+- `POST /local/fnos/restore-mysql` succeeded:
+  - before: SQLite/history 24
+  - after: MySQL/contacts 8072/history 5749
+- Final `GET /local/fnos/health` and `npm run fnos:health` passed.
+- Playwright smoke test on `showDatabaseModal()`:
+  - status pill: `MySQL 正常`
+  - grid values: `mysql`, `8,072`, `5,749`, `1`
+  - buttons existed: `刷新状态`, `一键切回 MySQL`
+
+Do not regress:
+
+- Keep the existing `删除聊天记录` confirm flow intact.
+- Do not move this to fake local state; button must call real FnOS/YouChat APIs.
+- If counts collapse again, use Web button or `POST /local/fnos/restore-mysql` before debugging frontend lists.
+- Do not commit runtime files:
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+
