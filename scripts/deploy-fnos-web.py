@@ -32,11 +32,19 @@ EXCLUDED_FILES = {
     "toolbar-check.png",
     "workbench-native-icon-check.png",
 }
+EXCLUDED_RELATIVE_PATHS = {
+    "config/ai-providers.json",
+    "data/reply-skills.json",
+    "logs/api-capture.ndjson",
+}
 EXCLUDED_PATTERNS = ("*.log", "*.tmp", "*.temp", "*.tar", "*.tar.gz", "*.zip")
 
 
 def should_exclude(path: pathlib.Path) -> bool:
     relative = path.relative_to(PROJECT_ROOT)
+    relative_posix = relative.as_posix()
+    if relative_posix in EXCLUDED_RELATIVE_PATHS:
+        return True
     parts = relative.parts
     if any(part in EXCLUDED_DIRS for part in parts):
         return True

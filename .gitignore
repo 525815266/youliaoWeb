@@ -2,6 +2,9 @@ node_modules/
 .env
 .env.local
 .env.*.local
+config/ai-providers.json
+data/reply-skills.json
+logs/api-capture.ndjson
 .youchat-patch-backups/
 deploy-dist/
 __pycache__/

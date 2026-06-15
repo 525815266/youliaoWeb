@@ -76,6 +76,35 @@ Do not commit runtime files:
 - `data/reply-skills.json`
 - `logs/api-capture.ndjson`
 
+## Docker Image Publishing
+
+GitHub Container Registry publishing was added on 2026-06-15.
+
+- Workflow: `.github/workflows/docker-publish.yml`
+- Registry: `ghcr.io`
+- Image naming: `ghcr.io/<owner>/<repo>:<tag>`
+- Pull-based compose template: `compose.registry.yaml`
+
+Security rule:
+
+- Public images must not include real user runtime data or secrets.
+- `Dockerfile` intentionally does not copy `config/` or `data/`.
+- `.dockerignore` excludes `config`, `data`, and `logs`.
+- `.gitignore` ignores:
+  - `config/ai-providers.json`
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+- Example files are safe:
+  - `config/ai-providers.example.json`
+  - `data/reply-skills.example.json`
+
+Deploy from GHCR:
+
+```bash
+docker compose -p youchat-dev-web -f compose.registry.yaml pull
+docker compose -p youchat-dev-web -f compose.registry.yaml up -d
+```
+
 ## Key Files
 
 - `public/app.js`: main frontend state, API calls, rendering, chat, tools, AI, skill learning.

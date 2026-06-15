@@ -9,6 +9,8 @@ patches
 reports
 logs
 deploy-dist
+config
+data
 *.log
 *.tmp
 *.temp

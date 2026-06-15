@@ -122,6 +122,61 @@ docker compose -p youchat-dev-web -f compose.yaml up -d --build --force-recreate
 
 注意：如果在 Docker 容器里直接把 `YOUCHAT_API_BASE` 写成 `http://192.168.9.83:18080/api`，可能会因为容器网络回连宿主机发布端口失败而出现 `/api/*` 502。compose 已通过 `extra_hosts: host.docker.internal:host-gateway` 处理这个问题。
 
+## 发布 Docker 镜像到 GitHub
+
+可以发布到 GitHub Container Registry，镜像地址格式是：
+
+```text
+ghcr.io/<GitHub用户名或组织名>/<仓库名>:latest
+```
+
+本项目已经内置 GitHub Actions 工作流：
+
+```text
+.github/workflows/docker-publish.yml
+```
+
+发布规则：
+
+- 推送到 `main` 或 `master`：自动发布 `latest`、分支名和 `sha-xxxx` 标签。
+- 推送 `v*.*.*` tag：自动发布对应版本标签，例如 `v1.0.0`。
+- 也可以在 GitHub Actions 页面手动运行 `Publish Docker image`。
+
+公开镜像安全规则：
+
+- 镜像只包含代码和静态资源。
+- 镜像不会打包 `config/ai-providers.json`、`data/reply-skills.json`、`logs/api-capture.ndjson`。
+- AI key、skill 回复库、抓包日志必须通过运行时 volume 挂载保留在服务器本地。
+
+如果从 GHCR 拉取镜像运行，先在服务器上准备目录：
+
+```bash
+mkdir -p /vol1/1000/Docker/youchat-dev-web/{config,data,logs}
+cp config/ai-providers.example.json /vol1/1000/Docker/youchat-dev-web/config/ai-providers.json
+cp data/reply-skills.example.json /vol1/1000/Docker/youchat-dev-web/data/reply-skills.json
+```
+
+把 `compose.registry.yaml` 放到服务器目录后，修改 `.env`：
+
+```env
+WEB_PORT=5177
+YOUCHAT_WEB_IMAGE=ghcr.io/<GitHub用户名或组织名>/<仓库名>:latest
+YOUCHAT_API_BASE=http://host.docker.internal:18080/api
+```
+
+然后运行：
+
+```bash
+docker compose -p youchat-dev-web -f compose.registry.yaml pull
+docker compose -p youchat-dev-web -f compose.registry.yaml up -d
+```
+
+如果仓库或镜像是私有的，需要先登录：
+
+```bash
+echo <GitHub Personal Access Token> | docker login ghcr.io -u <GitHub用户名> --password-stdin
+```
+
 ## 启动本地悠聊服务
 
 ```powershell

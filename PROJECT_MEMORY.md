@@ -64,6 +64,7 @@
 68. [2026-06-13 Skill 队列式训练与相似学习聚类](#68-2026-06-13-skill-队列式训练与相似学习聚类)
 69. [2026-06-15 Web 数据库一键修复按钮](#69-2026-06-15-web-数据库一键修复按钮)
 70. [2026-06-15 Web 客户端 Docker 化部署](#70-2026-06-15-web-客户端-docker-化部署)
+71. [2026-06-15 GitHub Container Registry 发布](#71-2026-06-15-github-container-registry-发布)
 
 ## 1. 项目目标
 
@@ -5035,4 +5036,90 @@ curl http://127.0.0.1:5177/health
   - `upgrade`
 
 这个修复也适用于浏览器、PowerShell、抓包脚本等不同客户端来源。
+
+## 71. 2026-06-15 GitHub Container Registry 发布
+
+### 1. 发布目标
+
+用户询问 Docker 镜像能否发布到专门发布 Docker 的地方，GitHub 是否可以发布。
+
+结论：
+
+- 可以发布到 GitHub Container Registry，地址格式为 `ghcr.io/<owner>/<repo>:<tag>`。
+- 本项目新增 GitHub Actions 自动构建并推送镜像。
+
+### 2. 新增文件
+
+新增：
+
+- `.github/workflows/docker-publish.yml`
+- `compose.registry.yaml`
+- `config/ai-providers.example.json`
+- `data/reply-skills.example.json`
+
+### 3. 安全调整
+
+公开镜像不能包含用户的真实 AI key、skill 回复库、客户内容或抓包日志。
+
+本次调整：
+
+- `Dockerfile` 不再 `COPY config ./config`。
+- `Dockerfile` 不再 `COPY data ./data`。
+- `.dockerignore` 排除：
+  - `config`
+  - `data`
+  - `logs`
+- `.gitignore` 新增忽略：
+  - `config/ai-providers.json`
+  - `data/reply-skills.json`
+  - `logs/api-capture.ndjson`
+- 使用 `git rm --cached` 停止跟踪上述真实运行数据，但保留本地文件。
+
+后续不要把真实 `config/ai-providers.json`、`data/reply-skills.json`、`logs/api-capture.ndjson` 加回 Git，也不要打进公共镜像。
+
+### 4. GitHub Actions 规则
+
+工作流：`.github/workflows/docker-publish.yml`
+
+触发：
+
+- push 到 `main`
+- push 到 `master`
+- push tag `v*.*.*`
+- 手动 `workflow_dispatch`
+
+发布标签：
+
+- `latest`：默认分支。
+- 分支名。
+- tag 名。
+- `sha-xxxx`。
+
+权限：
+
+- `contents: read`
+- `packages: write`
+
+### 5. 从 GHCR 部署
+
+服务器运行公开镜像时使用：
+
+```bash
+docker compose -p youchat-dev-web -f compose.registry.yaml pull
+docker compose -p youchat-dev-web -f compose.registry.yaml up -d
+```
+
+`.env` 示例：
+
+```env
+WEB_PORT=5177
+YOUCHAT_WEB_IMAGE=ghcr.io/<owner>/<repo>:latest
+YOUCHAT_API_BASE=http://host.docker.internal:18080/api
+```
+
+仍然需要挂载本地目录：
+
+- `./config:/app/config`
+- `./data:/app/data`
+- `./logs:/app/logs`
 

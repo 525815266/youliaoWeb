@@ -1,0 +1,26 @@
+{
+  "defaultProvider": "sub2",
+  "providers": {
+    "sub2": {
+      "name": "Sub2API",
+      "baseUrl": "https://sub2.sn55.cn/",
+      "apiKey": "",
+      "model": "gpt-5.4-mini",
+      "authType": "bearer"
+    },
+    "deepseek": {
+      "name": "DeepSeek",
+      "baseUrl": "https://api.deepseek.com/",
+      "apiKey": "",
+      "model": "deepseek-chat",
+      "authType": "bearer"
+    },
+    "codebuddy": {
+      "name": "CodeBuddy",
+      "baseUrl": "",
+      "apiKey": "",
+      "model": "",
+      "authType": "bearer"
+    }
+  }
+}
