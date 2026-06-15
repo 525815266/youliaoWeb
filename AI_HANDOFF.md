@@ -21,6 +21,61 @@ Path note:
 - Current official project root is `C:\youchat-dev-web`.
 - Do not continue edits from the old tmp path unless explicitly recovering backup files.
 
+## Web Client Docker Deployment
+
+Important correction from 2026-06-15: Dockerize and deploy the Web client project `C:\youchat-dev-web`, not the already-Dockerized YouChat backend.
+
+- Web client compose project/container: `youchat-dev-web`
+- Web client image: `youchat-dev-web:local`
+- Web client port: host `5177` -> container `5177`
+- Web client FnOS deploy dir: `/vol1/1000/Docker/youchat-dev-web`
+- In-container backend API: `http://host.docker.internal:18080/api`, mapped by compose `extra_hosts: host.docker.internal:host-gateway`
+- External/backend service remains the existing FnOS YouChat service: `http://192.168.9.83:18080/api`
+- Do not modify/restart backend project `/vol1/1000/Docker/youchat` or compose project `youliaoapp` during Web-client Docker work.
+
+Files added for Web Docker:
+
+- `Dockerfile`
+- `compose.yaml`
+- `.dockerignore`
+- `.env.example`
+- `scripts/deploy-fnos-web.py`
+
+Docker verification:
+
+```powershell
+cd C:\youchat-dev-web
+npm run check
+python -m py_compile .\scripts\deploy-fnos-web.py
+docker compose -p youchat-dev-web -f compose.yaml up -d --build
+Invoke-RestMethod http://localhost:5177/health
+```
+
+FnOS deploy command:
+
+```powershell
+cd C:\youchat-dev-web
+$env:FNOS_PASSWORD = "..."
+$env:FNOS_SUDO_PASSWORD = "..."
+python .\scripts\deploy-fnos-web.py
+```
+
+The container uses bundled original-client assets:
+
+- `public/native-icons/braft-icons.woff`
+- `public/static/emojiSource.cdbf96da.png`
+
+Docker proxy gotcha fixed on 2026-06-15:
+
+- `/api/*` proxy must strip hop-by-hop/problematic request headers.
+- In particular, `Expect: 100-continue` from PowerShell/other clients makes Node/undici `fetch` fail with `expect header not supported`.
+- `server.js` uses `sanitizeProxyRequestHeaders()` before forwarding to YouChat.
+
+Do not commit runtime files:
+
+- `data/reply-skills.json`
+- `logs/api-capture.ndjson`
+
 ## Key Files
 
 - `public/app.js`: main frontend state, API calls, rendering, chat, tools, AI, skill learning.

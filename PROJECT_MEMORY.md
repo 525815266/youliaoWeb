@@ -63,6 +63,7 @@
 63. [2026-06-13 SQLite 回退恢复与图片发送性能修复](#63-2026-06-13-sqlite-回退恢复与图片发送性能修复)
 68. [2026-06-13 Skill 队列式训练与相似学习聚类](#68-2026-06-13-skill-队列式训练与相似学习聚类)
 69. [2026-06-15 Web 数据库一键修复按钮](#69-2026-06-15-web-数据库一键修复按钮)
+70. [2026-06-15 Web 客户端 Docker 化部署](#70-2026-06-15-web-客户端-docker-化部署)
 
 ## 1. 项目目标
 
@@ -4898,4 +4899,140 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:5177/local/fnos/restore-my
 - 这只是把悠聊服务端运行配置切回 MySQL，不修改 Docker compose。
 - 如果后续又自动回退 SQLite，可以直接从 Web 数据库管理里点 `一键切回 MySQL`。
 - 若切回后仍异常，再继续检查飞牛容器、MySQL 表分区/排序规则和服务日志。
+
+## 70. 2026-06-15 Web 客户端 Docker 化部署
+
+### 1. 本次目标纠偏
+
+用户明确纠正：要 Docker 化的是 `C:\youchat-dev-web` 这个二开的 Web 客户端，不是已经 Docker 化的悠聊服务端。
+
+后续处理规则：
+
+- Web 客户端项目根目录：`C:\youchat-dev-web`。
+- Web 客户端飞牛部署目录：`/vol1/1000/Docker/youchat-dev-web`。
+- Web 客户端 compose project/container：`youchat-dev-web`。
+- 已有悠聊服务端目录 `/vol1/1000/Docker/youchat` 和 compose project `youliaoapp` 只作为 API 后端，不在 Web 客户端 Docker 化任务里修改或重启。
+- Web 容器内默认 API 使用 `http://host.docker.internal:18080/api`，对应飞牛宿主机上已发布的服务端 `http://192.168.9.83:18080/api`。
+
+### 2. 新增 Docker 文件
+
+新增：
+
+- `Dockerfile`
+- `compose.yaml`
+- `.dockerignore`
+- `.env.example`
+- `scripts/deploy-fnos-web.py`
+
+默认容器信息：
+
+- 镜像：`youchat-dev-web:local`
+- 容器：`youchat-dev-web`
+- 端口映射：`${WEB_PORT:-5177}:5177`
+- 健康检查：`GET http://127.0.0.1:5177/health`
+- `extra_hosts`：`host.docker.internal:host-gateway`，用于 Web 容器访问飞牛宿主机上的悠聊服务端端口 `18080`。
+- 持久化挂载：
+  - `./data:/app/data`
+  - `./logs:/app/logs`
+  - `./config:/app/config`
+
+### 3. 原客户端静态资源内置
+
+Docker 容器无法依赖 Windows 路径 `C:\Program Files\youchat-desktop\wwwroot`，所以本次把 Web 运行必须的原客户端资源内置到项目：
+
+- `public/native-icons/braft-icons.woff`
+- `public/static/emojiSource.cdbf96da.png`
+
+`server.js` 新增内置资源优先读取逻辑：
+
+- `/native-icons/braft-icons.woff` 优先读取 `public/native-icons/braft-icons.woff`。
+- `/static/emojiSource.cdbf96da.png` 优先读取 `public/static/emojiSource.cdbf96da.png`。
+- 如果内置资源不存在，再回退读原 Electron 客户端目录。
+
+### 4. 飞牛部署脚本
+
+脚本：
+
+```powershell
+cd C:\youchat-dev-web
+$env:FNOS_PASSWORD = "飞牛 SSH 密码"
+$env:FNOS_SUDO_PASSWORD = "飞牛 sudo 密码"
+python .\scripts\deploy-fnos-web.py
+```
+
+默认行为：
+
+- 打包当前 Web 项目，排除 `.git`、`node_modules`、`logs`、`deploy-dist`、截图和临时文件。
+- 上传到飞牛 `/vol1/1000/Docker/youchat-dev-web`。
+- 若远端没有 `.env`，从 `.env.example` 初始化。
+- 若远端 `.env` 还是旧默认 `YOUCHAT_API_BASE=http://192.168.9.83:18080/api`，部署脚本会迁移为 `http://host.docker.internal:18080/api`，避免容器内 `/api/*` 代理 502。
+- 运行：
+
+```bash
+docker compose -p youchat-dev-web -f compose.yaml up -d --build --force-recreate
+```
+
+### 5. 验证命令
+
+本地代码检查：
+
+```powershell
+cd C:\youchat-dev-web
+npm run check
+python -m py_compile .\scripts\deploy-fnos-web.py
+```
+
+本地 Docker 验证：
+
+```powershell
+docker compose -p youchat-dev-web -f compose.yaml up -d --build
+Invoke-RestMethod http://localhost:5177/health
+Invoke-WebRequest http://localhost:5177/native-icons/braft-icons.woff
+Invoke-WebRequest http://localhost:5177/static/emojiSource.cdbf96da.png
+```
+
+远端验证：
+
+```bash
+cd /vol1/1000/Docker/youchat-dev-web
+docker compose -p youchat-dev-web -f compose.yaml ps
+curl http://127.0.0.1:5177/health
+```
+
+### 6. Git 注意事项
+
+用户要求每次修改后提交 Git。提交 Docker 化改动时只提交源码、Docker 文件、脚本、内置静态资源和文档。
+
+不要提交运行时文件：
+
+- `data/reply-skills.json`
+- `logs/api-capture.ndjson`
+
+### 7. Docker 代理 502 修复
+
+首次部署后，`GET /health` 正常，但 `POST /api/System/GetOptions` 通过 Web 容器代理返回 502。
+
+排查结论：
+
+- 容器内直接 `fetch http://host.docker.internal:18080/api/System/GetOptions` 可返回 200，说明 Docker 网络已经可达服务端。
+- 失败来自代理转发了客户端请求头里的 `Expect: 100-continue`。
+- Node/undici `fetch` 不支持转发 `expect` 请求头，会直接抛出 `fetch failed` / `expect header not supported`。
+
+修复：
+
+- `server.js` 新增 `sanitizeProxyRequestHeaders()`。
+- `/api/*` 代理会剥离 hop-by-hop/problematic 请求头：
+  - `host`
+  - `connection`
+  - `content-length`
+  - `expect`
+  - `keep-alive`
+  - `proxy-authenticate`
+  - `proxy-authorization`
+  - `te`
+  - `trailer`
+  - `transfer-encoding`
+  - `upgrade`
+
+这个修复也适用于浏览器、PowerShell、抓包脚本等不同客户端来源。
 

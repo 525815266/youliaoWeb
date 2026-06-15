@@ -1,7 +1,11 @@
 node_modules/
 .env
-.env.*
+.env.local
+.env.*.local
 .youchat-patch-backups/
+deploy-dist/
+__pycache__/
+*.pyc
 *.log
 *.tmp
 *.temp

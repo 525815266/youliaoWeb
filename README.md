@@ -77,6 +77,51 @@ Web 默认后端地址对齐飞牛上的悠聊 Docker 服务：`http://192.168.9
 .\start-dev-web.ps1
 ```
 
+## Web 客户端 Docker 部署
+
+本节只针对本项目 `C:\youchat-dev-web`，也就是二开的 Web 客户端。飞牛上已有的悠聊服务端 Docker 项目 `/vol1/1000/Docker/youchat`、compose project `youliaoapp` 不属于本节范围，除非明确排查服务端，否则不要改动或重启。
+
+默认容器信息：
+
+- 镜像：`youchat-dev-web:local`
+- 容器：`youchat-dev-web`
+- 端口：宿主机 `5177` -> 容器 `5177`
+- 容器内默认后端：`http://host.docker.internal:18080/api`，对应飞牛宿主机上已发布的悠聊服务端 `http://192.168.9.83:18080/api`
+- 飞牛部署目录：`/vol1/1000/Docker/youchat-dev-web`
+
+本地构建验证：
+
+```powershell
+cd C:\youchat-dev-web
+docker compose -p youchat-dev-web -f compose.yaml up -d --build
+Invoke-RestMethod http://localhost:5177/health
+```
+
+部署到飞牛：
+
+```powershell
+cd C:\youchat-dev-web
+$env:FNOS_PASSWORD = "你的飞牛 SSH 密码"
+$env:FNOS_SUDO_PASSWORD = "你的飞牛 sudo 密码"
+python .\scripts\deploy-fnos-web.py
+```
+
+部署脚本会把当前 Web 客户端源码打包上传到 `/vol1/1000/Docker/youchat-dev-web`，然后执行：
+
+```bash
+docker compose -p youchat-dev-web -f compose.yaml up -d --build --force-recreate
+```
+
+持久化目录：
+
+- `data/`：skill 回复库和训练数据。
+- `logs/`：Web 代理抓包日志。
+- `config/`：AI 渠道、模型等配置。
+
+容器内已经内置原客户端表情图和 Braft 字体资源，Docker 环境不再依赖 Windows 客户端目录 `C:\Program Files\youchat-desktop\wwwroot`。
+
+注意：如果在 Docker 容器里直接把 `YOUCHAT_API_BASE` 写成 `http://192.168.9.83:18080/api`，可能会因为容器网络回连宿主机发布端口失败而出现 `/api/*` 502。compose 已通过 `extra_hosts: host.docker.internal:host-gateway` 处理这个问题。
+
 ## 启动本地悠聊服务
 
 ```powershell

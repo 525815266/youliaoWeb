@@ -1,0 +1,37 @@
+services:
+  youchat-dev-web:
+    build:
+      context: .
+    image: youchat-dev-web:local
+    container_name: youchat-dev-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-5177}:5177"
+    environment:
+      NODE_ENV: production
+      PORT: "5177"
+      YOUCHAT_API_BASE: ${YOUCHAT_API_BASE:-http://host.docker.internal:18080/api}
+      YOUCHAT_AI_BASE: ${YOUCHAT_AI_BASE:-}
+      YOUCHAT_AI_MODEL: ${YOUCHAT_AI_MODEL:-}
+      YOUCHAT_MYSQL_CONNECTION_STRING: ${YOUCHAT_MYSQL_CONNECTION_STRING:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:5177/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

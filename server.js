@@ -10,6 +10,8 @@ const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "http://192.168.9.83:18
 const FNOS_MYSQL_CONNECTION_STRING = process.env.YOUCHAT_MYSQL_CONNECTION_STRING || "Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;Allow User Variables=true;";
 const PUBLIC_DIR = path.join(__dirname, "public");
 const CLIENT_WWWROOT = process.env.YOUCHAT_DESKTOP_WWWROOT || "C:\\Program Files\\youchat-desktop\\wwwroot";
+const BUNDLED_BRAFT_ICONS_FILE = path.join(PUBLIC_DIR, "native-icons", "braft-icons.woff");
+const BUNDLED_EMOJI_SOURCE_FILE = path.join(PUBLIC_DIR, "static", "emojiSource.cdbf96da.png");
 const SIGNALR_BROWSER_FILE = path.join(__dirname, "node_modules", "@microsoft", "signalr", "dist", "browser", "signalr.min.js");
 const LOG_DIR = path.join(__dirname, "logs");
 const DATA_DIR = path.join(__dirname, "data");
@@ -98,6 +100,16 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = API_PROXY_TI
 
 function sendClientBraftIcons(res) {
   try {
+    if (fs.existsSync(BUNDLED_BRAFT_ICONS_FILE)) {
+      const buffer = fs.readFileSync(BUNDLED_BRAFT_ICONS_FILE);
+      res.writeHead(200, {
+        "Content-Type": "font/woff",
+        "Cache-Control": "public, max-age=86400"
+      });
+      res.end(buffer);
+      return;
+    }
+
     const cssFile = fs
       .readdirSync(CLIENT_WWWROOT)
       .find((name) => name.endsWith(".css") && fs.readFileSync(path.join(CLIENT_WWWROOT, name), "utf8").includes("braft-icons"));
@@ -118,6 +130,23 @@ function sendClientBraftIcons(res) {
 }
 
 function sendClientStaticAsset(res, relativePath, contentType) {
+  const normalizedRelativePath = String(relativePath || "").replace(/\\/g, "/");
+  if (normalizedRelativePath === "static/emojiSource.cdbf96da.png" && fs.existsSync(BUNDLED_EMOJI_SOURCE_FILE)) {
+    fs.readFile(BUNDLED_EMOJI_SOURCE_FILE, (error, content) => {
+      if (error) {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Not found");
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": contentType,
+        "Cache-Control": "public, max-age=86400"
+      });
+      res.end(content);
+    });
+    return;
+  }
+
   const filePath = path.normalize(path.join(CLIENT_WWWROOT, relativePath));
   if (!filePath.startsWith(CLIENT_WWWROOT)) {
     res.writeHead(403);
@@ -1975,6 +2004,30 @@ function getTargetBase(reqUrl) {
   return { base: base.replace(/\/+$/, ""), search: parsed.search };
 }
 
+const PROXY_STRIPPED_REQUEST_HEADERS = new Set([
+  "host",
+  "connection",
+  "content-length",
+  "expect",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade"
+]);
+
+function sanitizeProxyRequestHeaders(requestHeaders) {
+  const headers = { ...requestHeaders };
+  Object.keys(headers).forEach((key) => {
+    if (PROXY_STRIPPED_REQUEST_HEADERS.has(key.toLowerCase())) {
+      delete headers[key];
+    }
+  });
+  return headers;
+}
+
 function getAiChatCompletionsUrl(baseUrl) {
   const rawBase = String(baseUrl || DEFAULT_AI_BASE).trim().replace(/\/+$/, "");
   if (!rawBase) {
@@ -2181,10 +2234,7 @@ async function proxyApi(req, res) {
   const body = await readBody(req);
   const started = Date.now();
 
-  const headers = { ...req.headers };
-  delete headers.host;
-  delete headers.connection;
-  delete headers["content-length"];
+  const headers = sanitizeProxyRequestHeaders(req.headers);
 
   const options = {
     method: req.method,
@@ -2233,13 +2283,13 @@ async function proxyApi(req, res) {
       status: 502,
       ms: Date.now() - started,
       requestBody: decodeCaptureBody(body, headers["content-type"] || headers["Content-Type"] || ""),
-      error: error.message
+      error: error.cause?.message || error.message
     });
     sendJson(res, 502, {
       success: false,
       message: "Proxy request failed",
       target: targetUrl.toString(),
-      error: error.message
+      error: error.cause?.message || error.message
     });
   }
 }
