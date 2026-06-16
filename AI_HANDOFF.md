@@ -342,6 +342,12 @@ Read-state SignalR facts:
 - Current verified short account id for `Boom666 / 客服-王` is `2`.
 - Do not use username `Boom666` or merchant long id `1556504756803862529` for SignalR registration.
 - Verified on 2026-06-09: `/local/signalr/consume` for `contactId=7052` returned `source=node-signalr`, then `/Contact/GetContactList(accountId=2)` showed `unRead: 0` after previously being `1`.
+- 2026-06-16 red-dot sync hardening:
+  - `server.js` now detects Docker runtime and retries private-host API bases through `host.docker.internal` for both `/local/signalr/consume` and `/api/*` proxying.
+  - `public/app.js` now prefers the verified short contact-list account id for SignalR registration.
+  - Clicking/selecting a conversation no longer clears Web unread state before real sync. It calls `ConsumeMessage(contactId, 0)`, verifies `/Contact/GetContactList(id=contactId)` reports `unRead=0`, then clears local badges.
+  - Verification only copies read-count fields back into the local contact. Do not overwrite the full contact from `id=contactId` probes because those responses may have `records:null` or missing robot info.
+  - Live FnOS verification: browser-style payload `apiBase=http://192.168.9.83:18080/api`, `accountId=2`, `contactId=223`, `msgId=0` returned `resolvedApiBase=http://host.docker.internal:18080/api`; direct backend and Web proxy both then returned `unRead=0`.
 - 2026-06-10 follow-up fix: do not tie local read-state protection only to `contact.sortTime`. A customer-service reply updates `sortTime` and can make a just-read conversation look unread again after refresh. Use last incoming customer-message time (`lastIncomingTime`) as the main guard, and after successful send run read sync + contact refresh.
 
 Clear-list behavior:

@@ -2674,7 +2674,7 @@ function getSignalRBaseUrl() {
 }
 
 function getSignalRAccountId() {
-  return String(firstValue(state.accountId, getContactListAccountId(), state.account, "") || "").trim();
+  return String(firstValue(getContactListAccountId(), state.accountId, state.account, "") || "").trim();
 }
 
 function buildSignalRUrl() {
@@ -4385,9 +4385,9 @@ function applyReadStateToContact(contact) {
   };
 }
 
-function markContactRead(contact, options = {}) {
+function clearContactReadStateLocally(contact) {
   const key = getContactReadKey(contact);
-  if (!key) return;
+  if (!key) return false;
 
   const readAt = Date.now();
   const lastIncomingTime = getContactLastIncomingTime(contact);
@@ -4407,15 +4407,31 @@ function markContactRead(contact, options = {}) {
   }
   state.listUnreadCounts[state.listTab] = sumContactUnread(state.contacts);
   renderConversationTabs();
+  return true;
+}
+
+function markContactRead(contact, options = {}) {
+  const key = getContactReadKey(contact);
+  if (!key) return;
 
   if (options.sync) {
-    syncConsumedMessages(contact).catch((error) => {
-      log("consume message sync failed", {
-        contactId: key,
-        error: error.message
-      });
-    });
+    confirmContactReadInBackground(contact, options);
+    return;
   }
+
+  clearContactReadStateLocally(contact);
+}
+
+function confirmContactReadInBackground(contact, options = {}) {
+  const contactId = getContactId(contact);
+  return confirmContactRead(contact, options).catch((error) => {
+    log("consume message sync failed", {
+      contactId,
+      error: error.message
+    });
+    if (!options.silent) toast("红点同步到客户端失败，已保留未读标记。", true);
+    return null;
+  });
 }
 
 function markVisibleContactsRead() {
@@ -4439,12 +4455,12 @@ function markVisibleContactsRead() {
   renderConversationTabs();
 }
 
-async function syncConsumedMessages(contact) {
+async function syncConsumedMessages(contact, options = {}) {
   const contactId = getContactId(contact);
   if (!contactId) return;
 
   const messageIds = getConsumableMessageIds(contact);
-  const targets = [...new Set([...messageIds, 0])];
+  const targets = options.includeMessageIds ? [...new Set([0, ...messageIds])] : [0];
   let result = null;
   const errors = [];
   for (const msgId of targets) {
@@ -4455,8 +4471,6 @@ async function syncConsumedMessages(contact) {
       if (msgId === 0 && !result) throw error;
     }
   }
-  clearLocalMessageRedPoints(contactId);
-  refreshLocalReadState(contactId);
   log("consume message synced", {
     contactId,
     msgIds: targets,
@@ -4464,6 +4478,97 @@ async function syncConsumedMessages(contact) {
     failedFallbacks: result?.failedFallbacks,
     consumeErrors: errors
   });
+  return result;
+}
+
+async function confirmContactRead(contact, options = {}) {
+  const contactId = getContactId(contact);
+  if (!contactId) return null;
+
+  const result = await syncConsumedMessages(contact);
+  const verifiedContact = await verifyContactReadOnServer(contact, options);
+  if (!verifiedContact) {
+    throw new Error("server read state could not be verified");
+  }
+  if (verifiedContact && getContactUnreadCount(verifiedContact) > 0) {
+    throw new Error(`server still reports ${getContactUnreadCount(verifiedContact)} unread message(s)`);
+  }
+
+  if (verifiedContact) {
+    const readPatch = getVerifiedReadPatch(verifiedContact);
+    state.contacts = state.contacts.map((item) => (
+      String(getContactId(item)) === String(contactId) ? { ...item, ...readPatch } : item
+    ));
+    if (String(getContactId(state.activeContact) || "") === String(contactId)) {
+      state.activeContact = { ...state.activeContact, ...readPatch };
+    }
+  }
+  clearContactReadStateLocally({ ...contact, ...getVerifiedReadPatch(verifiedContact) });
+  clearLocalMessageRedPoints(contactId);
+  renderContacts();
+  log("contact read confirmed", {
+    contactId,
+    source: result?.source || "",
+    resolvedApiBase: result?.resolvedApiBase || "",
+    verifiedUnread: verifiedContact ? getContactUnreadCount(verifiedContact) : null
+  });
+  return { result, verifiedContact };
+}
+
+function getVerifiedReadPatch(contact) {
+  return {
+    unread: Number(contact?.unread || 0),
+    unRead: Number(contact?.unRead || 0),
+    redDot: Number(contact?.redDot || 0),
+    unReadCount: Number(contact?.unReadCount || 0),
+    redPoint: Number(contact?.redPoint || 0),
+    redpoint: Number(contact?.redpoint || 0)
+  };
+}
+
+async function verifyContactReadOnServer(contact, options = {}) {
+  const contactId = getContactId(contact);
+  if (!contactId) return null;
+
+  try {
+    const params = buildContactListParams(state.listTab, {
+      pageIndex: 1,
+      pageSize: 1,
+      id: contactId,
+      keyWord: "",
+      searchStr: "",
+      accountIdOverride: getAccountId(contact)
+    });
+    const payload = await api("/Contact/GetContactList", params, {
+      timeoutMs: options.timeoutMs || API_REQUEST_TIMEOUT_MS
+    });
+    let verifiedContact = getRecords(payload)
+      .map(normalizeContact)
+      .find((item) => String(getContactId(item)) === String(contactId)) || null;
+    if (!verifiedContact && state.listTab !== "current") {
+      const currentPayload = await api("/Contact/GetContactList", buildContactListParams("current", {
+        pageIndex: 1,
+        pageSize: 1,
+        id: contactId,
+        keyWord: "",
+        searchStr: "",
+        accountIdOverride: getAccountId(contact)
+      }), {
+        timeoutMs: options.timeoutMs || API_REQUEST_TIMEOUT_MS
+      });
+      verifiedContact = getRecords(currentPayload)
+        .map(normalizeContact)
+        .find((item) => String(getContactId(item)) === String(contactId)) || null;
+    }
+    if (!verifiedContact) return null;
+    return verifiedContact;
+  } catch (error) {
+    log("contact read verification failed", {
+      contactId,
+      error: error.message
+    });
+    return null;
+  }
 }
 
 async function syncAllConsumedMessages() {
@@ -4561,7 +4666,13 @@ async function consumeMessageViaLocalSignalR(contactId, msgId = 0) {
   if (!response.ok || payload?.success === false) {
     throw new Error(getMessage(payload) || payload?.error || `HTTP ${response.status}`);
   }
-  return { source: payload?.source || "node-signalr", contactId, msgId };
+  return {
+    source: payload?.source || "node-signalr",
+    resolvedApiBase: payload?.resolvedApiBase || "",
+    failedAttempts: payload?.failedAttempts || [],
+    contactId,
+    msgId
+  };
 }
 
 async function consumeMessageViaSignalR(contactId, msgId = 0) {
@@ -4649,11 +4760,11 @@ async function selectContactById(id, options = {}) {
   if (String(getContactId(state.activeContact)) === String(id)) {
     if (jumpUnread) {
       const jumped = await jumpToUnreadInLoadedMessages();
-      markContactRead(nextContact, { sync: true });
+      confirmContactReadInBackground(nextContact);
       renderContacts();
       if (!jumped) scheduleMessageListBottom({ force: true, watchImages: true });
     } else {
-      markContactRead(nextContact, { sync: true });
+      confirmContactReadInBackground(nextContact);
       renderContacts();
       scheduleMessageListBottom({ force: true, watchImages: true });
     }
@@ -4663,7 +4774,6 @@ async function selectContactById(id, options = {}) {
   state.activeContact = nextContact;
   resetContactScopedState();
   renderMessagesFromContactPreview();
-  if (!jumpUnread) markContactRead(nextContact, { sync: true });
   renderContacts();
   renderActive();
   renderToolContent();
@@ -4673,15 +4783,9 @@ async function selectContactById(id, options = {}) {
     loadContactInfo(),
     loadToolDataForActiveTab()
   ]);
-  if (jumpUnread) markContactRead(nextContact, { sync: true });
+  confirmContactReadInBackground(state.activeContact);
   scheduleAutoAiSuggestion({ source: "select-contact", delay: 300 });
   if (!jumpUnread) scheduleMessageListBottom({ force: true, watchImages: true });
-  syncConsumedMessages(state.activeContact).catch((error) => {
-    log("consume message sync failed", {
-      contactId: getContactId(state.activeContact),
-      error: error.message
-    });
-  });
 }
 
 function hasUnreadMessageAnchor() {
@@ -4911,11 +5015,12 @@ function getContactUserName(contact) {
 
 function getAccountId(contact = state.activeContact) {
   return firstValue(
-    state.accountId,
     contact?.accountId,
     contact?.accId,
     contact?.csAccountId,
     contact?.account?.id,
+    getContactListAccountId(),
+    state.accountId,
     state.account
   );
 }

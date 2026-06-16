@@ -2553,6 +2553,75 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5177/local/signalr/consume `
   - 当前联系人的 `lastIncomingTime` 是否被正确提取
   - 发送成功后的 `syncConsumedMessages()` 是否报错
 
+2026-06-16 追加修复：Web 清红点必须等待服务端确认
+
+- 用户再次反馈：Web 端点击红点会话后，Web 角标会消失，但去官方 Windows 客户端看红点仍在。
+- 本次真实复现：
+  - `/Contact/GetContactList(accountId=2)` 返回 `contactId=6264`、`unRead=1`、`consumeTime=0`。
+  - 直接调用线上 Web 容器 `/local/signalr/consume`，传 `apiBase=http://192.168.9.83:18080/api` 时返回 502：
+    - `Failed to complete negotiation with the server: TypeError: fetch failed`
+  - 同样请求改成 `apiBase=http://host.docker.internal:18080/api` 后成功：
+    - `source=node-signalr`
+    - `hubUrl=http://host.docker.internal:18080/chathub?mode=client&userName=2`
+  - 随后回查官方接口，`contactId=6264` 的 `unRead` 从 1 变成 0。
+- 根因：
+  - Web 页面保存/传入的是浏览器视角地址 `http://192.168.9.83:18080/api`。
+  - 但 Web 服务部署在 Docker 容器里，容器内回连飞牛宿主机发布端口需要走 `host.docker.internal`。
+  - 之前前端 `markContactRead(..., { sync:true })` 会先清 Web 本地 `readContactState/unRead`，再异步调用 `syncConsumedMessages()`；桥接失败只写日志，不回滚 UI，所以造成“Web 假清、官方客户端未清”。
+- 已修改：
+  - `server.js`
+    - 新增容器内 API 地址候选：
+      - `YOUCHAT_CONTAINER_API_BASE` 可显式覆盖。
+      - Docker runtime 下自动把私网宿主机地址映射到 `host.docker.internal`。
+    - `/local/signalr/consume` 会按候选 API base 重试，并在成功响应里返回 `resolvedApiBase`、`failedAttempts`。
+    - `/api/*` 代理也使用同一候选策略，避免容器内普通 API 代理对 `192.168.9.83:18080` 超时。
+  - `public/app.js`
+    - `getSignalRAccountId()` 优先使用 `getContactListAccountId()` 返回的已验证客服短 id，再兜底旧缓存。
+    - 新增 `confirmContactRead()` / `confirmContactReadInBackground()`：
+      1. 调用 `syncConsumedMessages(contact)`。
+      2. 用 `/Contact/GetContactList(id=contactId)` 回查服务端。
+      3. 只有回查到 `getContactUnreadCount(contact) === 0` 时，才调用 `clearContactReadStateLocally()`。
+      4. 失败时保留 Web 红点并提示“红点同步到客户端失败，已保留未读标记。”
+    - `syncConsumedMessages()` 默认只调用原生同款 `ConsumeMessage(contactId, 0)`，不再默认逐个消费长 `msgId`，避免历史上长 id HTTP 失败造成噪音。
+    - 回查联系人只合并未读字段，不把 `records:null` / `robot:null` 的精简响应整条覆盖本地联系人，避免破坏会话预览和机器人显示。
+- 真实验证：
+  - 部署到飞牛 `http://192.168.9.83:5177`。
+  - 线上普通 API 代理测试：
+    - 请求 `/api/Contact/GetContactList?__target=http://192.168.9.83:18080/api`
+    - 实际成功返回真实数据，说明代理已自动走容器可达地址。
+  - 线上 SignalR 测试：
+
+```powershell
+Invoke-WebRequest -UseBasicParsing `
+  -Method Post 'http://192.168.9.83:5177/local/signalr/consume' `
+  -ContentType 'application/json' `
+  -Body '{"apiBase":"http://192.168.9.83:18080/api","accountId":"2","contactId":223,"msgId":0}'
+```
+
+  - 返回：
+
+```json
+{
+  "success": true,
+  "source": "node-signalr",
+  "apiBase": "http://192.168.9.83:18080/api",
+  "resolvedApiBase": "http://host.docker.internal:18080/api",
+  "hubUrl": "http://host.docker.internal:18080/chathub?mode=client&userName=2",
+  "accountId": "2",
+  "contactId": 223,
+  "msgId": 0
+}
+```
+
+  - 之后直连官方接口和 Web 代理回查 `contactId=223`，均返回 `unRead=0`。
+  - `/local/fnos/guard` 仍显示 `databaseMode=mysql`、`totalContacts=8081`、`historyContacts=5758`。
+  - `npm run check` 通过。
+- 后续规则：
+  - 不允许再让点击会话先本地清红点再异步同步；必须先真实消费并回查确认。
+  - 如果回查不到该联系人，宁愿保留红点，不要假清。
+  - 如果部署在 Docker，排查清红点失败时优先看 `/local/signalr/consume` 返回的 `resolvedApiBase` 是否为 `host.docker.internal`。
+  - `id=contactId` 的回查响应可能是精简联系人，不能拿它覆盖完整联系人对象。
+
 2026-06-11 前端细修：
 
 - 用户反馈两个直接可见的问题：

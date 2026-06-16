@@ -29,6 +29,9 @@ const SIGNALR_KEEP_ALIVE_MS = 120000;
 const DATABASE_GUARD_ENABLED = process.env.YOUCHAT_DATABASE_GUARD_ENABLED !== "0";
 const DATABASE_GUARD_INTERVAL_MS = Math.max(60000, Number(process.env.YOUCHAT_DATABASE_GUARD_INTERVAL_MS || 5 * 60 * 1000));
 const DATABASE_GUARD_MIN_HISTORY_COUNT = Number(process.env.YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT || 1000);
+const CONTAINER_API_BASE = String(process.env.YOUCHAT_CONTAINER_API_BASE || "").trim();
+const CONTAINER_HOST_GATEWAY = String(process.env.YOUCHAT_CONTAINER_HOST_GATEWAY || "host.docker.internal").trim();
+const IS_CONTAINER_RUNTIME = fs.existsSync("/.dockerenv") || process.env.YOUCHAT_CONTAINER_NETWORK === "1";
 const DIRECT_VIDEO_EXTENSIONS = /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8)(?:$|\?)/i;
 const signalRHubConnections = new Map();
 const databaseGuardState = {
@@ -2122,6 +2125,44 @@ function normalizeApiBase(value) {
   return (/^https?:\/\//i.test(raw) ? raw : `http://${raw}`).replace(/\/+$/, "");
 }
 
+function getContainerReachableApiBase(apiBase) {
+  const normalized = normalizeApiBase(apiBase);
+  const explicit = normalizeOptionalApiBase(CONTAINER_API_BASE);
+  if (explicit) return explicit;
+  if (!IS_CONTAINER_RUNTIME || !CONTAINER_HOST_GATEWAY) return normalized;
+
+  try {
+    const url = new URL(normalized);
+    if (shouldUseContainerHostGateway(url)) {
+      url.hostname = CONTAINER_HOST_GATEWAY;
+      return url.toString().replace(/\/+$/, "");
+    }
+  } catch {
+    // Keep the original base if it cannot be parsed.
+  }
+  return normalized;
+}
+
+function normalizeOptionalApiBase(value) {
+  const raw = String(value || "").trim();
+  return raw ? normalizeApiBase(raw) : "";
+}
+
+function shouldUseContainerHostGateway(url) {
+  const host = String(url.hostname || "").toLowerCase();
+  if (!host || host === "localhost" || host === "127.0.0.1" || host === CONTAINER_HOST_GATEWAY.toLowerCase()) {
+    return false;
+  }
+  if (/^(10|172\.(1[6-9]|2\d|3[0-1])|192\.168)\./.test(host)) return true;
+  return false;
+}
+
+function getApiBaseCandidates(apiBase) {
+  const normalized = normalizeApiBase(apiBase);
+  const reachable = getContainerReachableApiBase(normalized);
+  return [...new Set([reachable, normalized].filter(Boolean))];
+}
+
 function getSignalRBaseUrl(apiBase) {
   try {
     const url = new URL(normalizeApiBase(apiBase));
@@ -2243,37 +2284,50 @@ async function handleSignalRConsume(req, res) {
     return;
   }
 
-  try {
-    const connection = await ensureServerSignalRConnection(apiBase, accountId);
-    await withTimeout(
-      connection.invoke("ConsumeMessage", contactId, Number.isFinite(msgId) ? msgId : 0),
-      SIGNALR_START_TIMEOUT_MS,
-      "SignalR ConsumeMessage"
-    );
-    const key = getSignalRConnectionKey(apiBase, accountId);
-    const cached = signalRHubConnections.get(key);
-    if (cached) cached.lastUsedAt = Date.now();
-    sendJson(res, 200, {
-      success: true,
-      source: "node-signalr",
-      apiBase,
-      hubUrl: buildSignalRHubUrl(apiBase, accountId),
-      accountId,
-      contactId,
-      msgId: Number.isFinite(msgId) ? msgId : 0
-    });
-  } catch (error) {
-    sendJson(res, 502, {
-      success: false,
-      message: "SignalR ConsumeMessage failed",
-      error: error.message,
-      apiBase,
-      hubUrl: buildSignalRHubUrl(apiBase, accountId),
-      accountId,
-      contactId,
-      msgId: Number.isFinite(msgId) ? msgId : 0
-    });
+  const attempts = [];
+  for (const candidateBase of getApiBaseCandidates(apiBase)) {
+    try {
+      const connection = await ensureServerSignalRConnection(candidateBase, accountId);
+      await withTimeout(
+        connection.invoke("ConsumeMessage", contactId, Number.isFinite(msgId) ? msgId : 0),
+        SIGNALR_START_TIMEOUT_MS,
+        "SignalR ConsumeMessage"
+      );
+      const key = getSignalRConnectionKey(candidateBase, accountId);
+      const cached = signalRHubConnections.get(key);
+      if (cached) cached.lastUsedAt = Date.now();
+      sendJson(res, 200, {
+        success: true,
+        source: "node-signalr",
+        apiBase,
+        resolvedApiBase: candidateBase,
+        hubUrl: buildSignalRHubUrl(candidateBase, accountId),
+        accountId,
+        contactId,
+        msgId: Number.isFinite(msgId) ? msgId : 0,
+        failedAttempts: attempts
+      });
+      return;
+    } catch (error) {
+      attempts.push({
+        apiBase: candidateBase,
+        hubUrl: buildSignalRHubUrl(candidateBase, accountId),
+        error: error.message
+      });
+    }
   }
+
+  sendJson(res, 502, {
+    success: false,
+    message: "SignalR ConsumeMessage failed",
+    error: attempts.map((item) => `${item.apiBase}: ${item.error}`).join("; "),
+    apiBase,
+    hubUrl: buildSignalRHubUrl(apiBase, accountId),
+    accountId,
+    contactId,
+    msgId: Number.isFinite(msgId) ? msgId : 0,
+    attempts
+  });
 }
 
 function getTargetBase(reqUrl) {
@@ -2509,7 +2563,7 @@ async function proxyApi(req, res) {
   const apiPath = req.url.replace(/^\/api/, "");
   const { base, search } = getTargetBase(req.url);
   const cleanedPath = apiPath.split("?")[0] || "/";
-  const targetUrl = new URL(`${base}${cleanedPath}${search}`);
+  const baseCandidates = getApiBaseCandidates(base);
   const body = await readBody(req);
   const started = Date.now();
 
@@ -2521,8 +2575,25 @@ async function proxyApi(req, res) {
     body: ["GET", "HEAD"].includes(req.method) ? undefined : body
   };
 
+  const failedAttempts = [];
   try {
-    const upstream = await fetchWithTimeout(targetUrl, options, API_PROXY_TIMEOUT_MS, "YouChat API proxy");
+    let upstream = null;
+    let targetUrl = null;
+    for (const candidateBase of baseCandidates) {
+      targetUrl = new URL(`${candidateBase}${cleanedPath}${search}`);
+      try {
+        upstream = await fetchWithTimeout(targetUrl, options, API_PROXY_TIMEOUT_MS, "YouChat API proxy");
+        break;
+      } catch (error) {
+        failedAttempts.push({
+          target: targetUrl.toString(),
+          error: error.cause?.message || error.message
+        });
+      }
+    }
+    if (!upstream || !targetUrl) {
+      throw new Error(failedAttempts.map((item) => `${item.target}: ${item.error}`).join("; ") || "YouChat API proxy failed");
+    }
     const buffer = Buffer.from(await upstream.arrayBuffer());
     const responseHeaders = {};
 
@@ -2545,6 +2616,7 @@ async function proxyApi(req, res) {
       target: targetUrl.toString(),
       status: upstream.status,
       ms: Date.now() - started,
+      failedAttempts,
       requestHeaders: {
         authorization: headers.authorization ? "<present>" : "",
         contentType: headers["content-type"] || headers["Content-Type"] || ""
@@ -2558,17 +2630,19 @@ async function proxyApi(req, res) {
       at: new Date().toISOString(),
       method: req.method,
       url: req.url,
-      target: targetUrl.toString(),
+      target: baseCandidates.map((candidateBase) => `${candidateBase}${cleanedPath}${search}`).join(" | "),
       status: 502,
       ms: Date.now() - started,
+      failedAttempts,
       requestBody: decodeCaptureBody(body, headers["content-type"] || headers["Content-Type"] || ""),
       error: error.cause?.message || error.message
     });
     sendJson(res, 502, {
       success: false,
       message: "Proxy request failed",
-      target: targetUrl.toString(),
-      error: error.cause?.message || error.message
+      target: baseCandidates.map((candidateBase) => `${candidateBase}${cleanedPath}${search}`),
+      error: error.cause?.message || error.message,
+      failedAttempts
     });
   }
 }
