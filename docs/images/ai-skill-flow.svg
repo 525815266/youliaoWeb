@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="680" viewBox="0 0 1280 680" role="img" aria-labelledby="title desc">
+  <title id="title">AI 与 skill 回复流程</title>
+  <desc id="desc">展示客户消息进入后，系统结合上下文、快捷回复、skill 和订单信息生成推荐回复，并通过人工反馈持续学习。</desc>
+  <rect width="1280" height="680" fill="#f7fafc"/>
+  <text x="70" y="72" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="800" fill="#132238">AI 与 skill 回复如何协作</text>
+  <text x="70" y="105" font-family="Inter, Arial, sans-serif" font-size="16" fill="#64748b">客户上下文、数据库快捷回复、右侧订单信息和本地 skill 共同参与推荐，客服采用或修改后继续沉淀。</text>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#4972b8"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#14325b" flood-opacity=".12"/>
+    </filter>
+  </defs>
+  <g font-family="Inter, Arial, sans-serif">
+    <rect x="72" y="156" width="220" height="112" rx="18" fill="#fff" stroke="#dbe5f0" filter="url(#shadow)"/>
+    <text x="100" y="190" font-size="17" font-weight="800" fill="#132238">客户消息</text>
+    <text x="100" y="222" font-size="14" fill="#64748b">订单查不到</text>
+    <text x="100" y="246" font-size="14" fill="#64748b">绑定失败 / 提现疑问</text>
+    <rect x="386" y="142" width="220" height="140" rx="18" fill="#fff" stroke="#dbe5f0" filter="url(#shadow)"/>
+    <text x="414" y="176" font-size="17" font-weight="800" fill="#132238">上下文聚合</text>
+    <text x="414" y="208" font-size="14" fill="#64748b">最近聊天记录</text>
+    <text x="414" y="232" font-size="14" fill="#64748b">快捷回复数据库</text>
+    <text x="414" y="256" font-size="14" fill="#64748b">订单 / 流水 / 用户资料</text>
+    <rect x="700" y="142" width="220" height="140" rx="18" fill="#fff" stroke="#dbe5f0" filter="url(#shadow)"/>
+    <text x="728" y="176" font-size="17" font-weight="800" fill="#132238">skill 匹配</text>
+    <text x="728" y="208" font-size="14" fill="#64748b">平台：淘宝 / 京东 / PDD</text>
+    <text x="728" y="232" font-size="14" fill="#64748b">意图：订单 / 提现 / 绑定</text>
+    <text x="728" y="256" font-size="14" fill="#64748b">当前命中置顶，高亮展示</text>
+    <rect x="1014" y="156" width="220" height="112" rx="18" fill="#eaf3ff" stroke="#9ec3ff" filter="url(#shadow)"/>
+    <text x="1042" y="190" font-size="17" font-weight="800" fill="#123d7a">推荐回复</text>
+    <text x="1042" y="222" font-size="14" fill="#255aa8">1 到 3 条横条候选</text>
+    <text x="1042" y="246" font-size="14" fill="#255aa8">采用 / 发送 / 换一换</text>
+    <path d="M296 212 H374" stroke="#4972b8" stroke-width="3" marker-end="url(#arrow)" fill="none"/>
+    <path d="M610 212 H688" stroke="#4972b8" stroke-width="3" marker-end="url(#arrow)" fill="none"/>
+    <path d="M924 212 H1002" stroke="#4972b8" stroke-width="3" marker-end="url(#arrow)" fill="none"/>
+    <rect x="178" y="384" width="250" height="122" rx="18" fill="#fff7ed" stroke="#fed7aa"/>
+    <text x="206" y="420" font-size="17" font-weight="800" fill="#7c2d12">客服人工判断</text>
+    <text x="206" y="452" font-size="14" fill="#9a3412">直接采用</text>
+    <text x="206" y="476" font-size="14" fill="#9a3412">修改后发送</text>
+    <text x="206" y="500" font-size="14" fill="#9a3412">不用推荐，手动回复</text>
+    <rect x="516" y="384" width="250" height="122" rx="18" fill="#f0fdf4" stroke="#bbf7d0"/>
+    <text x="544" y="420" font-size="17" font-weight="800" fill="#14532d">自动学习</text>
+    <text x="544" y="452" font-size="14" fill="#166534">记录人工回复和图片</text>
+    <text x="544" y="476" font-size="14" fill="#166534">相似问题聚类</text>
+    <text x="544" y="500" font-size="14" fill="#166534">超过阈值进入训练队列</text>
+    <rect x="854" y="384" width="250" height="122" rx="18" fill="#f5f3ff" stroke="#ddd6fe"/>
+    <text x="882" y="420" font-size="17" font-weight="800" fill="#4c1d95">训练页面</text>
+    <text x="882" y="452" font-size="14" fill="#5b21b6">逐条审核</text>
+    <text x="882" y="476" font-size="14" fill="#5b21b6">保存 / 优化 / 删除</text>
+    <text x="882" y="500" font-size="14" fill="#5b21b6">更新 skill 文案和图片</text>
+    <path d="M1124 274 C1124 330 1000 338 980 376" stroke="#4972b8" stroke-width="3" marker-end="url(#arrow)" fill="none"/>
+    <path d="M432 445 H504" stroke="#4972b8" stroke-width="3" marker-end="url(#arrow)" fill="none"/>
+    <path d="M770 445 H842" stroke="#4972b8" stroke-width="3" marker-end="url(#arrow)" fill="none"/>
+    <path d="M980 380 C980 322 848 308 820 286" stroke="#4972b8" stroke-width="3" marker-end="url(#arrow)" fill="none" stroke-dasharray="8 8"/>
+  </g>
+</svg>
