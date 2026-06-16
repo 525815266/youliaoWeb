@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>悠聊 Web 客服工作台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="toastHost" class="toast-host" aria-live="polite"></div>
+    <div id="emojiPopover" class="emoji-popover is-hidden" role="dialog" aria-label="表情选择"></div>
+    <div id="aiSettingsOverlay" class="settings-overlay is-hidden" role="presentation">
+      <form id="aiSettingsPanel" class="settings-panel" aria-label="AI 设置">
+        <header class="settings-head">
+          <div>
+            <strong>AI 设置</strong>
+            <span>OpenAI 兼容接口</span>
+          </div>
+          <button id="closeAiSettings" class="settings-close" type="button" aria-label="关闭 AI 设置"><i class="native-icon bfi-close" aria-hidden="true"></i></button>
+        </header>
+          <div class="settings-body">
+            <label class="settings-toggle">
+              <input id="aiEnabled" type="checkbox" />
+              <span>启用 AI 推荐回复</span>
+            </label>
+            <label class="settings-toggle">
+              <input id="skillAutoReply" type="checkbox" />
+              <span>开启 skill 自动回复</span>
+            </label>
+            <label class="settings-toggle">
+              <input id="skillAutoLearn" type="checkbox" />
+              <span>自动学习人工回复</span>
+            </label>
+            <div class="settings-presets" aria-label="AI 供应商预设">
+              <span>供应商</span>
+              <button class="mini-action" type="button" data-ai-preset="sub2">sub2 中转</button>
+              <button class="mini-action" type="button" data-ai-preset="deepseek">DeepSeek</button>
+              <button class="mini-action" type="button" data-ai-preset="codebuddy">CodeBuddy</button>
+            </div>
+            <label class="settings-field">
+              <span>当前渠道</span>
+              <div class="settings-inline-field settings-inline-field--with-action">
+                <select id="aiProvider" aria-label="AI 渠道">
+                  <option value="sub2">sub2 中转</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="codebuddy">CodeBuddy</option>
+                </select>
+                <button id="fetchAiModels" class="mini-action settings-fetch-button" type="button">获取模型</button>
+              </div>
+            </label>
+            <label class="settings-field">
+              <span>API 端点</span>
+              <input id="aiBaseUrl" type="url" autocomplete="off" />
+          </label>
+          <label class="settings-field">
+            <span>API 密钥</span>
+            <input id="aiApiKey" type="password" autocomplete="off" />
+          </label>
+          <label class="settings-field">
+            <span>认证方式</span>
+            <select id="aiAuthType">
+              <option value="bearer">Authorization: Bearer</option>
+              <option value="x-api-key">X-Api-Key</option>
+            </select>
+          </label>
+          <label class="settings-field">
+            <span>模型</span>
+            <div class="settings-stack-field">
+              <select id="aiModel" aria-label="AI 模型"></select>
+              <input id="aiModelCustom" autocomplete="off" placeholder="自定义模型名" />
+            </div>
+          </label>
+          <label class="settings-field">
+            <span>温度</span>
+            <input id="aiTemperature" type="number" min="0" max="2" step="0.1" />
+          </label>
+        </div>
+        <footer class="settings-actions">
+          <button id="resetAiSettings" class="light-button" type="button">恢复默认</button>
+          <button class="send-button settings-save" type="submit">保存设置</button>
+        </footer>
+      </form>
+    </div>
+
+    <section id="loginView" class="login-window" aria-label="悠聊登录连接">
+      <header class="window-titlebar">
+        <div class="window-brand" aria-label="悠聊">
+          <span class="brand-shield">U</span>
+          <span>悠聊</span>
+        </div>
+        <div class="window-controls" aria-hidden="true">
+          <span></span>
+          <span></span>
+        </div>
+      </header>
+
+      <main class="login-stage">
+        <div class="login-illustration" aria-hidden="true">
+          <img src="/assets/login_img.png" alt="" />
+        </div>
+
+        <form id="loginForm" class="login-card" autocomplete="on">
+          <div class="login-row">
+            <label for="username">客服账号：</label>
+            <div class="input-with-action">
+              <input id="username" name="username" autocomplete="username" value="Boom666" />
+              <button type="button" class="field-action account-action" title="选择账号" aria-label="选择账号"><i class="native-icon bfi-drop-down" aria-hidden="true"></i></button>
+            </div>
+          </div>
+
+          <div class="login-row">
+            <label for="password">密码：</label>
+            <div class="input-with-action">
+              <input id="password" name="password" type="password" autocomplete="current-password" value="123456" />
+              <button type="button" id="togglePassword" class="field-action password-action" title="显示密码" aria-label="显示密码"></button>
+            </div>
+          </div>
+
+          <div class="login-row">
+            <label for="serverAddress">服务器地址：</label>
+            <input id="serverAddress" name="serverAddress" autocomplete="off" value="localhost" />
+          </div>
+
+          <div class="login-row compact">
+            <label for="serverPort">端口号：</label>
+            <input id="serverPort" name="serverPort" inputmode="numeric" autocomplete="off" value="8080" />
+          </div>
+
+          <label class="remember-row">
+            <input id="rememberAccount" type="checkbox" checked />
+            <span>记住账号</span>
+          </label>
+
+          <button id="connectButton" class="connect-button" type="submit">连接</button>
+          <button id="backStep" class="back-button" type="button">返回上一步</button>
+
+          <div class="version-row">
+            <span>当前版本：1.4.6</span>
+            <button id="versionNote" type="button">更新说明</button>
+          </div>
+        </form>
+      </main>
+    </section>
+
+    <section id="workbenchView" class="workbench-view is-hidden" aria-label="悠聊客服工作台">
+      <header class="client-topbar">
+        <div class="client-brand">
+          <span class="brand-shield small">U</span>
+          <span>悠聊 Web 客服</span>
+        </div>
+        <div class="client-status">
+          <span id="connectionState" class="status-pill">未连接</span>
+          <span id="operatorName">客服 Boom666</span>
+          <div class="client-top-actions" aria-label="原生客户端功能">
+            <button id="clientBackendButton" class="plain-button icon-plain-button top-action-button" type="button" title="统计后台" aria-label="统计后台"><i class="native-icon client-icon-dashboard" aria-hidden="true"></i></button>
+            <button id="clientGlobalSearchButton" class="plain-button icon-plain-button top-action-button" type="button" title="聊天记录全局搜索" aria-label="聊天记录全局搜索"><i class="native-icon client-icon-chat-record" aria-hidden="true"></i></button>
+            <button id="clientStatsButton" class="plain-button icon-plain-button top-action-button" type="button" title="消息统计面板" aria-label="消息统计面板"><i class="native-icon client-icon-chart" aria-hidden="true"></i></button>
+            <button id="clientNoticeButton" class="plain-button icon-plain-button top-action-button has-badge" type="button" title="通知" aria-label="通知">
+              <i class="native-icon client-icon-notice" aria-hidden="true"></i>
+              <span id="clientNoticeBadge" class="top-action-badge" data-empty="true">0</span>
+            </button>
+            <span class="topbar-divider" aria-hidden="true"></span>
+            <button id="clientSettingsButton" class="plain-button icon-plain-button top-action-button" type="button" title="客户端设置" aria-label="客户端设置" aria-expanded="false"><i class="native-icon client-icon-settings" aria-hidden="true"></i></button>
+            <div id="clientSettingsMenu" class="client-settings-menu is-hidden" role="menu" aria-label="客户端设置菜单">
+              <button type="button" role="menuitem" data-client-menu="settings"><i class="native-icon client-icon-settings" aria-hidden="true"></i><span>设置</span></button>
+              <button type="button" role="menuitem" data-client-menu="database"><i class="native-icon client-icon-database" aria-hidden="true"></i><span>数据库管理</span></button>
+              <button type="button" role="menuitem" data-client-menu="skill-training"><i class="native-icon bfi-edit" aria-hidden="true"></i><span>skill 训练</span></button>
+              <button type="button" role="menuitem" data-client-menu="pause"><i class="native-icon client-icon-pause" aria-hidden="true"></i><span id="clientPauseMenuText">挂起</span></button>
+              <button type="button" role="menuitem" data-client-menu="logout"><i class="native-icon client-icon-logout" aria-hidden="true"></i><span>退出登录</span></button>
+              <button type="button" role="menuitem" data-client-menu="close"><i class="native-icon bfi-close" aria-hidden="true"></i><span>关闭程序</span></button>
+            </div>
+          </div>
+          <span class="topbar-divider ai-divider" aria-hidden="true"></span>
+          <button id="aiSettingsButton" class="plain-button ai-top-button" type="button" title="AI 设置" aria-label="AI 设置"><i class="native-icon client-icon-ai" aria-hidden="true"></i><span>AI</span></button>
+          <button id="returnLogin" class="plain-button" type="button">返回登录</button>
+        </div>
+      </header>
+
+      <div class="client-layout">
+        <aside class="conversation-pane">
+          <div class="conversation-head">
+            <div>
+              <strong>会话</strong>
+              <span id="conversationCount">0 个客户</span>
+            </div>
+            <div class="conversation-head-actions">
+              <button id="friendRequests" class="friend-request-button" type="button" title="好友请求" aria-label="好友请求">
+                <i class="native-icon client-icon-user" aria-hidden="true"></i>
+                <i id="friendRequestBadge" data-empty="true">0</i>
+              </button>
+              <button id="refreshContacts" class="icon-button" type="button" title="刷新会话" aria-label="刷新会话"><i class="native-icon bfi-replay" aria-hidden="true"></i></button>
+            </div>
+          </div>
+
+          <div class="search-box">
+            <input id="search" placeholder="搜索昵称、订单号、消息内容" />
+          </div>
+
+          <div id="contactList" class="contact-list" aria-label="会话列表"></div>
+
+          <div class="conversation-tabs">
+            <button class="conversation-tab is-active" data-list-tab="current" type="button">当前</button>
+            <button class="conversation-tab" data-list-tab="guestbook" type="button">留言</button>
+            <button class="conversation-tab" data-list-tab="history" type="button">历史</button>
+          </div>
+        </aside>
+
+        <main class="chat-pane">
+          <header class="chat-head">
+            <div class="active-contact">
+              <span id="activeAvatar" class="contact-avatar active-photo active-contact-avatar active-avatar-empty" aria-hidden="true"></span>
+              <div>
+                <strong id="activeTitle">请选择会话</strong>
+                <span id="activeMeta">连接服务后选择左侧客户开始处理</span>
+              </div>
+            </div>
+            <div class="chat-actions">
+              <button id="accessIn" class="light-button" type="button">人工接入</button>
+              <button id="transferAi" class="light-button" type="button">转 AI</button>
+              <button id="refreshMessages" class="light-button" type="button">刷新</button>
+            </div>
+          </header>
+
+          <section id="messageList" class="message-list" aria-label="聊天记录"></section>
+
+          <section id="aiSuggestionCard" class="ai-suggestion-card is-hidden" aria-label="AI 推荐回复">
+            <div class="ai-suggestion-head">
+              <strong id="aiSuggestionTitle">AI 推荐</strong>
+              <button id="refreshAiSuggestion" class="mini-action ghost suggestion-refresh" type="button">换一换</button>
+              <button id="closeAiSuggestion" class="mini-action ghost icon-mini-action" type="button" aria-label="关闭推荐"><i class="native-icon bfi-close" aria-hidden="true"></i></button>
+            </div>
+            <div id="aiSuggestionText" class="ai-suggestion-options"></div>
+            <div class="ai-suggestion-actions">
+              <button id="applyAiSuggestion" class="mini-action" type="button">采用</button>
+              <button id="sendAiSuggestion" class="mini-action" type="button">发送</button>
+            </div>
+          </section>
+
+          <footer class="composer" aria-label="消息输入区">
+            <div class="composer-module composer-tools">
+              <div class="composer-icon-group" aria-label="发送工具">
+                <button id="emojiTool" class="tool-icon-button" type="button" title="表情" aria-label="表情"><i class="native-icon bfi-emoji" aria-hidden="true"></i></button>
+                <button id="superCommandTool" class="tool-icon-button" type="button" title="发送指令" aria-label="发送指令"><i class="native-icon bfi-code" aria-hidden="true"></i></button>
+                <button id="imageTool" class="tool-icon-button" type="button" title="选择图片" aria-label="选择图片"><i class="native-icon bfi-media" aria-hidden="true"></i></button>
+                <button id="redPackTool" class="tool-icon-button red-pack" type="button" title="发送红包" aria-label="发送红包"><span class="client-emoji-icon client-emoji-redpack" aria-hidden="true"></span></button>
+                <button id="screenshotTool" class="tool-icon-button" type="button" title="截图" aria-label="截图"><i class="native-icon bfi-camera" aria-hidden="true"></i></button>
+                <button id="saveSkillTool" class="tool-icon-button" type="button" title="保存到 skill 回复" aria-label="保存到 skill 回复"><i class="native-icon bfi-pushpin" aria-hidden="true"></i></button>
+                <button id="transferAiComposer" class="tool-icon-button ai" type="button" title="转入 AI" aria-label="转入 AI"><i class="native-icon client-icon-ai" aria-hidden="true"></i></button>
+              </div>
+              <div class="composer-link-group" aria-label="快捷面板">
+                <button id="quickReplyTool" class="tool-button" type="button">快捷回复</button>
+                <button id="orderTool" class="tool-button" type="button">查订单</button>
+                <button id="skillReplyTool" class="tool-button" type="button">skill 回复</button>
+                <button id="aiSuggest" class="tool-button strong" type="button">AI 推荐</button>
+              </div>
+              <label class="red-dot-filter">
+                <input id="redOnly" type="checkbox" />
+                <span>只显示红点消息</span>
+              </label>
+              <input id="imageFileInput" class="file-input" type="file" accept="image/*" multiple />
+            </div>
+            <div class="composer-module composer-attachments" aria-label="输入附件"></div>
+            <div class="composer-module composer-editor">
+              <div id="draftImageTray" class="draft-image-tray is-hidden" aria-label="待发送图片"></div>
+              <div id="replyText" class="reply-text" contenteditable="true" placeholder="请输入客服回复内容"></div>
+            </div>
+            <div class="composer-module composer-actions">
+              <span class="composer-status">文字和图片会按接口能力分开发送</span>
+              <div class="send-row">
+                <button id="useAi" class="light-button" type="button">采用推荐</button>
+                <button id="sendText" class="send-button" type="button">发送</button>
+                <label class="send-mode-select" title="发送快捷键">
+                  <select id="sendMode" aria-label="发送快捷键">
+                    <option value="enter">Enter 发送</option>
+                    <option value="ctrl-enter">Ctrl+Enter 发送</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          </footer>
+        </main>
+
+        <aside class="tool-pane">
+          <div class="tool-tabs" role="tablist" aria-label="右侧工具栏">
+            <button class="tool-tab is-active" data-tool-tab="user" type="button">用户</button>
+            <button class="tool-tab" data-tool-tab="quick" type="button">快捷回复</button>
+            <button class="tool-tab" data-tool-tab="skill" type="button">skill回复</button>
+            <button class="tool-tab" data-tool-tab="order" type="button">订单</button>
+            <button class="tool-tab" data-tool-tab="detail" type="button">明细</button>
+            <button class="tool-tab" data-tool-tab="history" type="button">聊天记录</button>
+          </div>
+          <div id="toolContent" class="tool-content"></div>
+        </aside>
+      </div>
+    </section>
+
+    <div id="toolModalOverlay" class="modal-overlay is-hidden" role="presentation">
+      <section id="toolModalPanel" class="tool-modal" role="dialog" aria-modal="true" aria-labelledby="toolModalTitle">
+        <header class="tool-modal-head">
+          <strong id="toolModalTitle">发送指令</strong>
+          <button id="toolModalClose" class="settings-close" type="button" aria-label="关闭"><i class="native-icon bfi-close" aria-hidden="true"></i></button>
+        </header>
+        <div id="toolModalBody" class="tool-modal-body"></div>
+        <footer class="tool-modal-actions">
+          <button id="toolModalCancel" class="light-button" type="button">取消</button>
+          <button id="toolModalConfirm" class="send-button" type="button">确定</button>
+        </footer>
+      </section>
+    </div>
+
+    <div id="linkPreviewOverlay" class="link-preview-overlay is-hidden" role="presentation">
+      <section id="linkPreviewPanel" class="link-preview-panel" role="dialog" aria-modal="true" aria-labelledby="linkPreviewTitle">
+        <header class="link-preview-head">
+          <div>
+            <strong id="linkPreviewTitle">链接详情</strong>
+            <span id="linkPreviewSubtitle">网页预览</span>
+          </div>
+          <div class="link-preview-actions">
+            <button id="linkPreviewCopy" class="light-button" type="button">复制链接</button>
+            <button id="linkPreviewOpen" class="light-button" type="button">打开网页</button>
+            <button id="linkPreviewClose" class="settings-close" type="button" aria-label="关闭"><i class="native-icon bfi-close" aria-hidden="true"></i></button>
+          </div>
+        </header>
+        <div id="linkPreviewBody" class="link-preview-body"></div>
+      </section>
+    </div>
+
+    <script src="/vendor/signalr.min.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
