@@ -419,6 +419,18 @@ npm run fnos:health
 
 如果 `fnos:restore:mysql` 成功但稍后又掉回 SQLite，就继续排查飞牛侧是否有启动后的初始化脚本或手工设置把数据库模式再次改回去。
 
+2026-06-16 又确认一个触发点：系统设置弹窗里保存 `/System/SetOptions` 时，如果把服务端返回的数据库配置或任务配置原样提交，可能导致悠聊服务端再次切回 SQLite。Web 已做保护：
+
+- 系统设置里的 `自动关闭会话` 锁定为开启，不允许保存成关闭。
+- 系统设置保存不再直接裸调 `/System/SetOptions`，改走 `/local/client-options/save`。
+- `/local/client-options/save` 会先读取当前 `/System/GetOptions`，合并设置，并强制保持 `dataBaseOptions.databaseType=0` 与 MySQL 连接串。
+- 保存后会重新检查数据库，如果发现被切到 SQLite 或历史数量异常，会立即调用 MySQL 修复流程。
+- Web 服务启动后会启用数据库守护，默认每 5 分钟检查一次；发现异常会自动切回 MySQL。
+- 守护配置可通过环境变量调整：
+  - `YOUCHAT_DATABASE_GUARD_ENABLED=1`
+  - `YOUCHAT_DATABASE_GUARD_INTERVAL_MS=300000`
+  - `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT=1000`
+
 ## 当前注意点
 
 - 当前不会使用假数据，接口失败会显示真实失败信息并写入抓包日志。

@@ -26,8 +26,24 @@ const OSS_UPLOAD_TIMEOUT_MS = 20000;
 const AI_PROXY_TIMEOUT_MS = 90000;
 const SIGNALR_START_TIMEOUT_MS = 12000;
 const SIGNALR_KEEP_ALIVE_MS = 120000;
+const DATABASE_GUARD_ENABLED = process.env.YOUCHAT_DATABASE_GUARD_ENABLED !== "0";
+const DATABASE_GUARD_INTERVAL_MS = Math.max(60000, Number(process.env.YOUCHAT_DATABASE_GUARD_INTERVAL_MS || 5 * 60 * 1000));
+const DATABASE_GUARD_MIN_HISTORY_COUNT = Number(process.env.YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT || 1000);
 const DIRECT_VIDEO_EXTENSIONS = /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8)(?:$|\?)/i;
 const signalRHubConnections = new Map();
+const databaseGuardState = {
+  enabled: DATABASE_GUARD_ENABLED,
+  intervalMs: DATABASE_GUARD_INTERVAL_MS,
+  intervalMinutes: Math.round(DATABASE_GUARD_INTERVAL_MS / 60000),
+  running: false,
+  lastReason: "",
+  lastCheckedAt: "",
+  lastRepairAt: "",
+  lastError: "",
+  lastHealth: null,
+  lastResult: null,
+  repairCount: 0
+};
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -1141,6 +1157,105 @@ async function postYouChatApi(pathname, payload = {}, apiBase = DEFAULT_API_BASE
   return parsed;
 }
 
+async function postYouChatJson(pathname, payload = {}, apiBase = DEFAULT_API_BASE) {
+  const base = String(apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
+  const target = new URL(`${base}${pathname.startsWith("/") ? pathname : `/${pathname}`}`);
+  const upstream = await fetchWithTimeout(target, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {})
+  }, Math.min(API_PROXY_TIMEOUT_MS, 30000), `YouChat JSON ${pathname}`);
+  const text = await upstream.text();
+  let parsed;
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { success: false, message: text };
+  }
+  if (!upstream.ok || parsed?.success === false) {
+    throw new Error(parsed?.message || `HTTP ${upstream.status}`);
+  }
+  return parsed;
+}
+
+function getYouChatOptionsData(payload) {
+  return payload?.data && typeof payload.data === "object" ? payload.data : {};
+}
+
+async function getYouChatOptions(apiBase = DEFAULT_API_BASE) {
+  const payload = await postYouChatApi("/System/GetOptions", {}, apiBase);
+  return getYouChatOptionsData(payload);
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (value === true || value === false) return value;
+  if (value === 1 || value === "1") return true;
+  if (value === 0 || value === "0") return false;
+  if (typeof value === "string") {
+    if (/^true$/i.test(value)) return true;
+    if (/^false$/i.test(value)) return false;
+  }
+  return fallback;
+}
+
+function buildSafeClientOptionsForSave(incoming = {}, current = {}) {
+  const currentDatabaseOptions = current.dataBaseOptions || current.DataBaseOptions || {};
+  const incomingDatabaseOptions = incoming.dataBaseOptions || incoming.DataBaseOptions || {};
+  const currentJobOptions = current.jobOptions || current.JobOptions || {};
+  const incomingJobOptions = incoming.jobOptions || incoming.JobOptions || {};
+
+  const dataBaseOptions = {
+    ...currentDatabaseOptions,
+    ...incomingDatabaseOptions,
+    databaseType: 0
+  };
+  dataBaseOptions.connectionString = String(
+    incomingDatabaseOptions.connectionString ||
+    currentDatabaseOptions.connectionString ||
+    FNOS_MYSQL_CONNECTION_STRING
+  ).trim();
+
+  const commonOptions = {
+    ...(current.commonOptions || current.CommonOptions || {}),
+    ...(incoming.commonOptions || incoming.CommonOptions || {})
+  };
+  const jobOptions = {
+    ...currentJobOptions,
+    ...incomingJobOptions,
+    autoShutDown: true,
+    runTimeoutCheckJob: normalizeBoolean(incomingJobOptions.runTimeoutCheckJob, normalizeBoolean(currentJobOptions.runTimeoutCheckJob, true))
+  };
+  if (jobOptions.closeTime === undefined || jobOptions.closeTime === null || jobOptions.closeTime === "") jobOptions.closeTime = 20;
+  if (jobOptions.timeout === undefined || jobOptions.timeout === null || jobOptions.timeout === "") jobOptions.timeout = 5;
+  if (jobOptions.getMsgByDate === undefined || jobOptions.getMsgByDate === null || jobOptions.getMsgByDate === "") jobOptions.getMsgByDate = 2;
+
+  const aiOptions = {
+    ...(current.aiOptions || current.AiOptions || {}),
+    ...(incoming.aiOptions || incoming.AiOptions || {})
+  };
+
+  return {
+    dataBaseOptions,
+    commonOptions,
+    jobOptions,
+    aiOptions
+  };
+}
+
+function summarizeDatabaseGuardState() {
+  return {
+    enabled: databaseGuardState.enabled,
+    intervalMs: databaseGuardState.intervalMs,
+    intervalMinutes: databaseGuardState.intervalMinutes,
+    running: databaseGuardState.running,
+    lastReason: databaseGuardState.lastReason,
+    lastCheckedAt: databaseGuardState.lastCheckedAt,
+    lastRepairAt: databaseGuardState.lastRepairAt,
+    lastError: databaseGuardState.lastError,
+    repairCount: databaseGuardState.repairCount
+  };
+}
+
 function getYouChatDatabaseMode(databaseType) {
   const type = Number(databaseType);
   if (type === 0) return "mysql";
@@ -1265,6 +1380,78 @@ async function restoreFnOSDatabaseToMySQL(options = {}) {
   };
 }
 
+async function saveClientOptionsSafely(payload = {}) {
+  const apiBase = payload.apiBase || DEFAULT_API_BASE;
+  const current = await getYouChatOptions(apiBase);
+  const options = buildSafeClientOptionsForSave(payload, current);
+  const saveResult = await postYouChatJson("/System/SetOptions", options, apiBase);
+  let health = await getFnOSDatabaseHealth({
+    apiBase,
+    minHistoryCount: DATABASE_GUARD_MIN_HISTORY_COUNT
+  });
+  let repaired = false;
+  let repairResult = null;
+
+  if (!health.ok || Number(health.databaseType) !== 0) {
+    repairResult = await restoreFnOSDatabaseToMySQL({
+      apiBase,
+      minHistoryCount: DATABASE_GUARD_MIN_HISTORY_COUNT
+    });
+    health = repairResult.after || health;
+    repaired = true;
+    databaseGuardState.lastResult = repairResult;
+    databaseGuardState.lastHealth = health;
+    databaseGuardState.lastRepairAt = new Date().toISOString();
+    databaseGuardState.repairCount += 1;
+  } else {
+    databaseGuardState.lastHealth = health;
+    databaseGuardState.lastCheckedAt = new Date().toISOString();
+  }
+
+  return {
+    saveResult,
+    options,
+    health,
+    repaired,
+    repairResult
+  };
+}
+
+async function runDatabaseGuardCheck(reason = "timer") {
+  if (!DATABASE_GUARD_ENABLED) return null;
+  if (databaseGuardState.running) return null;
+  databaseGuardState.running = true;
+  databaseGuardState.lastReason = reason;
+  databaseGuardState.lastError = "";
+  try {
+    const health = await getFnOSDatabaseHealth({
+      apiBase: DEFAULT_API_BASE,
+      minHistoryCount: DATABASE_GUARD_MIN_HISTORY_COUNT
+    });
+    databaseGuardState.lastHealth = health;
+    databaseGuardState.lastCheckedAt = new Date().toISOString();
+    if (!health.ok || Number(health.databaseType) !== 0) {
+      const result = await restoreFnOSDatabaseToMySQL({
+        apiBase: DEFAULT_API_BASE,
+        minHistoryCount: DATABASE_GUARD_MIN_HISTORY_COUNT
+      });
+      databaseGuardState.lastResult = result;
+      databaseGuardState.lastHealth = result.after || health;
+      databaseGuardState.lastRepairAt = new Date().toISOString();
+      databaseGuardState.repairCount += 1;
+      console.warn(`[database-guard] repaired database mode after ${reason}`);
+      return result;
+    }
+    return { health };
+  } catch (error) {
+    databaseGuardState.lastError = error.message || String(error);
+    console.warn(`[database-guard] check failed: ${databaseGuardState.lastError}`);
+    return null;
+  } finally {
+    databaseGuardState.running = false;
+  }
+}
+
 async function handleFnOSDatabase(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   try {
@@ -1272,7 +1459,21 @@ async function handleFnOSDatabase(req, res) {
       const health = await getFnOSDatabaseHealth({
         apiBase: url.searchParams.get("apiBase") || DEFAULT_API_BASE
       });
-      sendJson(res, 200, { success: true, health });
+      databaseGuardState.lastHealth = health;
+      databaseGuardState.lastCheckedAt = new Date().toISOString();
+      sendJson(res, 200, { success: true, health, guard: summarizeDatabaseGuardState() });
+      return;
+    }
+
+    if (url.pathname === "/local/fnos/guard") {
+      if (req.method === "POST") {
+        await runDatabaseGuardCheck("manual");
+      }
+      sendJson(res, 200, {
+        success: true,
+        guard: summarizeDatabaseGuardState(),
+        health: databaseGuardState.lastHealth
+      });
       return;
     }
 
@@ -1284,10 +1485,15 @@ async function handleFnOSDatabase(req, res) {
       const body = await readBody(req);
       const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
       const result = await restoreFnOSDatabaseToMySQL(payload);
+      databaseGuardState.lastResult = result;
+      databaseGuardState.lastHealth = result.after || null;
+      databaseGuardState.lastRepairAt = new Date().toISOString();
+      databaseGuardState.repairCount += 1;
       sendJson(res, 200, {
         success: true,
         message: "FnOS 数据库已切回 MySQL",
-        result
+        result,
+        guard: summarizeDatabaseGuardState()
       });
       return;
     }
@@ -1295,6 +1501,31 @@ async function handleFnOSDatabase(req, res) {
     sendJson(res, 404, { success: false, message: "Unknown FnOS database endpoint" });
   } catch (error) {
     sendJson(res, 400, { success: false, message: error.message || "FnOS 数据库操作失败" });
+  }
+}
+
+async function handleClientOptionsSave(req, res) {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { success: false, message: "Method not allowed" });
+    return;
+  }
+  try {
+    const body = await readBody(req);
+    const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
+    const result = await saveClientOptionsSafely(payload);
+    sendJson(res, 200, {
+      success: true,
+      message: result.repaired ? "系统设置已保存，并已切回 MySQL" : "系统设置已保存",
+      options: result.options,
+      health: result.health,
+      repaired: result.repaired,
+      guard: summarizeDatabaseGuardState()
+    });
+  } catch (error) {
+    sendJson(res, 400, {
+      success: false,
+      message: error.message || "系统设置保存失败"
+    });
   }
 }
 
@@ -2593,6 +2824,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.url.startsWith("/local/client-options/save")) {
+    await handleClientOptionsSave(req, res);
+    return;
+  }
+
   if (req.url.startsWith("/local/skill-training")) {
     await handleSkillTraining(req, res);
     return;
@@ -2648,9 +2884,20 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res);
 });
 
+function startDatabaseGuard() {
+  if (!DATABASE_GUARD_ENABLED) {
+    console.log("Database guard: disabled");
+    return;
+  }
+  console.log(`Database guard: checking every ${Math.round(DATABASE_GUARD_INTERVAL_MS / 60000)} minute(s)`);
+  setTimeout(() => runDatabaseGuardCheck("startup"), 15000);
+  setInterval(() => runDatabaseGuardCheck("timer"), DATABASE_GUARD_INTERVAL_MS);
+}
+
 server.listen(PORT, () => {
   console.log(`YouChat dev web: http://localhost:${PORT}`);
   console.log(`Proxy target: ${DEFAULT_API_BASE}`);
+  startDatabaseGuard();
 });
 
 process.on("SIGINT", () => {

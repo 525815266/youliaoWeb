@@ -105,6 +105,73 @@ docker compose -p youchat-dev-web -f compose.registry.yaml pull
 docker compose -p youchat-dev-web -f compose.registry.yaml up -d
 ```
 
+## 2026-06-16 Handoff: Client Options Save Guard
+
+User issue:
+
+- In the native-style `系统设置` modal, turning off `自动关闭会话` and saving could make the backend fall back to SQLite again.
+- User wants this switch to stay on by default and persist after refresh.
+- Since the deployment should use MySQL, Web should periodically detect SQLite regression and repair automatically.
+
+Do not regress:
+
+- Do not let Web save `jobOptions.autoShutDown=false`.
+- Do not call `/System/SetOptions` directly from the frontend for the settings modal.
+- Keep `POST /local/client-options/save` as the safe save path.
+- Do not expose database mode as a normal easy-to-toggle UI control that can save SQLite.
+
+Files changed:
+
+- `public/app.js`
+- `public/styles.css`
+- `server.js`
+- `.env.example`
+- `compose.yaml`
+- `compose.registry.yaml`
+- `README.md`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+New local API:
+
+- `POST /local/client-options/save`
+- `GET /local/fnos/guard`
+- `POST /local/fnos/guard`
+
+Safe settings save flow:
+
+1. Server reads current `/System/GetOptions`.
+2. Server merges incoming settings with current settings.
+3. Server forces:
+   - `dataBaseOptions.databaseType=0`
+   - MySQL connection string preserved
+   - `jobOptions.autoShutDown=true`
+   - `jobOptions.runTimeoutCheckJob=true`
+4. Server calls real `/System/SetOptions`.
+5. Server checks database health.
+6. If SQLite or abnormal history count appears, server calls `restoreFnOSDatabaseToMySQL()`.
+
+Database guard:
+
+- Enabled by default.
+- Startup check after 15 seconds.
+- Timer check every `YOUCHAT_DATABASE_GUARD_INTERVAL_MS`, default `300000`.
+- Repairs automatically if database mode is not MySQL or history count is below `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT`.
+- State is exposed in database modal and `/local/fnos/guard`.
+
+Verification performed:
+
+- `npm run check` passed.
+- `python -m py_compile .\scripts\deploy-fnos-web.py` passed.
+- `GET /local/fnos/health` returned MySQL:
+  - `databaseType=0`
+  - `historyContacts=5744`
+  - `guard.enabled=true`
+- Simulated saving with `jobOptions.autoShutDown=false`; after save:
+  - real `/System/GetOptions` still had `databaseType=0`
+  - real `/System/GetOptions` still had `jobOptions.autoShutDown=true`
+  - safe save path repaired a detected save-time database regression automatically.
+
 ## Key Files
 
 - `public/app.js`: main frontend state, API calls, rendering, chat, tools, AI, skill learning.

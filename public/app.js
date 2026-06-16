@@ -250,6 +250,8 @@ const CONTACT_LIST_ACCOUNT_ID_PATTERN = /^[1-9]\d{0,9}$/;
 const GLOBAL_SEARCH_PAGE_SIZE = 20;
 const CLIENT_NOTICE_PAGE_SIZE = 20;
 const DATABASE_DELETE_CONFIRM_TEXT = "我已知晓删除的聊天记录无法恢复";
+const CLIENT_OPTIONS_SAVE_ENDPOINT = "/local/client-options/save";
+const DATABASE_GUARD_STATUS_ENDPOINT = "/local/fnos/guard";
 const CONTACT_AVATAR_FIELDS = [
   "avatar",
   "headImg",
@@ -516,6 +518,7 @@ const state = {
   },
   databaseRepair: {
     health: null,
+    guard: null,
     loading: false,
     repairing: false,
     error: ""
@@ -1213,9 +1216,12 @@ function renderClientOptionsModal() {
           })}
           ${renderClientToggleSetting({
             label: "自动关闭会话",
+            hint: "已锁定开启，避免保存系统设置时触发服务端任务配置异常。",
             namespace: "jobOptions",
             key: "autoShutDown",
-            checked: Boolean(jobOptions.autoShutDown)
+            checked: true,
+            disabled: true,
+            locked: true
           })}
           <div class="client-settings-number-list">
             ${renderClientNumberSetting({
@@ -1399,15 +1405,15 @@ function renderClientRadioSetting({ label, namespace, key, value, options, compa
   `;
 }
 
-function renderClientToggleSetting({ label, hint = "", namespace, key, checked }) {
+function renderClientToggleSetting({ label, hint = "", namespace, key, checked, disabled = false, locked = false }) {
   return `
-    <label class="client-setting-row is-inline">
+    <label class="client-setting-row is-inline ${locked ? "is-locked" : ""}">
       <div class="client-setting-copy">
         <strong>${escapeHtml(label)}</strong>
         ${hint ? `<span>${escapeHtml(hint)}</span>` : ""}
       </div>
       <span class="client-toggle">
-        <input type="checkbox" data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}" ${checked ? "checked" : ""}>
+        <input type="checkbox" data-client-option="${escapeAttr(namespace)}.${escapeAttr(key)}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}>
         <i aria-hidden="true"></i>
       </span>
     </label>
@@ -1474,20 +1480,62 @@ async function saveClientOptionsFromModal() {
   });
 
   try {
-    await api("/System/SetOptions", {
-      dataBaseOptions: next.dataBaseOptions || next.DataBaseOptions || {},
-      commonOptions: next.commonOptions || next.CommonOptions || {},
-      jobOptions: next.jobOptions || next.JobOptions || {},
-      aiOptions: next.aiOptions || next.AiOptions || {}
-    }, { asJson: true });
-    state.clientOptions = next;
-    toast("系统设置已提交到 /System/SetOptions。");
+    const payload = normalizeClientOptionsForSave(next);
+    const response = await fetch(CLIENT_OPTIONS_SAVE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        apiBase: state.apiBase
+      })
+    });
+    const result = await response.json();
+    if (!response.ok || result.success === false) {
+      throw new Error(getMessage(result) || `HTTP ${response.status}`);
+    }
+    state.clientOptions = result.options || payload;
+    if (result.health) state.databaseRepair.health = result.health;
+    toast(result.repaired ? "系统设置已保存，并已把数据库切回 MySQL。" : "系统设置已保存，数据库仍为 MySQL。");
     closeToolModal();
     return true;
   } catch (error) {
     toast(`保存系统设置失败：${error.message}`, true);
     return false;
   }
+}
+
+function normalizeClientOptionsForSave(options = {}) {
+  const dataBaseOptions = {
+    ...(options.dataBaseOptions || options.DataBaseOptions || {})
+  };
+  const commonOptions = {
+    ...(options.commonOptions || options.CommonOptions || {})
+  };
+  const jobOptions = {
+    ...(options.jobOptions || options.JobOptions || {})
+  };
+  const aiOptions = {
+    ...(options.aiOptions || options.AiOptions || {})
+  };
+
+  dataBaseOptions.databaseType = 0;
+  if (!String(dataBaseOptions.connectionString || "").trim()) {
+    dataBaseOptions.connectionString = state.databaseRepair.health?.connectionString || "";
+  }
+  jobOptions.autoShutDown = true;
+  if (jobOptions.closeTime === undefined || jobOptions.closeTime === null || jobOptions.closeTime === "") {
+    jobOptions.closeTime = 20;
+  }
+  if (jobOptions.runTimeoutCheckJob === undefined || jobOptions.runTimeoutCheckJob === null) {
+    jobOptions.runTimeoutCheckJob = true;
+  }
+
+  return {
+    dataBaseOptions,
+    commonOptions,
+    jobOptions,
+    aiOptions
+  };
 }
 
 function readClientOptionInputValue(input) {
@@ -10089,8 +10137,17 @@ function renderSkillReplyPanel() {
 
 function renderDatabaseRepairPanel() {
   const health = state.databaseRepair.health || null;
+  const guard = state.databaseRepair.guard || null;
   const mode = health?.databaseMode || "未知";
   const ok = Boolean(health?.ok);
+  const guardText = guard?.enabled
+    ? `自动守护中，每 ${formatDatabaseMetric(guard.intervalMinutes)} 分钟检查一次`
+    : "自动守护未开启";
+  const guardMeta = [
+    guard?.lastCheckedAt ? `上次检查 ${formatShortDateTime(guard.lastCheckedAt)}` : "",
+    guard?.lastRepairAt ? `上次修复 ${formatShortDateTime(guard.lastRepairAt)}` : "",
+    guard?.lastError ? `最近错误 ${guard.lastError}` : ""
+  ].filter(Boolean).join(" · ");
   const statusClass = state.databaseRepair.error ? "danger" : ok ? "ok" : health ? "warn" : "muted";
   const statusText = state.databaseRepair.loading
     ? "检查中"
@@ -10121,6 +10178,10 @@ function renderDatabaseRepairPanel() {
         <div><span>历史</span><strong>${formatDatabaseMetric(health?.historyContacts)}</strong></div>
         <div><span>当前探测</span><strong>${formatDatabaseMetric(health?.currentAccount2)}</strong></div>
       </div>
+      <div class="database-guard-line">
+        <strong>${escapeHtml(guardText)}</strong>
+        ${guardMeta ? `<span>${escapeHtml(guardMeta)}</span>` : ""}
+      </div>
       ${errors.length ? `<div class="database-repair-errors">${errors.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</div>` : ""}
       <div class="database-repair-actions">
         <button class="mini-action" type="button" data-client-modal-action="database-health" ${state.databaseRepair.loading || state.databaseRepair.repairing ? "disabled" : ""}>刷新状态</button>
@@ -10136,6 +10197,17 @@ function formatDatabaseMetric(value) {
   return Number.isFinite(numberValue) ? numberValue.toLocaleString("zh-CN") : String(value);
 }
 
+function formatShortDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "");
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 async function loadDatabaseRepairStatus(options = {}) {
   if (state.databaseRepair.loading || state.databaseRepair.repairing) return;
   state.databaseRepair.loading = true;
@@ -10146,6 +10218,7 @@ async function loadDatabaseRepairStatus(options = {}) {
     const payload = await response.json();
     if (!response.ok || payload.success === false) throw new Error(getMessage(payload) || `HTTP ${response.status}`);
     state.databaseRepair.health = payload.health || null;
+    state.databaseRepair.guard = payload.guard || null;
     if (!options.silent) {
       const healthy = Boolean(state.databaseRepair.health?.ok);
       toast(healthy ? "数据库当前为 MySQL，状态正常。" : "数据库状态异常，可以点击一键修复。", !healthy);
@@ -10178,6 +10251,7 @@ async function repairDatabaseFromModal() {
     const payload = await response.json();
     if (!response.ok || payload.success === false) throw new Error(getMessage(payload) || `HTTP ${response.status}`);
     state.databaseRepair.health = payload.result?.after || null;
+    state.databaseRepair.guard = payload.guard || state.databaseRepair.guard;
     toast("数据库已切回 MySQL，正在刷新会话数量。");
     await Promise.allSettled([
       loadContactCounts(),

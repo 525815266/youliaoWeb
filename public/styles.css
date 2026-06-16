@@ -4649,6 +4649,26 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.database-guard-line {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid #d7e8f8;
+  border-radius: 5px;
+  background: #f6fbff;
+}
+
+.database-guard-line strong {
+  color: #1b4f84;
+  font-size: 12px;
+}
+
+.database-guard-line span {
+  color: #627389;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .database-repair-errors {
   display: grid;
   gap: 4px;
@@ -4882,6 +4902,10 @@ textarea:focus-visible {
   align-items: center;
 }
 
+.client-setting-row.is-locked .client-setting-copy span {
+  color: #586a80;
+}
+
 .client-setting-row.compact {
   gap: 6px;
 }
@@ -4991,6 +5015,14 @@ textarea:focus-visible {
 
 .client-toggle input:checked + i::after {
   transform: translateX(20px);
+}
+
+.client-toggle input:disabled {
+  cursor: not-allowed;
+}
+
+.client-toggle input:disabled + i {
+  box-shadow: inset 0 0 0 1px rgba(22, 141, 242, 0.16);
 }
 
 .client-settings-number-list {

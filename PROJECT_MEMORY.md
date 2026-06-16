@@ -65,6 +65,7 @@
 69. [2026-06-15 Web 数据库一键修复按钮](#69-2026-06-15-web-数据库一键修复按钮)
 70. [2026-06-15 Web 客户端 Docker 化部署](#70-2026-06-15-web-客户端-docker-化部署)
 71. [2026-06-15 GitHub Container Registry 发布](#71-2026-06-15-github-container-registry-发布)
+72. [2026-06-16 系统设置保存保护与数据库自动守护](#72-2026-06-16-系统设置保存保护与数据库自动守护)
 
 ## 1. 项目目标
 
@@ -5122,4 +5123,164 @@ YOUCHAT_API_BASE=http://host.docker.internal:18080/api
 - `./config:/app/config`
 - `./data:/app/data`
 - `./logs:/app/logs`
+
+## 72. 2026-06-16 系统设置保存保护与数据库自动守护
+
+### 1. 用户问题
+
+用户在原生风格系统设置弹窗中发现：
+
+- 关闭 `自动关闭会话` 后点击保存。
+- 保存后数据库会再次切回 SQLite。
+- 用户希望该开关默认不要关闭，刷新后仍保持开启。
+- 既然当前系统应使用 MySQL，就应定时检测是否异常切回 SQLite，发现异常自动修复。
+
+### 2. 根因判断
+
+Web 之前系统设置保存直接调用：
+
+```text
+/System/SetOptions
+```
+
+提交内容包括：
+
+- `dataBaseOptions`
+- `commonOptions`
+- `jobOptions`
+- `aiOptions`
+
+这会把系统设置弹窗里读取到的数据库配置和任务配置一起提交。现场模拟验证发现，即使当前数据库是 MySQL，请求中把 `jobOptions.autoShutDown=false` 保存后，悠聊服务端可能在保存过程中触发数据库配置异常；新的安全保存接口能检测到并立即修复。
+
+### 3. 前端修复
+
+修改文件：
+
+- `public/app.js`
+- `public/styles.css`
+
+改动：
+
+- 系统设置中的 `自动关闭会话` 强制显示为开启。
+- 该开关禁用，不允许用户关闭。
+- 增加说明：`已锁定开启，避免保存系统设置时触发服务端任务配置异常。`
+- 保存系统设置不再直接调用 `/System/SetOptions`。
+- 改为调用本地安全接口：
+
+```text
+POST /local/client-options/save
+```
+
+前端提交前还会执行 `normalizeClientOptionsForSave()`：
+
+- `dataBaseOptions.databaseType = 0`
+- `jobOptions.autoShutDown = true`
+- 默认补齐：
+  - `closeTime=20`
+  - `runTimeoutCheckJob=true`
+
+数据库管理弹窗的修复面板新增守护状态：
+
+- 是否自动守护中。
+- 检查间隔。
+- 上次检查时间。
+- 上次修复时间。
+- 最近错误。
+
+### 4. 服务端修复
+
+修改文件：
+
+- `server.js`
+- `.env.example`
+- `compose.yaml`
+- `compose.registry.yaml`
+
+新增服务端接口：
+
+```text
+POST /local/client-options/save
+GET  /local/fnos/guard
+POST /local/fnos/guard
+```
+
+`/local/client-options/save` 流程：
+
+1. 读取真实 `/System/GetOptions`。
+2. 使用 `buildSafeClientOptionsForSave()` 合并当前配置与前端提交配置。
+3. 强制保持：
+   - `dataBaseOptions.databaseType=0`
+   - `dataBaseOptions.connectionString` 优先保留 MySQL 连接串
+   - `jobOptions.autoShutDown=true`
+   - `jobOptions.runTimeoutCheckJob=true`
+4. 调用真实 `/System/SetOptions`。
+5. 调用 `/System/GetOptions`、`/Contact/GetContactList` 等检查数据库健康。
+6. 如果发现 SQLite 或历史数量异常，立即调用 `restoreFnOSDatabaseToMySQL()`。
+
+新增自动守护：
+
+- 服务启动后 15 秒做一次启动检查。
+- 默认每 5 分钟检查一次。
+- 发现 `databaseType !== 0` 或历史数量低于阈值时，自动切回 MySQL。
+- 守护状态保存在 `databaseGuardState` 中。
+
+新增环境变量：
+
+```env
+YOUCHAT_DATABASE_GUARD_ENABLED=1
+YOUCHAT_DATABASE_GUARD_INTERVAL_MS=300000
+YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT=1000
+```
+
+### 5. 验证结果
+
+本地重启 `node server.js` 后：
+
+```powershell
+Invoke-RestMethod http://localhost:5177/local/fnos/health
+```
+
+返回：
+
+- `databaseType=0`
+- `databaseMode=mysql`
+- `totalContacts=8081`
+- `historyContacts=5744`
+- `currentAccount2=16`
+- `guard.enabled=true`
+- `guard.intervalMinutes=5`
+
+手动触发守护：
+
+```powershell
+Invoke-RestMethod -Method Post http://localhost:5177/local/fnos/guard -Body "{}" -ContentType "application/json"
+```
+
+返回正常，未触发修复。
+
+模拟用户问题：
+
+- 先读取真实 `/System/GetOptions`。
+- 构造 `jobOptions.autoShutDown=false`。
+- 调用 `POST /local/client-options/save`。
+
+结果：
+
+- 请求成功。
+- 保存后真实 `/System/GetOptions` 仍为：
+  - `dataBaseOptions.databaseType=0`
+  - `jobOptions.autoShutDown=true`
+- 历史数量仍为 `5744`。
+- 该测试中安全保存接口检测到一次保存后的异常并自动修复，证明此保护确实兜住了用户反馈的问题。
+
+### 6. 后续注意
+
+- 不要再让系统设置直接裸调 `/System/SetOptions`。
+- 不要允许 `autoShutDown` 从 Web 保存成 `false`。
+- 不要把数据库模式暴露成可随手切回 SQLite 的普通表单项。
+- 如果用户仍反馈保存设置后数据库掉回 SQLite，优先看：
+  - `/local/fnos/guard`
+  - `/local/fnos/health`
+  - `logs/api-capture.ndjson`
+  - Docker 容器日志里的 `[database-guard]`
 
