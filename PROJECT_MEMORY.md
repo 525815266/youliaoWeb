@@ -5451,3 +5451,42 @@ ghcr.io/525815266/youliaoweb:latest
 - 不要把 `C:\youchat-dev-web` 原仓库历史 force push 到公开 GitHub。
 - 公开仓库只接受无密钥、无真实数据、无飞牛私有运维信息的代码和示例配置。
 
+### 2026-06-16 追加：公开 README 功能介绍与图片
+
+用户反馈：
+
+- 公开仓库功能介绍不够详尽，希望 README 里带图片。
+
+已修改公开发布仓库 `C:\youchat-web-public-release`：
+
+- 重写公开版 `README.md`：
+  - 增加适合场景。
+  - 增加真实接口工作台、会话列表、聊天窗口、右侧工具栏、AI/skill 回复、客户端设置和数据库守护等详细功能说明。
+  - 增加部署架构、快速开始、Docker 本地构建、GHCR 镜像使用、环境变量、本地文件、安全说明、开发检查、目录结构和当前边界。
+- 新增脱敏 SVG 图片：
+  - `docs/images/workbench-overview.svg`
+  - `docs/images/ai-skill-flow.svg`
+  - `docs/images/docker-deployment.svg`
+- 图片是文档示意图，不包含真实客户、订单、聊天记录或密钥。
+
+验证：
+
+- 在公开发布仓库执行 `npm run check` 通过。
+- 执行敏感扫描无命中：
+
+```powershell
+rg -n "sk-[A-Za-z0-9]|ck_[A-Za-z0-9_.-]+|950331|w5B22|Password=w|1556504756803862529|192\.168\.9\.83" -S .
+```
+
+推送说明：
+
+- 本机 `git push` 当时连接 GitHub 443 超时，但浏览器/API 可访问。
+- 因此使用 GitHub REST API 创建远程提交：
+  - `982f82120b039c54ed6e25855920cb600488602d`
+  - message: `Expand README with feature overview and diagrams`
+- 远程 README 和 SVG 已验证可通过 raw.githubusercontent.com 访问。
+- 新 Actions run：
+  - `https://github.com/525815266/youliaoWeb/actions/runs/27627140856`
+  - 状态：`completed`
+  - 结果：`success`
+
