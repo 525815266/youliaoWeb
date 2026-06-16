@@ -421,9 +421,11 @@ npm run fnos:health
 
 2026-06-16 又确认一个触发点：系统设置弹窗里保存 `/System/SetOptions` 时，如果把服务端返回的数据库配置或任务配置原样提交，可能导致悠聊服务端再次切回 SQLite。Web 已做保护：
 
-- 系统设置里的 `自动关闭会话` 锁定为开启，不允许保存成关闭。
+- 系统设置里的 `自动关闭会话` 锁定为关闭，不允许保存成开启，避免服务端自动关闭会话。
 - 系统设置保存不再直接裸调 `/System/SetOptions`，改走 `/local/client-options/save`。
 - `/local/client-options/save` 会先读取当前 `/System/GetOptions`，合并设置，并强制保持 `dataBaseOptions.databaseType=0` 与 MySQL 连接串。
+- `/System/SetOptions` 必须用点号 `form-data` 字段提交，例如 `jobOptions.autoShutDown=false`。不要用 JSON 提交，实测 JSON 会让后端绑定异常并切回 SQLite。
+- 保存后会再次读取 `/System/GetOptions`，确认 `databaseType=0` 且 `jobOptions.autoShutDown=false`，否则不会提示保存成功。
 - 保存后会重新检查数据库，如果发现被切到 SQLite 或历史数量异常，会立即调用 MySQL 修复流程。
 - Web 服务启动后会启用数据库守护，默认每 5 分钟检查一次；发现异常会自动切回 MySQL。
 - 守护配置可通过环境变量调整：

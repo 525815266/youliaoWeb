@@ -109,15 +109,16 @@ docker compose -p youchat-dev-web -f compose.registry.yaml up -d
 
 User issue:
 
-- In the native-style `系统设置` modal, turning off `自动关闭会话` and saving could make the backend fall back to SQLite again.
-- User wants this switch to stay on by default and persist after refresh.
+- User corrected the intent: `自动关闭会话` should stay off, because enabling it automatically closes conversations.
+- Saving the native-style `系统设置` modal can also make the backend fall back to SQLite if database/task options are submitted unsafely.
 - Since the deployment should use MySQL, Web should periodically detect SQLite regression and repair automatically.
 
 Do not regress:
 
-- Do not let Web save `jobOptions.autoShutDown=false`.
+- Do not let Web save `jobOptions.autoShutDown=true`.
 - Do not call `/System/SetOptions` directly from the frontend for the settings modal.
 - Keep `POST /local/client-options/save` as the safe save path.
+- Do not call `/System/SetOptions` with JSON. Use dotted `form-data` fields; JSON can make YouChat fall back to SQLite.
 - Do not expose database mode as a normal easy-to-toggle UI control that can save SQLite.
 
 Files changed:
@@ -145,11 +146,12 @@ Safe settings save flow:
 3. Server forces:
    - `dataBaseOptions.databaseType=0`
    - MySQL connection string preserved
-   - `jobOptions.autoShutDown=true`
+   - `jobOptions.autoShutDown=false`
    - `jobOptions.runTimeoutCheckJob=true`
-4. Server calls real `/System/SetOptions`.
+4. Server calls real `/System/SetOptions` with dotted `form-data` fields, for example `jobOptions.autoShutDown=false`.
 5. Server checks database health.
 6. If SQLite or abnormal history count appears, server calls `restoreFnOSDatabaseToMySQL()`.
+7. Server rereads `/System/GetOptions` and refuses success unless `databaseType=0` and `autoShutDown=false`.
 
 Database guard:
 
@@ -165,12 +167,18 @@ Verification performed:
 - `python -m py_compile .\scripts\deploy-fnos-web.py` passed.
 - `GET /local/fnos/health` returned MySQL:
   - `databaseType=0`
-  - `historyContacts=5744`
+  - `historyContacts=5758`
   - `guard.enabled=true`
-- Simulated saving with `jobOptions.autoShutDown=false`; after save:
+- Simulated saving with `jobOptions.autoShutDown=true`; after save:
   - real `/System/GetOptions` still had `databaseType=0`
-  - real `/System/GetOptions` still had `jobOptions.autoShutDown=true`
-  - safe save path repaired a detected save-time database regression automatically.
+  - real `/System/GetOptions` still had `jobOptions.autoShutDown=false`
+  - safe save path did not need repair after switching to dotted `form-data`.
+
+Additional 2026-06-16 probe:
+
+- `json-camel-root` to `/System/SetOptions` changed `dataBaseOptions.databaseType` from `0` to `2`, confirming JSON is unsafe.
+- `form-json-params-camel` did not persist `jobOptions.autoShutDown=false` and still caused a database regression.
+- `form-dot-camel` persisted `jobOptions.autoShutDown=false` while keeping MySQL, so `server.js` now uses `postYouChatDotForm()` for safe settings save.
 
 ## Key Files
 

@@ -5130,9 +5130,9 @@ YOUCHAT_API_BASE=http://host.docker.internal:18080/api
 
 用户在原生风格系统设置弹窗中发现：
 
-- 关闭 `自动关闭会话` 后点击保存。
-- 保存后数据库会再次切回 SQLite。
-- 用户希望该开关默认不要关闭，刷新后仍保持开启。
+- 打开或保存 `自动关闭会话` 后，服务端会自动关闭会话。
+- 保存系统设置时数据库也可能再次切回 SQLite。
+- 用户纠正需求：该开关默认应关闭，刷新后仍保持关闭，不能让 Web 把它保存成开启。
 - 既然当前系统应使用 MySQL，就应定时检测是否异常切回 SQLite，发现异常自动修复。
 
 ### 2. 根因判断
@@ -5150,7 +5150,18 @@ Web 之前系统设置保存直接调用：
 - `jobOptions`
 - `aiOptions`
 
-这会把系统设置弹窗里读取到的数据库配置和任务配置一起提交。现场模拟验证发现，即使当前数据库是 MySQL，请求中把 `jobOptions.autoShutDown=false` 保存后，悠聊服务端可能在保存过程中触发数据库配置异常；新的安全保存接口能检测到并立即修复。
+这会把系统设置弹窗里读取到的数据库配置和任务配置一起提交。现场模拟验证发现，保存任务配置时悠聊服务端可能在保存过程中触发数据库配置异常；新的安全保存接口能检测到并立即修复。业务上 `autoShutDown` 必须保持 `false`，避免系统自动关闭客服会话。
+
+2026-06-16 继续深挖后确认了更具体的接口绑定规则：
+
+- `/System/SetOptions` 不能用 JSON body 提交完整对象。
+- 实测 JSON body 会把后端运行时数据库模式切回 SQLite。
+- 正确形态是 `multipart/form-data`，字段用点号展开：
+  - `dataBaseOptions.databaseType=0`
+  - `dataBaseOptions.connectionString=...`
+  - `jobOptions.autoShutDown=false`
+  - `jobOptions.runTimeoutCheckJob=true`
+- `form-data` 中把整个 `jobOptions` 放成 JSON 字符串也不行，后端不会正确保存 `autoShutDown=false`。
 
 ### 3. 前端修复
 
@@ -5161,9 +5172,9 @@ Web 之前系统设置保存直接调用：
 
 改动：
 
-- 系统设置中的 `自动关闭会话` 强制显示为开启。
-- 该开关禁用，不允许用户关闭。
-- 增加说明：`已锁定开启，避免保存系统设置时触发服务端任务配置异常。`
+- 系统设置中的 `自动关闭会话` 强制显示为关闭。
+- 该开关禁用，不允许用户打开。
+- 增加说明：`已锁定关闭，避免服务端自动关闭当前会话。`
 - 保存系统设置不再直接调用 `/System/SetOptions`。
 - 改为调用本地安全接口：
 
@@ -5174,7 +5185,7 @@ POST /local/client-options/save
 前端提交前还会执行 `normalizeClientOptionsForSave()`：
 
 - `dataBaseOptions.databaseType = 0`
-- `jobOptions.autoShutDown = true`
+- `jobOptions.autoShutDown = false`
 - 默认补齐：
   - `closeTime=20`
   - `runTimeoutCheckJob=true`
@@ -5211,11 +5222,15 @@ POST /local/fnos/guard
 3. 强制保持：
    - `dataBaseOptions.databaseType=0`
    - `dataBaseOptions.connectionString` 优先保留 MySQL 连接串
-   - `jobOptions.autoShutDown=true`
+   - `jobOptions.autoShutDown=false`
    - `jobOptions.runTimeoutCheckJob=true`
-4. 调用真实 `/System/SetOptions`。
+4. 用点号 `form-data` 调用真实 `/System/SetOptions`，不要用 JSON。
 5. 调用 `/System/GetOptions`、`/Contact/GetContactList` 等检查数据库健康。
 6. 如果发现 SQLite 或历史数量异常，立即调用 `restoreFnOSDatabaseToMySQL()`。
+7. 再次读取 `/System/GetOptions`，确认：
+   - `dataBaseOptions.databaseType=0`
+   - `jobOptions.autoShutDown=false`
+8. 如果上述复核失败，接口直接返回错误，不允许 Web 提示“保存成功”。
 
 新增自动守护：
 
@@ -5245,8 +5260,8 @@ Invoke-RestMethod http://localhost:5177/local/fnos/health
 - `databaseType=0`
 - `databaseMode=mysql`
 - `totalContacts=8081`
-- `historyContacts=5744`
-- `currentAccount2=16`
+- `historyContacts=5758`
+- `currentAccount2=3`
 - `guard.enabled=true`
 - `guard.intervalMinutes=5`
 
@@ -5261,7 +5276,7 @@ Invoke-RestMethod -Method Post http://localhost:5177/local/fnos/guard -Body "{}"
 模拟用户问题：
 
 - 先读取真实 `/System/GetOptions`。
-- 构造 `jobOptions.autoShutDown=false`。
+- 构造 `jobOptions.autoShutDown=true`，模拟绕过前端试图打开自动关闭。
 - 调用 `POST /local/client-options/save`。
 
 结果：
@@ -5269,14 +5284,14 @@ Invoke-RestMethod -Method Post http://localhost:5177/local/fnos/guard -Body "{}"
 - 请求成功。
 - 保存后真实 `/System/GetOptions` 仍为：
   - `dataBaseOptions.databaseType=0`
-  - `jobOptions.autoShutDown=true`
-- 历史数量仍为 `5744`。
-- 该测试中安全保存接口检测到一次保存后的异常并自动修复，证明此保护确实兜住了用户反馈的问题。
+  - `jobOptions.autoShutDown=false`
+- 历史数量仍为 `5758`。
+- 这次使用点号 `form-data` 后没有触发数据库修复，证明正确提交形态可以避免 JSON 导致的 SQLite 回退。
 
 ### 6. 后续注意
 
 - 不要再让系统设置直接裸调 `/System/SetOptions`。
-- 不要允许 `autoShutDown` 从 Web 保存成 `false`。
+- 不要允许 `autoShutDown` 从 Web 保存成 `true`。
 - 不要把数据库模式暴露成可随手切回 SQLite 的普通表单项。
 - 如果用户仍反馈保存设置后数据库掉回 SQLite，优先看：
   - `/local/fnos/guard`

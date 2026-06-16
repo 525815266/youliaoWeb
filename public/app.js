@@ -1216,10 +1216,10 @@ function renderClientOptionsModal() {
           })}
           ${renderClientToggleSetting({
             label: "自动关闭会话",
-            hint: "已锁定开启，避免保存系统设置时触发服务端任务配置异常。",
+            hint: "已锁定关闭，避免服务端自动关闭当前会话。",
             namespace: "jobOptions",
             key: "autoShutDown",
-            checked: true,
+            checked: false,
             disabled: true,
             locked: true
           })}
@@ -1522,7 +1522,7 @@ function normalizeClientOptionsForSave(options = {}) {
   if (!String(dataBaseOptions.connectionString || "").trim()) {
     dataBaseOptions.connectionString = state.databaseRepair.health?.connectionString || "";
   }
-  jobOptions.autoShutDown = true;
+  jobOptions.autoShutDown = false;
   if (jobOptions.closeTime === undefined || jobOptions.closeTime === null || jobOptions.closeTime === "") {
     jobOptions.closeTime = 20;
   }

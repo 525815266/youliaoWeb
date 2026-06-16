@@ -1135,6 +1135,44 @@ function appendFormValue(form, key, value) {
   form.append(key, String(value));
 }
 
+function appendDotFormValues(form, prefix, value) {
+  if (value === undefined || value === null) return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => appendDotFormValues(form, prefix, item));
+    return;
+  }
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, nestedValue]) => {
+      appendDotFormValues(form, prefix ? `${prefix}.${key}` : key, nestedValue);
+    });
+    return;
+  }
+  form.append(prefix, String(value));
+}
+
+async function postYouChatDotForm(pathname, payload = {}, apiBase = DEFAULT_API_BASE) {
+  // YouChat SetOptions binds nested option objects from dotted form fields; JSON can reset database mode.
+  const base = String(apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
+  const target = new URL(`${base}${pathname.startsWith("/") ? pathname : `/${pathname}`}`);
+  const form = new FormData();
+  appendDotFormValues(form, "", payload || {});
+  const upstream = await fetchWithTimeout(target, {
+    method: "POST",
+    body: form
+  }, Math.min(API_PROXY_TIMEOUT_MS, 30000), `YouChat dot form ${pathname}`);
+  const text = await upstream.text();
+  let parsed;
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { success: false, message: text };
+  }
+  if (!upstream.ok || parsed?.success === false) {
+    throw new Error(parsed?.message || `HTTP ${upstream.status}`);
+  }
+  return parsed;
+}
+
 async function postYouChatApi(pathname, payload = {}, apiBase = DEFAULT_API_BASE) {
   const base = String(apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
   const target = new URL(`${base}${pathname.startsWith("/") ? pathname : `/${pathname}`}`);
@@ -1222,7 +1260,7 @@ function buildSafeClientOptionsForSave(incoming = {}, current = {}) {
   const jobOptions = {
     ...currentJobOptions,
     ...incomingJobOptions,
-    autoShutDown: true,
+    autoShutDown: false,
     runTimeoutCheckJob: normalizeBoolean(incomingJobOptions.runTimeoutCheckJob, normalizeBoolean(currentJobOptions.runTimeoutCheckJob, true))
   };
   if (jobOptions.closeTime === undefined || jobOptions.closeTime === null || jobOptions.closeTime === "") jobOptions.closeTime = 20;
@@ -1384,7 +1422,7 @@ async function saveClientOptionsSafely(payload = {}) {
   const apiBase = payload.apiBase || DEFAULT_API_BASE;
   const current = await getYouChatOptions(apiBase);
   const options = buildSafeClientOptionsForSave(payload, current);
-  const saveResult = await postYouChatJson("/System/SetOptions", options, apiBase);
+  const saveResult = await postYouChatDotForm("/System/SetOptions", options, apiBase);
   let health = await getFnOSDatabaseHealth({
     apiBase,
     minHistoryCount: DATABASE_GUARD_MIN_HISTORY_COUNT
@@ -1408,9 +1446,19 @@ async function saveClientOptionsSafely(payload = {}) {
     databaseGuardState.lastCheckedAt = new Date().toISOString();
   }
 
+  const savedOptions = await getYouChatOptions(apiBase);
+  const savedAutoShutDown = normalizeBoolean(savedOptions?.jobOptions?.autoShutDown, true);
+  const savedDatabaseType = Number(savedOptions?.dataBaseOptions?.databaseType);
+  if (savedDatabaseType !== 0) {
+    throw new Error(`系统设置保存后数据库模式异常：databaseType=${savedDatabaseType}`);
+  }
+  if (savedAutoShutDown !== false) {
+    throw new Error("系统设置保存后自动关闭会话仍为开启，已阻止误报保存成功");
+  }
+
   return {
     saveResult,
-    options,
+    options: savedOptions,
     health,
     repaired,
     repairResult
