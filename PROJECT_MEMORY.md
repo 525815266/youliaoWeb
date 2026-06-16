@@ -5368,3 +5368,86 @@ Invoke-RestMethod -Method Post http://localhost:5177/local/fnos/guard -Body "{}"
   - `logs/api-capture.ndjson`
   - Docker 容器日志里的 `[database-guard]`
 
+## 2026-06-16：公开 GitHub 仓库与 GHCR Docker 镜像发布
+
+用户要求：
+
+- 将 Web 二开项目推送到 `https://github.com/525815266/youliaoWeb`。
+- 打包成 Docker 镜像，并发布到可拉取的 Docker 镜像仓库。
+
+处理策略：
+
+- 没有直接把 `C:\youchat-dev-web` 的完整 Git 历史推到公开仓库。
+- 原因：本地开发仓库历史和文档中包含飞牛地址、AI key、CodeBuddy key、MySQL 连接串、运维密码、抓包和项目记忆。
+- 采用“干净公开发布包”：
+  - 发布目录：`C:\youchat-web-public-release`
+  - 新建 Git 仓库，不带本地开发历史。
+  - 删除 `AI_HANDOFF.md`、`PROJECT_MEMORY.md`、`PATCH_GUIDE.md`、部署脚本、本地补丁工具、真实 `config/ai-providers.json`、真实 `data/reply-skills.json`、日志、报告、patch、截图。
+  - 保留运行代码、Dockerfile、compose、GitHub Actions、示例配置、公开 README。
+
+脱敏修改：
+
+- `server.js`
+  - 默认 `YOUCHAT_API_BASE` 改成 `http://host.docker.internal:18080/api`。
+  - 默认 `FNOS_MYSQL_CONNECTION_STRING` 改为空字符串，只从环境变量读取。
+- `public/app.js`
+  - 默认 API base 改成 `http://host.docker.internal:18080/api`。
+  - 默认 sub2 API key 改为空。
+  - 默认 CodeBuddy API key 改为空。
+- `public/skill-training.js`
+  - 默认 sub2 API key 改为空。
+  - 默认 CodeBuddy API key 改为空。
+- `compose.registry.yaml`
+  - 默认镜像改成 `ghcr.io/525815266/youliaoweb:latest`。
+- `README.md`
+  - 改成公开版说明，只保留通用部署、Docker、GHCR、配置和安全说明。
+
+验证：
+
+- 在 `C:\youchat-web-public-release` 执行：
+
+```powershell
+npm run check
+```
+
+- 通过：`server.js`、`public/app.js`、`public/skill-training.js` 语法检查均正常。
+- 执行敏感扫描：
+
+```powershell
+rg -n "sk-[A-Za-z0-9]|ck_[A-Za-z0-9_.-]+|950331|w5B22|Password=w|1556504756803862529|192\.168\.9\.83" -S .
+```
+
+- 无命中。
+
+GitHub 发布：
+
+- 公开发布仓库：`https://github.com/525815266/youliaoWeb`
+- 发布提交：
+  - `aa46a738a4a3f71882a9ce86f9a1aa1a9a36be64`
+  - message: `Initial public web client release`
+- 推送分支：`main`
+- Actions：
+  - workflow: `Publish Docker image`
+  - run id: `27626240678`
+  - conclusion: `success`
+
+Docker 镜像：
+
+- GHCR 包页：`https://github.com/525815266/youliaoWeb/pkgs/container/youliaoWeb`
+- 镜像地址：
+
+```text
+ghcr.io/525815266/youliaoweb:latest
+```
+
+- 已发布标签：
+  - `latest`
+  - `main`
+  - `sha-aa46a73`
+
+后续注意：
+
+- 后续公开发布继续在 `C:\youchat-web-public-release` 上做干净版本同步，或写脚本从开发仓库生成公开包。
+- 不要把 `C:\youchat-dev-web` 原仓库历史 force push 到公开 GitHub。
+- 公开仓库只接受无密钥、无真实数据、无飞牛私有运维信息的代码和示例配置。
+
