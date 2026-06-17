@@ -68,6 +68,7 @@
 72. [2026-06-16 系统设置保存保护与数据库自动守护](#72-2026-06-16-系统设置保存保护与数据库自动守护)
 73. [2026-06-17 PromptWorks 旁路训练工作台](#73-2026-06-17-promptworks-旁路训练工作台)
 74. [2026-06-17 PromptWorks 前端 Failed to fetch 修复](#74-2026-06-17-promptworks-前端-failed-to-fetch-修复)
+75. [2026-06-17 悠聊人工回复导入 PromptWorks 训练](#75-2026-06-17-悠聊人工回复导入-promptworks-训练)
 
 ## 1. 项目目标
 
@@ -5678,4 +5679,211 @@ http://192.168.9.83:5188/api/v1/prompts/
 - 不要移除 frontend 启动时替换 JS API base 的命令，除非后续改成自建前端镜像并在 build 阶段明确设置 `VITE_API_BASE_URL=/api/v1`。
 - 不要恢复上游默认 nginx 配置，否则无尾斜杠 API 会再次跳到飞牛主页面端口。
 - 用户如果仍看到 `Failed to fetch`，先让浏览器强刷，因为旧前端 JS 可能被缓存。
+
+## 75. 2026-06-17 悠聊人工回复导入 PromptWorks 训练
+
+用户继续确认：
+
+- 希望把悠聊数据库/接口里已有的人工回复内容导入 PromptWorks 训练。
+- 必须是真实数据，不要假的训练样本。
+- 导入应该先可预览，避免脏数据直接污染训练台。
+
+本次实现：
+
+1. `server.js` 把原来的闲时采样逻辑抽成 `collectManualReplySamples(options)`。
+   - 仍然走真实悠聊接口：
+     - `/Contact/GetContactList`
+     - `/ChatContent/GetList`
+   - 采集“客户消息 -> 人工客服回复”的相邻配对。
+   - 保留原有 `/local/skill-training/sample` 能力，仍然会把样本写入 Web 的 skill 训练候选。
+   - 新增系统提示过滤，跳过：
+     - 客服接入会话
+     - 会话结束
+     - 系统关闭
+     - 转接
+     - 自动回复/机器人提示
+     - 撤回/拍一拍等内部提示
+
+2. 新增本地接口：
+
+```http
+POST /local/promptworks/import-training
+```
+
+默认 `dryRun=true`，只预览，不写 PromptWorks。
+
+请求示例：
+
+```json
+{
+  "dryRun": true,
+  "contactLimit": 18,
+  "messageLimit": 80,
+  "sampleLimit": 80,
+  "previewLimit": 5
+}
+```
+
+真实导入时传：
+
+```json
+{
+  "dryRun": false,
+  "contactLimit": 18,
+  "messageLimit": 80,
+  "sampleLimit": 80
+}
+```
+
+返回包含：
+
+- `summary.total`
+- `summary.byIntent`
+- `summary.byPlatform`
+- `summary.byStage`
+- `preview`
+- `prompt.id/name/versionId`
+- `task.id/name/status`
+- `model.providerKey/modelName`
+
+3. PromptWorks 写入方式：
+
+- 如果不存在，会创建 Prompt：
+
+```text
+悠聊客服回复训练
+```
+
+- Prompt 内容要求模型根据：
+  - `customer_message`
+  - `platform_key`
+  - `intent_key`
+  - `learning_stage`
+  - `manual_reply`
+  - `image_urls`
+
+  生成更适合当前客户的客服回复，并识别无需回复场景。
+
+- 每次真实导入会创建一个 PromptWorks 测试任务，状态为 `draft`，不会自动执行。
+- 任务变量使用 PromptWorks 支持的：
+
+```json
+{
+  "cases": []
+}
+```
+
+4. 训练中心 UI：
+
+文件：
+
+```text
+C:\youchat-dev-web\public\skill-training.html
+C:\youchat-dev-web\public\skill-training.js
+C:\youchat-dev-web\public\skill-training.css
+```
+
+新增一个 `PromptWorks 导入训练` 工具条：
+
+- 联系人数量
+- 消息数量
+- 样本数量
+- `预览样本`
+- `确认导入`
+
+预览结果会显示：
+
+- 样本数
+- 联系人数
+- 配对数
+- 意图/平台/阶段分布
+- 最多 5 条真实样本预览
+
+真实导入成功后会显示：
+
+- `打开任务`
+- `打开 Prompt`
+
+PromptWorks 前端路由：
+
+```text
+http://192.168.9.83:5188/prompts/{promptId}
+http://192.168.9.83:5188/tests/tasks/{taskId}/result
+```
+
+5. 配置：
+
+新增环境变量：
+
+```env
+PROMPTWORKS_API_BASE=http://host.docker.internal:5188/api/v1
+PROMPTWORKS_TIMEOUT_MS=60000
+```
+
+本地非容器默认：
+
+```text
+http://192.168.9.83:5188/api/v1
+```
+
+容器默认：
+
+```text
+http://host.docker.internal:5188/api/v1
+```
+
+验证结果：
+
+1. 语法检查通过：
+
+```powershell
+npm run check
+```
+
+2. dry-run 通过，采集到真实人工回复样本：
+
+```text
+sampledContacts: 10
+sampledPairs: 2
+summary.byIntent.order_missing: 2
+summary.byStage.first_answer: 2
+```
+
+3. 修复前曾把 `客服(客服-王)接入会话...` 误判为客户消息；已通过 `isSampleSystemMessage()` 过滤。
+
+4. 真实导入验证通过：
+
+```text
+PromptWorks Prompt: 悠聊客服回复训练
+Prompt id: 2
+Task id: 1
+Task status: draft
+Unit cases: 2
+Model: sub2 / gpt-5.4-mini
+```
+
+5. 用 Node 直接读取 PromptWorks API 确认实际保存为正常中文；PowerShell 输出里的中文乱码只是控制台显示编码问题。
+
+6. 已部署到飞牛 Web 容器：
+
+```text
+http://192.168.9.83:5177
+```
+
+远端验证：
+
+- `/health` 返回 `promptWorksApiBase: http://host.docker.internal:5188/api/v1`。
+- `/skill-training.html` 已包含 `PromptWorks 导入训练` 面板。
+- 远端 `POST /local/promptworks/import-training` dry-run 能采集真实样本，示例结果：
+  - `sampledContacts: 9`
+  - `sampledPairs: 3`
+  - `summary.byIntent.order_missing: 3`
+
+后续注意：
+
+- PromptWorks 目前只是旁路训练台，不直接改 `data/reply-skills.json`，也不自动上线生产回复。
+- 后续如果要把 PromptWorks 优化结果回写 Web skill，必须再加“人工审核通过后回写”的接口和 UI。
+- 采样器目前根据会话相邻消息配对，适合快速构建训练集；如果要更精准，应进一步按订单查询结果、右侧订单平台、快捷回复分类做上下文增强。
+- 如果 PromptWorks 里没有模型，会返回“还没有可用模型”，需要先在 PromptWorks 的 LLM 管理配置 provider/model。
+- 不要把 CodeBuddy 直接塞进 PromptWorks，除非 PromptWorks 支持 `X-Api-Key` 或走 Web 中转。
 

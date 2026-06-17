@@ -173,6 +173,145 @@
   margin: 0;
 }
 
+.promptworks-import-panel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #d9e7f6;
+  border-radius: 6px;
+  background: #f8fbff;
+}
+
+.promptworks-import-title,
+.promptworks-import-controls,
+.promptworks-import-meta,
+.promptworks-import-breakdown {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.promptworks-import-title {
+  justify-content: space-between;
+}
+
+.promptworks-import-title strong {
+  color: #172846;
+  font-size: 13px;
+}
+
+.promptworks-import-title span,
+.promptworks-import-controls label span,
+.promptworks-import-empty,
+.promptworks-import-warning,
+.promptworks-import-error {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.promptworks-import-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.promptworks-import-controls input {
+  width: 68px;
+  height: 28px;
+  border: 1px solid #cfdced;
+  border-radius: 5px;
+  padding: 0 7px;
+  color: #1f2e45;
+  background: #fff;
+}
+
+.promptworks-import-result {
+  display: grid;
+  gap: 8px;
+}
+
+.promptworks-import-meta span,
+.promptworks-import-meta a,
+.promptworks-import-breakdown span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  border: 1px solid #cfe0f5;
+  border-radius: 999px;
+  color: #31506f;
+  background: #fff;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.promptworks-import-meta a {
+  border-color: #b9dafc;
+  color: #0d63c7;
+  background: #eff7ff;
+}
+
+.promptworks-import-breakdown {
+  align-items: flex-start;
+}
+
+.promptworks-import-breakdown div {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.promptworks-import-breakdown strong {
+  color: #43546c;
+  font-size: 12px;
+}
+
+.promptworks-import-preview {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.promptworks-preview-item {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid #e2ebf6;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.promptworks-preview-item header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.promptworks-preview-item p {
+  margin: 0;
+  color: #1f2e45;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.promptworks-import-warning {
+  margin: 0;
+  color: #95530d;
+}
+
+.promptworks-import-error {
+  margin: 0;
+  color: #b4232d;
+}
+
 .training-list-head {
   display: flex;
   align-items: center;

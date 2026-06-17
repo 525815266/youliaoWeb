@@ -44,6 +44,30 @@
 
         <div class="training-summary-grid" id="summaryGrid"></div>
         <div class="training-summary-lines" id="summaryLines"></div>
+
+        <section class="promptworks-import-panel" aria-label="PromptWorks 导入训练">
+          <div class="promptworks-import-title">
+            <strong>PromptWorks 导入训练</strong>
+            <span id="promptWorksImportStatus">先预览真实样本，再确认导入旁路训练台。</span>
+          </div>
+          <div class="promptworks-import-controls">
+            <label>
+              <span>联系人</span>
+              <input id="promptWorksContactLimit" type="number" min="1" max="80" value="18" />
+            </label>
+            <label>
+              <span>消息</span>
+              <input id="promptWorksMessageLimit" type="number" min="20" max="180" value="80" />
+            </label>
+            <label>
+              <span>样本</span>
+              <input id="promptWorksSampleLimit" type="number" min="1" max="500" value="80" />
+            </label>
+            <button id="previewPromptWorksImport" class="mini-action" type="button">预览样本</button>
+            <button id="runPromptWorksImport" class="mini-action primary" type="button">确认导入</button>
+          </div>
+          <div id="promptWorksImportResult" class="promptworks-import-result"></div>
+        </section>
       </section>
 
       <section class="training-list-head">

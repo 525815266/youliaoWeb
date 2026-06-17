@@ -202,6 +202,94 @@ Failure/fix on 2026-06-17:
   - `/api/v1/prompts` redirects to `http://192.168.9.83:5188/api/v1/prompts/`
   - following that redirect returns real prompt data
 
+## 2026-06-17 Handoff: Import YouChat Manual Replies into PromptWorks
+
+User asked whether database replies can be imported into PromptWorks for training. This is now implemented with real YouChat API data, not fake samples.
+
+New local API:
+
+- `POST /local/promptworks/import-training`
+- Default is `dryRun=true`, which only previews samples.
+- `dryRun=false` writes to PromptWorks.
+
+Request fields:
+
+- `contactLimit`, default `18`, max `80`
+- `messageLimit`, default `80`, max `180`
+- `sampleLimit`, default `80`, max `500`
+- `previewLimit`, default `8`, max `20`
+- optional `promptWorksApiBase`
+- optional `promptName`, `taskName`, `version`
+
+Server flow:
+
+1. `collectManualReplySamples()` calls real YouChat endpoints:
+   - `/Contact/GetContactList`
+   - `/ChatContent/GetList`
+2. It extracts adjacent customer-message -> manual-service-reply pairs.
+3. It filters system/internal notices with `isSampleSystemMessage()`, including:
+   - 接入会话
+   - 会话结束
+   - 系统关闭
+   - 转接
+   - 自动回复/机器人提示
+   - 撤回/拍一拍
+4. It creates PromptWorks cases with:
+   - `customer_message`
+   - `manual_reply`
+   - `platform_key`
+   - `intent_key`
+   - `learning_stage`
+   - `image_urls`
+   - contact/message timestamps
+5. `dryRun=false` creates or updates PromptWorks Prompt `悠聊客服回复训练`, then creates a draft prompt-test task with `variables: { cases: [...] }`.
+
+Frontend entry:
+
+- Page: `http://localhost:5177/skill-training.html`
+- Panel: `PromptWorks 导入训练`
+- Buttons:
+  - `预览样本`
+  - `确认导入`
+- Files:
+  - `public/skill-training.html`
+  - `public/skill-training.js`
+  - `public/skill-training.css`
+
+Config:
+
+- `.env.example`
+- `compose.yaml`
+- `PROMPTWORKS_API_BASE`
+- `PROMPTWORKS_TIMEOUT_MS`
+- Container default API base: `http://host.docker.internal:5188/api/v1`
+- Local default API base: `http://192.168.9.83:5188/api/v1`
+
+Verification done:
+
+- `npm run check` passed.
+- Dry-run returned real samples, after filtering system notices.
+- Real import with `sampleLimit=2` succeeded:
+  - PromptWorks Prompt id `2`, name `悠聊客服回复训练`
+  - PromptWorks task id `1`
+  - task status `draft`
+  - one unit with 2 cases
+  - model provider `sub2`, model `gpt-5.4-mini`
+- Node fetch confirmed PromptWorks stores normal Chinese. PowerShell display may look mojibake, but API data is correct.
+- Deployed to FnOS Web container at `http://192.168.9.83:5177` using `scripts/deploy-fnos-web.py`.
+- Remote verification:
+  - `/health` includes `promptWorksApiBase: http://host.docker.internal:5188/api/v1`
+  - `/skill-training.html` contains the `PromptWorks 导入训练` panel
+  - remote dry-run collected real samples from YouChat
+
+Do not regress:
+
+- Do not let PromptWorks directly update production `data/reply-skills.json`.
+- Do not auto-execute PromptWorks tasks from this import endpoint.
+- Keep preview-first workflow in the UI.
+- Keep `/local/skill-training/sample` working; it now reuses the same collector but still queues Web skill candidates.
+- Do not auto-seed CodeBuddy into PromptWorks unless PromptWorks supports `X-Api-Key` or YouChat Web proxies it.
+
 ## 2026-06-16 Handoff: Client Options Save Guard
 
 User issue:

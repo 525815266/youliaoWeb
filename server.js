@@ -24,6 +24,7 @@ const MAX_LINK_PREVIEW_BYTES = 900000;
 const API_PROXY_TIMEOUT_MS = 60000;
 const OSS_UPLOAD_TIMEOUT_MS = 20000;
 const AI_PROXY_TIMEOUT_MS = 90000;
+const PROMPTWORKS_TIMEOUT_MS = Math.max(10000, Number(process.env.PROMPTWORKS_TIMEOUT_MS || 60000));
 const SIGNALR_START_TIMEOUT_MS = 12000;
 const SIGNALR_KEEP_ALIVE_MS = 120000;
 const DATABASE_GUARD_ENABLED = process.env.YOUCHAT_DATABASE_GUARD_ENABLED !== "0";
@@ -32,6 +33,7 @@ const DATABASE_GUARD_MIN_HISTORY_COUNT = Number(process.env.YOUCHAT_DATABASE_GUA
 const CONTAINER_API_BASE = String(process.env.YOUCHAT_CONTAINER_API_BASE || "").trim();
 const CONTAINER_HOST_GATEWAY = String(process.env.YOUCHAT_CONTAINER_HOST_GATEWAY || "host.docker.internal").trim();
 const IS_CONTAINER_RUNTIME = fs.existsSync("/.dockerenv") || process.env.YOUCHAT_CONTAINER_NETWORK === "1";
+const PROMPTWORKS_API_BASE = process.env.PROMPTWORKS_API_BASE || (IS_CONTAINER_RUNTIME ? "http://host.docker.internal:5188/api/v1" : "http://192.168.9.83:5188/api/v1");
 const DIRECT_VIDEO_EXTENSIONS = /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8)(?:$|\?)/i;
 const signalRHubConnections = new Map();
 const databaseGuardState = {
@@ -1620,18 +1622,32 @@ function isSampleOutgoingManualMessage(message) {
 }
 
 function isSampleSystemText(text) {
+  const raw = String(text || "").trim();
   const value = normalizeTrainingComparableText(text);
   if (!value) return true;
-  return /(会话.*结束|接待客服|系统关闭|转接|自动回复|机器人|撤回了一条消息)/.test(value);
+  return (
+    /(会话.*结束|接待客服|系统关闭|转接|自动回复|机器人|撤回了一条消息|接入会话|关闭会话|我拍了拍)/.test(value) ||
+    /(客服.*接入会话|接入会话|会话.*结束|类型[:：]?\s*系统关闭|系统关闭|关闭会话|转接|撤回了一条消息|我拍了拍)/.test(raw)
+  );
+}
+
+function isSampleSystemMessage(message, text = getSampleMessageText(message)) {
+  const source = getSampleMessageSource(message).toLowerCase();
+  const msgType = String(firstNonEmpty(message?.msgType, message?.contentType, message?.type, "") || "").toLowerCase();
+  const bizType = String(firstNonEmpty(message?.bizType, message?.businessType, "") || "");
+  if (message?.isSystem || message?.systemNotice || source.includes("system")) return true;
+  if (msgType === "system" || bizType === "-1") return true;
+  return isSampleSystemText(text);
 }
 
 function getSampleMessageKey(message, fallback = "") {
   return String(firstNonEmpty(message?.id, message?.msgId, message?.messageId, message?.chatContentId, fallback) || "");
 }
 
-async function sampleManualRepliesForTraining(data, options = {}) {
-  const contactLimit = Math.max(1, Math.min(Number(options.contactLimit || 18), 60));
-  const messageLimit = Math.max(20, Math.min(Number(options.messageLimit || 80), 160));
+async function collectManualReplySamples(options = {}) {
+  const contactLimit = Math.max(1, Math.min(Number(options.contactLimit || 18), 80));
+  const messageLimit = Math.max(20, Math.min(Number(options.messageLimit || 80), 180));
+  const sampleLimit = Math.max(1, Math.min(Number(options.sampleLimit || 80), 500));
   const contactPayloads = [
     { pageIndex: 1, pageSize: contactLimit },
     { pageIndex: 1, pageSize: contactLimit, isHistory: true }
@@ -1654,12 +1670,9 @@ async function sampleManualRepliesForTraining(data, options = {}) {
     }
   }
 
-  let sampledPairs = 0;
-  let created = 0;
-  let updated = 0;
-  let skipped = 0;
-
+  const samples = [];
   for (const contact of contacts.slice(0, contactLimit)) {
+    if (samples.length >= sampleLimit) break;
     const contactId = String(getSampleContactId(contact) || "");
     if (!contactId) continue;
     try {
@@ -1675,8 +1688,10 @@ async function sampleManualRepliesForTraining(data, options = {}) {
       let lastIncoming = null;
       let lastOutgoingSeen = false;
       for (const message of messages) {
+        if (samples.length >= sampleLimit) break;
         const text = getSampleMessageText(message);
-        if (isSampleIncomingMessage(message) && !isSampleSystemText(text)) {
+        if (isSampleSystemMessage(message, text)) continue;
+        if (isSampleIncomingMessage(message)) {
           lastIncoming = message;
           lastOutgoingSeen = false;
           continue;
@@ -1684,25 +1699,27 @@ async function sampleManualRepliesForTraining(data, options = {}) {
         if (!isSampleOutgoingManualMessage(message) || !lastIncoming || lastOutgoingSeen) continue;
         const reply = text;
         const image = getSampleMessageImage(message);
-        if (isSampleSystemText(reply) && !image) continue;
+        if (isSampleSystemMessage(message, reply) && !image) continue;
         const prompt = getSampleMessageText(lastIncoming);
-        const learningStage = (() => {
-          const incomingIndex = messages.indexOf(lastIncoming);
-          const previous = messages.slice(0, incomingIndex).reverse().find((item) => isSampleIncomingMessage(item) || isSampleOutgoingManualMessage(item));
-          return previous && isSampleOutgoingManualMessage(previous) ? "customer_followup" : "first_answer";
-        })();
-        const queued = queueTrainingCandidate(data, {
+        if (prompt.length < 2 || (reply.length < 2 && !image)) continue;
+        const incomingIndex = messages.indexOf(lastIncoming);
+        const previous = messages.slice(0, incomingIndex).reverse().find((item) => isSampleIncomingMessage(item) || isSampleOutgoingManualMessage(item));
+        const learningStage = previous && isSampleOutgoingManualMessage(previous) ? "customer_followup" : "first_answer";
+        const sampleText = `${prompt}\n${reply}`;
+        const replyAtMs = getSampleMessageTime(message);
+        const customerAtMs = getSampleMessageTime(lastIncoming);
+        samples.push({
           prompt,
           reply,
           imageUrls: image ? [image] : [],
           contactId,
-          messageKey: getSampleMessageKey(message, `${contactId}:${sampledPairs}`),
-          learningStage
+          messageKey: getSampleMessageKey(message, `${contactId}:${samples.length}`),
+          platformKey: detectTrainingPlatformKey(sampleText),
+          intentKey: detectTrainingIntentKey(sampleText),
+          learningStage,
+          customerAt: customerAtMs ? new Date(customerAtMs).toISOString() : "",
+          replyAt: replyAtMs ? new Date(replyAtMs).toISOString() : ""
         });
-        sampledPairs += 1;
-        if (queued.created) created += 1;
-        else if (queued.updated) updated += 1;
-        else skipped += 1;
         lastOutgoingSeen = true;
       }
     } catch (error) {
@@ -1711,13 +1728,336 @@ async function sampleManualRepliesForTraining(data, options = {}) {
   }
 
   return {
-    contacts: contacts.length,
+    contacts,
+    samples,
+    errors: errors.slice(0, 12)
+  };
+}
+
+async function sampleManualRepliesForTraining(data, options = {}) {
+  const collected = await collectManualReplySamples(options);
+  let sampledPairs = 0;
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const sample of collected.samples) {
+    const queued = queueTrainingCandidate(data, sample);
+    sampledPairs += 1;
+    if (queued.created) created += 1;
+    else if (queued.updated) updated += 1;
+    else skipped += 1;
+  }
+
+  return {
+    contacts: collected.contacts.length,
     sampledPairs,
     created,
     updated,
     skipped,
-    errors: errors.slice(0, 8)
+    errors: collected.errors.slice(0, 8)
   };
+}
+
+function normalizePromptWorksApiBase(value = "") {
+  const raw = String(value || PROMPTWORKS_API_BASE).trim().replace(/\/+$/, "");
+  if (!raw) return PROMPTWORKS_API_BASE;
+  if (/\/api\/v1$/i.test(raw)) return raw;
+  return `${raw}/api/v1`;
+}
+
+async function promptWorksRequest(pathname, options = {}) {
+  const apiBase = normalizePromptWorksApiBase(options.apiBase);
+  const target = new URL(`${apiBase}${pathname.startsWith("/") ? pathname : `/${pathname}`}`);
+  const fetchOptions = {
+    method: options.method || "GET",
+    headers: {
+      Accept: "application/json",
+      ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {})
+    }
+  };
+  if (options.body !== undefined) fetchOptions.body = JSON.stringify(options.body);
+  const upstream = await fetchWithTimeout(target, fetchOptions, PROMPTWORKS_TIMEOUT_MS, `PromptWorks ${pathname}`);
+  const text = await upstream.text();
+  let parsed;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = text;
+  }
+  if (!upstream.ok) {
+    const message = typeof parsed === "object" && parsed ? getMessage(parsed) : String(parsed || "");
+    throw new Error(message || `PromptWorks HTTP ${upstream.status}`);
+  }
+  return parsed;
+}
+
+function getPromptWorksList(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.value)) return payload.value;
+  return [];
+}
+
+function buildPromptWorksTrainingPromptContent() {
+  return [
+    "你是悠聊客服回复训练助手。",
+    "请根据客户消息、平台、意图、会话阶段和可参考的历史人工回复，生成一条更适合当前客户的客服回复。",
+    "要求：",
+    "1. 回复要口语化、短句清晰，避免生硬模板腔。",
+    "2. 需要解决问题时优先给出具体处理步骤，不要过早引导第三方客服。",
+    "3. 如涉及敏感词，尽量使用自然替代表达，但含义不能变。",
+    "4. 如果客户消息属于系统提示、提现成功通知等无需回复场景，请输出“无需回复”。",
+    "5. 如果参考回复包含图片，请在文字中说明需要配合发送对应图片，但不要伪造图片链接。",
+    "",
+    "客户消息：{customer_message}",
+    "平台：{platform_key}",
+    "意图：{intent_key}",
+    "会话阶段：{learning_stage}",
+    "历史人工回复：{manual_reply}",
+    "参考图片：{image_urls}",
+    "",
+    "请输出最终建议回复："
+  ].join("\n");
+}
+
+function buildPromptWorksTrainingCases(samples, limit = 80) {
+  const seen = new Set();
+  const cases = [];
+  for (const sample of samples) {
+    const customerMessage = String(sample.prompt || "").trim();
+    const manualReply = String(sample.reply || "").trim();
+    const key = normalizeTrainingComparableText(`${customerMessage}\n${manualReply}\n${sample.platformKey}\n${sample.intentKey}\n${sample.learningStage}`);
+    if (!customerMessage || (!manualReply && !sample.imageUrls?.length) || seen.has(key)) continue;
+    seen.add(key);
+    cases.push({
+      customer_message: customerMessage,
+      manual_reply: manualReply,
+      platform_key: sample.platformKey || "unknown",
+      intent_key: sample.intentKey || "general",
+      learning_stage: sample.learningStage || "first_answer",
+      image_urls: Array.isArray(sample.imageUrls) ? sample.imageUrls.join("\n") : "",
+      contact_id: sample.contactId || "",
+      message_key: sample.messageKey || "",
+      customer_at: sample.customerAt || "",
+      reply_at: sample.replyAt || ""
+    });
+    if (cases.length >= limit) break;
+  }
+  return cases;
+}
+
+function summarizePromptWorksCases(cases) {
+  const byIntent = {};
+  const byPlatform = {};
+  const byStage = {};
+  cases.forEach((item) => {
+    byIntent[item.intent_key || "general"] = (byIntent[item.intent_key || "general"] || 0) + 1;
+    byPlatform[item.platform_key || "unknown"] = (byPlatform[item.platform_key || "unknown"] || 0) + 1;
+    byStage[item.learning_stage || "first_answer"] = (byStage[item.learning_stage || "first_answer"] || 0) + 1;
+  });
+  return {
+    total: cases.length,
+    byIntent,
+    byPlatform,
+    byStage
+  };
+}
+
+function normalizePromptWorksTaskName(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const meaningful = text.replace(/[\s\d:._-]/g, "");
+  if (!meaningful || /^\?+$/.test(meaningful)) return "";
+  return text.slice(0, 120);
+}
+
+async function findOrCreatePromptWorksTrainingPrompt(options = {}) {
+  const apiBase = options.apiBase;
+  const promptName = String(options.promptName || "悠聊客服回复训练").trim();
+  const version = String(options.version || `import-${getShanghaiDateKey()}`).trim();
+  const existing = getPromptWorksList(await promptWorksRequest(`/prompts/?limit=200&q=${encodeURIComponent(promptName)}`, { apiBase }));
+  const prompt = existing.find((item) => String(item.name || "") === promptName);
+  if (prompt?.id) {
+    const versions = Array.isArray(prompt.versions) ? prompt.versions : [];
+    const existingVersion = versions.find((item) => String(item.version || "") === version);
+    if (existingVersion?.id) return { prompt, version: existingVersion, created: false };
+    const updated = await promptWorksRequest(`/prompts/${prompt.id}`, {
+      apiBase,
+      method: "PUT",
+      body: {
+        version,
+        content: buildPromptWorksTrainingPromptContent()
+      }
+    });
+    return { prompt: updated, version: updated?.current_version || updated?.currentVersion || null, created: false, versionCreated: true };
+  }
+
+  const created = await promptWorksRequest("/prompts/", {
+    apiBase,
+    method: "POST",
+    body: {
+      name: promptName,
+      description: "从悠聊真实客服会话导入的客户问题与人工回复样本，用于评估和优化客服话术。",
+      author: "YouChat Web",
+      class_name: "悠聊客服训练",
+      class_description: "由悠聊 Web 从真实数据库/接口抽样生成的客服训练 Prompt。",
+      version,
+      content: buildPromptWorksTrainingPromptContent(),
+      tag_ids: []
+    }
+  });
+  return { prompt: created, version: created?.current_version || created?.currentVersion || null, created: true };
+}
+
+async function getPromptWorksDefaultModel(apiBase) {
+  const providers = getPromptWorksList(await promptWorksRequest("/llm-providers/", { apiBase }));
+  for (const provider of providers) {
+    const models = Array.isArray(provider.models) ? provider.models : [];
+    const defaultName = String(provider.default_model_name || "").trim();
+    const model = models.find((item) => String(item.name || "") === defaultName) || models[0];
+    if (provider?.id && model?.name) {
+      return {
+        providerId: Number(provider.id),
+        providerKey: String(provider.provider_key || provider.providerName || provider.provider_name || "").trim(),
+        modelId: model.id ? Number(model.id) : null,
+        modelName: String(model.name)
+      };
+    }
+  }
+  throw new Error("PromptWorks 还没有可用模型，请先在模型管理里配置 sub2/DeepSeek 等模型。");
+}
+
+async function createPromptWorksTrainingTask({ apiBase, promptVersionId, cases, model, taskName }) {
+  const task = await promptWorksRequest("/prompt-test/tasks", {
+    apiBase,
+    method: "POST",
+    body: {
+      name: taskName,
+      description: `从悠聊真实会话导入 ${cases.length} 条人工回复样本，用于训练/评估客服回复。`,
+      prompt_version_id: promptVersionId,
+      config: {
+        source: "youchat-web",
+        importedAt: new Date().toISOString(),
+        sampleCount: cases.length,
+        mode: "manual_reply_training"
+      },
+      units: [
+        {
+          name: `人工回复样本 ${getShanghaiDateKey()}`,
+          description: "客户消息 + 历史人工回复变量集。",
+          model_name: model.modelName,
+          llm_provider_id: model.providerId,
+          prompt_version_id: promptVersionId,
+          temperature: 0.35,
+          rounds: 1,
+          prompt_template: null,
+          variables: {
+            cases
+          },
+          expectations: {
+            target: "回复应贴近人工高质量客服处理方式，并识别无需回复场景。"
+          },
+          tags: ["youchat", "manual-reply", "training"],
+          extra: {
+            provider_key: model.providerKey || "",
+            llm_model_id: model.modelId,
+            source: "youchat-web"
+          }
+        }
+      ],
+      auto_execute: false
+    }
+  });
+  return task;
+}
+
+async function importYouChatRepliesToPromptWorks(options = {}) {
+  const dryRun = options.dryRun !== false;
+  const apiBase = normalizePromptWorksApiBase(options.promptWorksApiBase || options.promptworksApiBase || PROMPTWORKS_API_BASE);
+  const sampleLimit = Math.max(1, Math.min(Number(options.sampleLimit || 80), 500));
+  const collected = await collectManualReplySamples({
+    ...options,
+    sampleLimit
+  });
+  const cases = buildPromptWorksTrainingCases(collected.samples, sampleLimit);
+  const summary = summarizePromptWorksCases(cases);
+  const preview = cases.slice(0, Math.min(Number(options.previewLimit || 8), 20));
+  if (dryRun) {
+    return {
+      dryRun: true,
+      apiBase,
+      sampledContacts: collected.contacts.length,
+      sampledPairs: collected.samples.length,
+      summary,
+      preview,
+      errors: collected.errors
+    };
+  }
+  if (!cases.length) throw new Error("没有采集到可导入 PromptWorks 的人工回复样本。");
+  const promptResult = await findOrCreatePromptWorksTrainingPrompt({
+    apiBase,
+    promptName: options.promptName,
+    version: options.version || `import-${getShanghaiDateKey()}-${Date.now().toString().slice(-5)}`
+  });
+  const promptVersionId = Number(promptResult.version?.id || promptResult.prompt?.current_version?.id || promptResult.prompt?.currentVersion?.id);
+  if (!promptVersionId) throw new Error("PromptWorks Prompt 创建成功但没有拿到版本 ID。");
+  const model = await getPromptWorksDefaultModel(apiBase);
+  const taskName = normalizePromptWorksTaskName(options.taskName) || `悠聊人工回复训练 ${getShanghaiDateKey()} ${new Date().toTimeString().slice(0, 5)}`;
+  const task = await createPromptWorksTrainingTask({
+    apiBase,
+    promptVersionId,
+    cases,
+    model,
+    taskName
+  });
+  return {
+    dryRun: false,
+    apiBase,
+    sampledContacts: collected.contacts.length,
+    sampledPairs: collected.samples.length,
+    summary,
+    preview,
+    prompt: {
+      id: promptResult.prompt?.id,
+      name: promptResult.prompt?.name,
+      versionId: promptVersionId,
+      created: Boolean(promptResult.created),
+      versionCreated: Boolean(promptResult.versionCreated)
+    },
+    model,
+    task: {
+      id: task?.id,
+      name: task?.name,
+      status: task?.status,
+      unitCount: Array.isArray(task?.units) ? task.units.length : 0
+    },
+    errors: collected.errors
+  };
+}
+
+async function handlePromptWorksImportTraining(req, res) {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { success: false, message: "Method not allowed" });
+    return;
+  }
+  try {
+    const body = await readBody(req);
+    const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
+    const result = await importYouChatRepliesToPromptWorks(payload);
+    sendJson(res, 200, {
+      success: true,
+      message: result.dryRun ? "已预览可导入 PromptWorks 的真实人工回复样本。" : "已把真实人工回复样本导入 PromptWorks。",
+      result
+    });
+  } catch (error) {
+    sendJson(res, 400, {
+      success: false,
+      message: error.message || "导入 PromptWorks 失败"
+    });
+  }
 }
 
 function extractUploadEndpoint(config) {
@@ -2956,6 +3296,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.url.startsWith("/local/promptworks/import-training")) {
+    await handlePromptWorksImportTraining(req, res);
+    return;
+  }
+
   if (req.url.startsWith("/local/reply-skills")) {
     await handleReplySkills(req, res);
     return;
@@ -2983,6 +3328,7 @@ const server = http.createServer(async (req, res) => {
       aiBase: DEFAULT_AI_BASE,
       aiModel: DEFAULT_AI_MODEL,
       aiProvider: DEFAULT_AI_PROVIDER,
+      promptWorksApiBase: PROMPTWORKS_API_BASE,
       port: PORT
     });
     return;

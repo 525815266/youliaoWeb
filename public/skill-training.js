@@ -41,7 +41,9 @@ const state = {
   items: [],
   summary: null,
   loading: false,
-  aiBusy: false
+  aiBusy: false,
+  promptWorksBusy: false,
+  promptWorksPreview: null
 };
 
 const el = {};
@@ -51,7 +53,24 @@ function $(id) {
 }
 
 function init() {
-  ["toastHost", "trainingDate", "onlyIssues", "summaryGrid", "summaryLines", "trainingCount", "trainingList", "refreshTraining", "sampleTraining"].forEach((id) => {
+  [
+    "toastHost",
+    "trainingDate",
+    "onlyIssues",
+    "summaryGrid",
+    "summaryLines",
+    "trainingCount",
+    "trainingList",
+    "refreshTraining",
+    "sampleTraining",
+    "promptWorksContactLimit",
+    "promptWorksMessageLimit",
+    "promptWorksSampleLimit",
+    "previewPromptWorksImport",
+    "runPromptWorksImport",
+    "promptWorksImportStatus",
+    "promptWorksImportResult"
+  ].forEach((id) => {
     el[id] = $(id);
   });
   el.trainingDate.value = state.date;
@@ -63,6 +82,8 @@ function init() {
 function bindEvents() {
   el.refreshTraining.addEventListener("click", () => loadTraining({ preserveIndex: true }));
   el.sampleTraining.addEventListener("click", sampleTrainingReplies);
+  el.previewPromptWorksImport.addEventListener("click", () => importPromptWorksTraining({ dryRun: true }));
+  el.runPromptWorksImport.addEventListener("click", () => importPromptWorksTraining({ dryRun: false }));
   el.trainingDate.addEventListener("change", () => {
     state.date = el.trainingDate.value || getTodayKey();
     state.currentIndex = 0;
@@ -140,6 +161,115 @@ async function sampleTrainingReplies() {
     el.sampleTraining.disabled = false;
     el.sampleTraining.textContent = "闲时采样";
   }
+}
+
+async function importPromptWorksTraining({ dryRun }) {
+  if (state.promptWorksBusy) return;
+  if (!dryRun && !state.promptWorksPreview) {
+    const ok = window.confirm("还没有预览真实样本，确定直接导入 PromptWorks 吗？");
+    if (!ok) return;
+  }
+
+  state.promptWorksBusy = true;
+  setPromptWorksBusy(true, dryRun ? "正在采集真实样本..." : "正在导入 PromptWorks...");
+  try {
+    const body = {
+      dryRun,
+      contactLimit: clampNumber(el.promptWorksContactLimit.value, 1, 80, 18),
+      messageLimit: clampNumber(el.promptWorksMessageLimit.value, 20, 180, 80),
+      sampleLimit: clampNumber(el.promptWorksSampleLimit.value, 1, 500, 80),
+      previewLimit: 5
+    };
+    const response = await fetch("/local/promptworks/import-training", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.success === false) throw new Error(payload.message || `HTTP ${response.status}`);
+    state.promptWorksPreview = payload.result || null;
+    renderPromptWorksImportResult(state.promptWorksPreview);
+    toast(dryRun ? "已预览真实人工回复样本。" : "已导入 PromptWorks 训练台。");
+  } catch (error) {
+    el.promptWorksImportResult.innerHTML = `<p class="promptworks-import-error">${escapeHtml(error.message)}</p>`;
+    toast(`PromptWorks 导入失败：${error.message}`, true);
+  } finally {
+    state.promptWorksBusy = false;
+    setPromptWorksBusy(false);
+  }
+}
+
+function setPromptWorksBusy(busy, text = "") {
+  [el.previewPromptWorksImport, el.runPromptWorksImport, el.promptWorksContactLimit, el.promptWorksMessageLimit, el.promptWorksSampleLimit].forEach((node) => {
+    if (node) node.disabled = busy;
+  });
+  if (el.promptWorksImportStatus) {
+    el.promptWorksImportStatus.textContent = busy ? text : "先预览真实样本，再确认导入旁路训练台。";
+  }
+}
+
+function renderPromptWorksImportResult(result) {
+  if (!result) {
+    el.promptWorksImportResult.innerHTML = "";
+    return;
+  }
+  const summary = result.summary || {};
+  const promptWorksBase = getPromptWorksFrontendBase(result.apiBase);
+  const promptUrl = result.prompt?.id ? `${promptWorksBase}/prompts/${encodeURIComponent(result.prompt.id)}` : promptWorksBase;
+  const taskUrl = result.task?.id ? `${promptWorksBase}/tests/tasks/${encodeURIComponent(result.task.id)}/result` : promptWorksBase;
+  const chips = [
+    `样本 ${summary.total || 0}`,
+    `联系人 ${result.sampledContacts || 0}`,
+    `配对 ${result.sampledPairs || 0}`,
+    result.dryRun ? "仅预览" : "已导入"
+  ];
+  const preview = Array.isArray(result.preview) ? result.preview.slice(0, 5) : [];
+  el.promptWorksImportResult.innerHTML = `
+    <div class="promptworks-import-meta">
+      ${chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
+      ${result.dryRun ? "" : `<a href="${escapeAttr(taskUrl)}" target="_blank" rel="noreferrer">打开任务</a><a href="${escapeAttr(promptUrl)}" target="_blank" rel="noreferrer">打开 Prompt</a>`}
+    </div>
+    <div class="promptworks-import-breakdown">
+      ${renderPromptWorksBreakdown("意图", summary.byIntent)}
+      ${renderPromptWorksBreakdown("平台", summary.byPlatform)}
+      ${renderPromptWorksBreakdown("阶段", summary.byStage)}
+    </div>
+    ${preview.length ? `
+      <div class="promptworks-import-preview">
+        ${preview.map(renderPromptWorksPreviewItem).join("")}
+      </div>
+    ` : '<p class="promptworks-import-empty">暂未采集到可导入样本。</p>'}
+    ${Array.isArray(result.errors) && result.errors.length ? `<p class="promptworks-import-warning">部分会话采集失败：${escapeHtml(result.errors.join("；"))}</p>` : ""}
+  `;
+}
+
+function renderPromptWorksBreakdown(label, data = {}) {
+  const entries = Object.entries(data || {}).slice(0, 5);
+  if (!entries.length) return "";
+  return `
+    <div>
+      <strong>${escapeHtml(label)}</strong>
+      ${entries.map(([key, value]) => `<span>${escapeHtml(key || "unknown")} ${escapeHtml(value)}</span>`).join("")}
+    </div>
+  `;
+}
+
+function renderPromptWorksPreviewItem(item) {
+  return `
+    <article class="promptworks-preview-item">
+      <header>
+        <span>${escapeHtml(item.platform_key || "unknown")} / ${escapeHtml(item.intent_key || "general")}</span>
+        <time>${escapeHtml(formatDateTime(item.reply_at || item.customer_at || ""))}</time>
+      </header>
+      <p><b>客户：</b>${escapeHtml(compactText(item.customer_message || "", 100))}</p>
+      <p><b>人工：</b>${escapeHtml(compactText(item.manual_reply || "[图片回复]", 140))}</p>
+    </article>
+  `;
+}
+
+function getPromptWorksFrontendBase(apiBase) {
+  const value = String(apiBase || "http://192.168.9.83:5188/api/v1").replace(/\/+$/, "");
+  return value.replace(/\/api\/v1$/i, "") || "http://192.168.9.83:5188";
 }
 
 function renderTraining() {
@@ -753,6 +883,12 @@ function compactText(value, max = 60) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (text.length <= max) return text;
   return `${text.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(numberValue)));
 }
 
 function parsePayload(text) {
