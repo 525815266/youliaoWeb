@@ -67,6 +67,7 @@
 71. [2026-06-15 GitHub Container Registry 发布](#71-2026-06-15-github-container-registry-发布)
 72. [2026-06-16 系统设置保存保护与数据库自动守护](#72-2026-06-16-系统设置保存保护与数据库自动守护)
 73. [2026-06-17 PromptWorks 旁路训练工作台](#73-2026-06-17-promptworks-旁路训练工作台)
+74. [2026-06-17 PromptWorks 前端 Failed to fetch 修复](#74-2026-06-17-promptworks-前端-failed-to-fetch-修复)
 
 ## 1. 项目目标
 
@@ -5604,4 +5605,77 @@ docker compose -p promptworks -f compose.yaml up -d
 - 不要让 PromptWorks compose 暴露 Postgres/Redis 到宿主机。
 - 不要把它混入 `youchat-dev-web` 容器或悠聊服务端容器。
 - 不要把 PromptWorks 当作实时自动回复服务直接上线。
+
+## 74. 2026-06-17 PromptWorks 前端 Failed to fetch 修复
+
+用户反馈：
+
+- PromptWorks 页面能打开，但 Prompt 管理页连续弹出 `Failed to fetch`。
+
+根因：
+
+1. 上游 `yellowseaa/promptworks:frontend-main-latest` 前端 bundle 里把 API base 打成了：
+
+```text
+http://localhost:8000/api/v1
+```
+
+浏览器访问飞牛页面时，这会变成请求客服电脑本机的 `localhost:8000`，所以页面报 `Failed to fetch`。
+
+2. 即使手动访问 `http://192.168.9.83:5188/api/v1/...` 可用，页面仍会在 `/api/v1/prompts`、`/api/v1/prompt-classes` 这种无尾斜杠接口上触发 FastAPI 的 `307` 跳转。原 nginx 配置使用：
+
+```nginx
+proxy_set_header Host $host;
+```
+
+这会让后端生成的 Location 丢掉 `:5188`，跳到 `http://192.168.9.83/api/v1/prompts/`，最终命中飞牛系统页面而不是 PromptWorks。
+
+修复：
+
+- 新增固定 nginx 配置：
+
+```text
+C:\youchat-dev-web\deploy\promptworks-nginx.conf
+```
+
+- `deploy/promptworks-compose.fnos.yaml`：
+  - 将 `./nginx.conf` 挂载到 `/etc/nginx/conf.d/default.conf:ro`。
+  - frontend 启动前继续把静态 JS 里的 `http://localhost:8000/api/v1` 替换成 `/api/v1`。
+- `promptworks-nginx.conf`：
+  - 使用 `proxy_set_header Host $http_host` 保留 `192.168.9.83:5188`。
+  - 增加 `X-Forwarded-Host $http_host`。
+  - 增加 `proxy_redirect`，兜底把后端 `Location: http://host/api/v1/...` 改回当前 `$scheme://$http_host/...`。
+- `scripts/deploy-fnos-promptworks.py`：
+  - 上传 `promptworks-nginx.conf` 到远端 `/vol1/1000/Docker/promptworks/nginx.conf`。
+  - 部署后检查前端 bundle 不再包含 `http://localhost:8000/api/v1`。
+  - 部署后检查浏览器实际路径：
+    - `GET /api/v1/prompts`
+    - `GET /api/v1/prompt-classes`
+
+验证结果：
+
+- 重新执行：
+
+```powershell
+npm run fnos:deploy:promptworks
+```
+
+- 脚本输出：
+  - `Verified frontend API base in 1 bundle(s).`
+  - `Verified browser API redirect paths.`
+  - `PromptWorks is ready: http://192.168.9.83:5188`
+- `GET http://192.168.9.83:5188/api/v1/prompts` 能跟随跳转后返回真实 prompt 数据。
+- `GET /api/v1/prompts` 的 `307 Location` 已变为：
+
+```text
+http://192.168.9.83:5188/api/v1/prompts/
+```
+
+- 远端容器内 `/etc/nginx/conf.d/default.conf` 已确认是本项目固定配置。
+
+后续注意：
+
+- 不要移除 frontend 启动时替换 JS API base 的命令，除非后续改成自建前端镜像并在 build 阶段明确设置 `VITE_API_BASE_URL=/api/v1`。
+- 不要恢复上游默认 nginx 配置，否则无尾斜杠 API 会再次跳到飞牛主页面端口。
+- 用户如果仍看到 `Failed to fetch`，先让浏览器强刷，因为旧前端 JS 可能被缓存。
 

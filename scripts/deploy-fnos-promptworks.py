@@ -6,13 +6,16 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 COMPOSE_SOURCE = PROJECT_ROOT / "deploy" / "promptworks-compose.fnos.yaml"
+NGINX_SOURCE = PROJECT_ROOT / "deploy" / "promptworks-nginx.conf"
 AI_PROVIDERS_FILE = PROJECT_ROOT / "config" / "ai-providers.json"
 DEFAULT_REMOTE_DIR = "/vol1/1000/Docker/promptworks"
 DEFAULT_PROJECT_NAME = "promptworks"
@@ -114,6 +117,39 @@ def wait_for_promptworks(base_url: str) -> None:
     raise RuntimeError(f"PromptWorks did not become ready: {last_error}")
 
 
+def verify_frontend_api_base(base_url: str) -> None:
+    index = str(request_text(f"{base_url}/"))
+    scripts = re.findall(r'<script[^>]+src="([^"]+\.js)"', index)
+    if not scripts:
+        raise RuntimeError("PromptWorks frontend index did not expose a JavaScript bundle.")
+    checked = 0
+    for script in scripts:
+        script_url = urllib.parse.urljoin(f"{base_url}/", script)
+        body = request_text(script_url)
+        checked += 1
+        if "http://localhost:8000/api/v1" in body:
+            raise RuntimeError(
+                "PromptWorks frontend still points to http://localhost:8000/api/v1. "
+                "The frontend bundle patch did not apply."
+            )
+    if checked:
+        print(f"Verified frontend API base in {checked} bundle(s).")
+
+
+def verify_promptworks_browser_paths(base_url: str) -> None:
+    prompts_url = f"{base_url}/api/v1/prompts"
+    request_json(prompts_url)
+    classes_url = f"{base_url}/api/v1/prompt-classes"
+    request_json(classes_url)
+    print("Verified browser API redirect paths.")
+
+
+def request_text(url: str) -> str:
+    request = urllib.request.Request(url, headers={"Accept": "*/*"}, method="GET")
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return response.read().decode("utf-8", "replace")
+
+
 def seed_ai_providers(base_url: str) -> None:
     seeds = load_ai_provider_seed()
     if not seeds:
@@ -192,6 +228,8 @@ def seed_ai_providers(base_url: str) -> None:
 def deploy() -> None:
     if not COMPOSE_SOURCE.exists():
         raise SystemExit(f"Missing compose file: {COMPOSE_SOURCE}")
+    if not NGINX_SOURCE.exists():
+        raise SystemExit(f"Missing nginx file: {NGINX_SOURCE}")
 
     paramiko = import_paramiko()
     host = os.environ.get("FNOS_HOST", "192.168.9.83")
@@ -206,7 +244,9 @@ def deploy() -> None:
         raise SystemExit("Set FNOS_PASSWORD before deploying.")
 
     remote_compose = f"{remote_dir}/compose.yaml"
+    remote_nginx = f"{remote_dir}/nginx.conf"
     remote_tmp = f"/tmp/promptworks-compose-{int(time.time())}.yaml"
+    remote_nginx_tmp = f"/tmp/promptworks-nginx-{int(time.time())}.conf"
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -215,11 +255,13 @@ def deploy() -> None:
         sftp = client.open_sftp()
         try:
             sftp.put(str(COMPOSE_SOURCE), remote_tmp)
+            sftp.put(str(NGINX_SOURCE), remote_nginx_tmp)
         finally:
             sftp.close()
 
         run_ssh(client, f"mkdir -p {quote(remote_dir)}")
         run_ssh(client, f"mv {quote(remote_tmp)} {quote(remote_compose)}")
+        run_ssh(client, f"mv {quote(remote_nginx_tmp)} {quote(remote_nginx)}")
         run_ssh(
             client,
             f"cd {quote(remote_dir)} && "
@@ -258,6 +300,8 @@ def deploy() -> None:
 
     base_url = f"http://{host}:{frontend_port}"
     wait_for_promptworks(base_url)
+    verify_frontend_api_base(base_url)
+    verify_promptworks_browser_paths(base_url)
     seed_ai_providers(base_url)
     print(f"PromptWorks is ready: {base_url}")
 

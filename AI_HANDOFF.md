@@ -179,6 +179,29 @@ Verified on 2026-06-17:
 - `GET /api/v1/llm-providers/` showed one provider and three models.
 - `POST /api/v1/llm-providers/1/invoke` reached sub2 and returned completion plus token usage.
 
+Failure/fix on 2026-06-17:
+
+- User saw PromptWorks UI `Failed to fetch`.
+- Root cause 1: upstream frontend bundle hardcoded `http://localhost:8000/api/v1`.
+- Root cause 2: FastAPI slash redirects on paths like `/api/v1/prompts` lost host port because upstream nginx used `$host`, producing `http://192.168.9.83/api/v1/prompts/`.
+- Fix files:
+  - `deploy/promptworks-nginx.conf`
+  - `deploy/promptworks-compose.fnos.yaml`
+  - `scripts/deploy-fnos-promptworks.py`
+- Frontend container startup now patches JS bundle:
+  - `http://localhost:8000/api/v1` -> `/api/v1`
+- Compose mounts `./nginx.conf` over `/etc/nginx/conf.d/default.conf`.
+- Nginx config uses:
+  - `proxy_set_header Host $http_host`
+  - `proxy_set_header X-Forwarded-Host $http_host`
+  - `proxy_redirect` to keep redirects on `:5188`
+- Deploy script now verifies:
+  - frontend bundle no longer contains the bad localhost API URL
+  - browser paths `/api/v1/prompts` and `/api/v1/prompt-classes` work through redirects
+- Verified after redeploy:
+  - `/api/v1/prompts` redirects to `http://192.168.9.83:5188/api/v1/prompts/`
+  - following that redirect returns real prompt data
+
 ## 2026-06-16 Handoff: Client Options Save Guard
 
 User issue:
