@@ -66,6 +66,7 @@
 70. [2026-06-15 Web 客户端 Docker 化部署](#70-2026-06-15-web-客户端-docker-化部署)
 71. [2026-06-15 GitHub Container Registry 发布](#71-2026-06-15-github-container-registry-发布)
 72. [2026-06-16 系统设置保存保护与数据库自动守护](#72-2026-06-16-系统设置保存保护与数据库自动守护)
+73. [2026-06-17 PromptWorks 旁路训练工作台](#73-2026-06-17-promptworks-旁路训练工作台)
 
 ## 1. 项目目标
 
@@ -5492,4 +5493,115 @@ rg -n "sk-[A-Za-z0-9]|ck_[A-Za-z0-9_.-]+|950331|w5B22|Password=w|155650475680386
   - `https://github.com/525815266/youliaoWeb/actions/runs/27627140856`
   - 状态：`completed`
   - 结果：`success`
+
+## 73. 2026-06-17 PromptWorks 旁路训练工作台
+
+用户问题：
+
+- 询问 `https://github.com/YellowSeaa/PromptWorks` 是否可以优化客服流程。
+- 如果有价值，希望部署到飞牛上；如果不适合则不部署。
+
+判断结论：
+
+- PromptWorks 有价值，但定位是“Prompt/话术/skill 训练与评估工作台”，不是悠聊 Web 聊天窗口替代品。
+- 它适合承接用户一直要求的这条链路：
+  - 从悠聊真实聊天、人工回复、快捷回复和 skill 中抽样。
+  - 用 AI 做归类、评分、对比和优化建议。
+  - 把候选结果留给人工审核。
+  - 审核通过后再回写到 `data/reply-skills.json` 或 Web 的 skill 训练队列。
+- 它不应该直接接入生产自动回复；当前先作为旁路工具运行，避免影响现有客服台和悠聊后端。
+
+本地调研目录：
+
+```text
+C:\youchat-research\PromptWorks
+```
+
+部署文件：
+
+```text
+C:\youchat-dev-web\deploy\promptworks-compose.fnos.yaml
+C:\youchat-dev-web\scripts\deploy-fnos-promptworks.py
+```
+
+新增 npm 脚本：
+
+```powershell
+npm run fnos:deploy:promptworks
+```
+
+飞牛部署信息：
+
+- 远程目录：`/vol1/1000/Docker/promptworks`
+- Compose project：`promptworks`
+- 访问地址：`http://192.168.9.83:5188`
+- 容器：
+  - `promptworks-frontend`
+  - `promptworks-backend`
+  - `promptworks-postgres`
+  - `promptworks-redis`
+
+端口与隔离原则：
+
+- PromptWorks 前端只暴露宿主机端口 `5188`。
+- 后端 `8000`、Postgres `5432`、Redis `6379` 都只在 Docker 网络内使用，不暴露到飞牛宿主机。
+- 不使用 PromptWorks 默认 `18080:80` 映射，因为 `18080` 已经是悠聊服务端 `http://192.168.9.83:18080/api`。
+- 不修改、不重启 `/vol1/1000/Docker/youchat` 和 compose project `youliaoapp`。
+
+模型配置：
+
+- 部署脚本会读取本地运行时配置 `config/ai-providers.json`。
+- 只自动种入 OpenAI/Bearer 兼容渠道。
+- 本次已种入 `sub2 中转`：
+  - `base_url=https://sub2.sn55.cn/v1`
+  - 默认模型：`gpt-5.4-mini`
+  - 额外模型：`gpt-4.1`、`gpt-4o-mini`
+- 不把 API key 写进项目文档，也不要把真实 `config/ai-providers.json` 提交到 Git。
+- CodeBuddy 当前在我们 Web 项目里走 `X-Api-Key` 特殊适配；PromptWorks 原生 `invoke` 只按 `Authorization: Bearer` 调 OpenAI 兼容 `/chat/completions`。所以 CodeBuddy 暂时不自动种入 PromptWorks，后续如果要接入，需要给 PromptWorks 加 auth type 或继续通过悠聊 Web 的 `/ai/chat/completions` 中转。
+
+部署命令：
+
+```powershell
+cd C:\youchat-dev-web
+$env:FNOS_PASSWORD = "飞牛 SSH 密码"
+$env:FNOS_SUDO_PASSWORD = "飞牛 sudo 密码"
+npm run fnos:deploy:promptworks
+```
+
+脚本行为：
+
+1. 上传 `deploy/promptworks-compose.fnos.yaml` 到 `/vol1/1000/Docker/promptworks/compose.yaml`。
+2. 首次生成远端 `.env`，默认 `PROMPTWORKS_FRONTEND_PORT=5188`。
+3. 执行：
+
+```bash
+docker compose -p promptworks -f compose.yaml pull
+docker compose -p promptworks -f compose.yaml up -d
+```
+
+4. 等待 `http://192.168.9.83:5188/api/v1/project-info/summary` 可用。
+5. 从本地 AI 配置自动创建兼容的 LLM provider 和模型。
+
+验证结果：
+
+- `GET http://192.168.9.83:5188/` 返回 `200`。
+- `GET http://192.168.9.83:5188/api/v1/project-info/summary` 正常，版本显示 `v1.3.1`。
+- `GET http://192.168.9.83:5188/api/v1/llm-providers/` 正常，能看到 1 个 provider、3 个模型。
+- `POST http://192.168.9.83:5188/api/v1/llm-providers/1/invoke` 已能真实调用 sub2，并返回 completion 与 token usage。
+- 远端 `docker compose ps` 显示 4 个 PromptWorks 容器均为 Up。
+
+后续集成建议：
+
+- 第一步：保持 PromptWorks 作为人工可访问的训练/评估工作台。
+- 第二步：从悠聊 Web 的 `skill-training` 或服务端数据库导出样本，生成 PromptWorks 的测试任务。
+- 第三步：在 PromptWorks 中用 AI 评分和优化建议批量筛选候选话术。
+- 第四步：只把人工审核通过的结果回写到 `data/reply-skills.json`，不要让 PromptWorks 直接改生产 skill。
+- 第五步：如果确实需要 CodeBuddy/DeepSeek 特殊认证或模型拉取，再考虑 fork PromptWorks 后补 provider auth type。
+
+不要回退：
+
+- 不要把 PromptWorks 绑定到 `18080`。
+- 不要让 PromptWorks compose 暴露 Postgres/Redis 到宿主机。
+- 不要把它混入 `youchat-dev-web` 容器或悠聊服务端容器。
+- 不要把 PromptWorks 当作实时自动回复服务直接上线。
 

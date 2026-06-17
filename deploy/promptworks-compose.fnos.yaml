@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: promptworks-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PROMPTWORKS_POSTGRES_DB:-promptworks}
+      POSTGRES_USER: ${PROMPTWORKS_POSTGRES_USER:-promptworks}
+      POSTGRES_PASSWORD: ${PROMPTWORKS_POSTGRES_PASSWORD:-promptworks}
+    volumes:
+      - promptworks_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${PROMPTWORKS_POSTGRES_USER:-promptworks} -d ${PROMPTWORKS_POSTGRES_DB:-promptworks}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: promptworks-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - promptworks_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    image: ${PROMPTWORKS_BACKEND_IMAGE:-yellowseaa/promptworks:backend-main-latest}
+    container_name: promptworks-backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      APP_TEST_MODE: "false"
+      API_V1_STR: /api/v1
+      PROJECT_NAME: PromptWorks
+      DATABASE_URL: postgresql+psycopg://${PROMPTWORKS_POSTGRES_USER:-promptworks}:${PROMPTWORKS_POSTGRES_PASSWORD:-promptworks}@postgres:5432/${PROMPTWORKS_POSTGRES_DB:-promptworks}
+      REDIS_URL: redis://redis:6379/0
+      BACKEND_CORS_ORIGINS: http://192.168.9.83:${PROMPTWORKS_FRONTEND_PORT:-5188},http://localhost:${PROMPTWORKS_FRONTEND_PORT:-5188},http://127.0.0.1:${PROMPTWORKS_FRONTEND_PORT:-5188}
+      BACKEND_CORS_ALLOW_CREDENTIALS: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: ${PROMPTWORKS_FRONTEND_IMAGE:-yellowseaa/promptworks:frontend-main-latest}
+    container_name: promptworks-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "${PROMPTWORKS_FRONTEND_PORT:-5188}:80"
+
+volumes:
+  promptworks_postgres_data:
+  promptworks_redis_data:

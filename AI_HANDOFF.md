@@ -105,6 +105,80 @@ docker compose -p youchat-dev-web -f compose.registry.yaml pull
 docker compose -p youchat-dev-web -f compose.registry.yaml up -d
 ```
 
+## PromptWorks Sidecar Training Workbench
+
+Added on 2026-06-17 after evaluating `https://github.com/YellowSeaa/PromptWorks`.
+
+Use case:
+
+- PromptWorks is useful as a sidecar prompt/skill evaluation and optimization workbench.
+- It is not a replacement for the YouChat Web chat UI and should not directly run production auto-reply.
+- Intended flow:
+  1. export/sample real YouChat manual replies, quick replies, and skill candidates
+  2. evaluate and optimize them in PromptWorks
+  3. let the user approve changes
+  4. write approved results back to `data/reply-skills.json` or the Web skill training queue
+
+Local files:
+
+- `deploy/promptworks-compose.fnos.yaml`
+- `scripts/deploy-fnos-promptworks.py`
+- npm script: `npm run fnos:deploy:promptworks`
+
+FnOS deployment:
+
+- URL: `http://192.168.9.83:5188`
+- Remote dir: `/vol1/1000/Docker/promptworks`
+- Compose project: `promptworks`
+- Containers:
+  - `promptworks-frontend`
+  - `promptworks-backend`
+  - `promptworks-postgres`
+  - `promptworks-redis`
+
+Port rules:
+
+- Only expose frontend: host `5188` -> container `80`.
+- Do not use PromptWorks default `18080:80`; `18080` is the YouChat backend API.
+- Do not expose PromptWorks backend/Postgres/Redis to host unless explicitly debugging.
+- Do not modify `/vol1/1000/Docker/youchat` or compose project `youliaoapp` for PromptWorks work.
+
+Deploy/update command:
+
+```powershell
+cd C:\youchat-dev-web
+$env:FNOS_PASSWORD = "..."
+$env:FNOS_SUDO_PASSWORD = "..."
+npm run fnos:deploy:promptworks
+```
+
+The deploy script:
+
+- uploads `deploy/promptworks-compose.fnos.yaml` as remote `compose.yaml`
+- runs remote `docker compose -p promptworks -f compose.yaml pull`
+- runs remote `docker compose -p promptworks -f compose.yaml up -d`
+- waits for `/api/v1/project-info/summary`
+- seeds compatible Bearer/OpenAI AI providers from local runtime `config/ai-providers.json`
+
+Current seeded provider:
+
+- `sub2 中转`
+- base URL: `https://sub2.sn55.cn/v1`
+- models: `gpt-5.4-mini`, `gpt-4.1`, `gpt-4o-mini`
+
+Important auth limitation:
+
+- PromptWorks upstream invokes models as `Authorization: Bearer <api_key>` against `{base_url}/chat/completions`.
+- CodeBuddy in YouChat Web uses `X-Api-Key`; do not auto-seed it into PromptWorks unless PromptWorks is extended with auth type support or routed through a compatible proxy.
+- DeepSeek can work if configured with an official key and base URL ending in `/v1`.
+
+Verified on 2026-06-17:
+
+- `GET http://192.168.9.83:5188/` returned `200`.
+- `GET /api/v1/project-info/summary` worked and showed PromptWorks `v1.3.1`.
+- `GET /api/v1/llm-providers/` showed one provider and three models.
+- `POST /api/v1/llm-providers/1/invoke` reached sub2 and returned completion plus token usage.
+
 ## 2026-06-16 Handoff: Client Options Save Guard
 
 User issue:
