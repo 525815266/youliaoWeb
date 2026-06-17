@@ -3177,6 +3177,17 @@ function getContactListAccountId() {
   return getContactListAccountCandidates()[0] || "";
 }
 
+async function getBulkAccessAccountId(contact = state.activeContact) {
+  const contactAccountId = firstValue(contact?.accountId, contact?.accId, contact?.csAccountId, contact?.account?.id);
+  const candidates = uniqueContactListAccountIds([
+    getContactListAccountId(),
+    await ensureContactListAccountId(),
+    state.accountIdResolved ? state.accountId : "",
+    contactAccountId
+  ], state.account, { strictShortId: true });
+  return candidates[0] || "";
+}
+
 function getContactListAccountCandidates() {
   const verified = Array.isArray(state.contactListAccountIds) ? state.contactListAccountIds : [];
   return uniqueContactListAccountIds([
@@ -3208,7 +3219,8 @@ function buildContactListParams(tab = state.listTab, options = {}) {
 }
 
 async function ensureContactListAccountId() {
-  if (state.accountIdResolved && state.accountId) return state.accountId;
+  const resolvedAccountId = uniqueContactListAccountIds([state.accountId], state.account, { strictShortId: true })[0] || "";
+  if (state.accountIdResolved && resolvedAccountId) return resolvedAccountId;
   const storedCandidate = getContactListAccountId();
   try {
     const payload = await api("/Senstive/GetAccountList", {}, { method: "GET" });
@@ -11802,7 +11814,11 @@ async function runContactAction(action, contact) {
     }
 
     if (action === "access-all") {
-      await api("/Conversation/AccessInAll", { accountId: getAccountId(contact) });
+      const accountId = await getBulkAccessAccountId(contact);
+      if (!accountId) {
+        throw new Error("未识别到有效客服账号，无法执行全部接入");
+      }
+      await api("/Conversation/AccessInAll", { accountId });
       toast("已提交全部接入请求。");
       await loadContacts({ preserveScroll: true });
       return;

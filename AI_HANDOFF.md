@@ -303,6 +303,7 @@ Recent fix:
 - `state.contactListAccountIds` persists candidates from `/Senstive/GetAccountList`.
 - `extractContactListAccountIds()` should prefer short local customer-service ids (`id`, `accId`). Do not use the long merchant `accountId` unless future captures prove it is valid.
 - `fetchContactListWithFallback()` treats bare `data:0` as ambiguous and must not clear an existing real list on that response alone.
+- Guestbook `全部接入` (`/Conversation/AccessInAll`) must use the verified short customer-service account id (captured working payload: `accountId=2`). Do not pass a guestbook contact's `accountId=0`; the API may still return success while doing nothing.
 - Never show fallback/source words to the客服 user. They belong in logs only.
 
 ## Contact List

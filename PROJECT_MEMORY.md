@@ -194,6 +194,7 @@ Invoke-WebRequest http://localhost:5177/styles.css
 - 原客户端当前会话列表默认请求 `/Contact/GetContactList`，初始化参数接近 `pageIndex=1&pageSize=20`；搜索字段是 `keyWord`。不要默认塞 `id=0`、`isGuestbook=false`、`isHistory=false` 这类空条件。
 - 当前 tab 默认先走不带 `accountId` 的客户端兼容请求。`/Senstive/GetAccountList` 拿到的短 `id/accId` 只作为非破坏性兜底或诊断，不再作为默认强制过滤。
 - 已知 `accountId=2` 会返回 `{"success":true,"message":null,"data":0}`，所以 `id=2` 不是稳定的默认当前列表口径。长 `accountId: 1556504756803862529` 也不是当前会话筛选 ID。
+- 留言右键“全部接入”调用 `/Conversation/AccessInAll` 时必须传客服短账号 ID（实测 `accountId=2`）。不能用留言联系人记录里的 `accountId=0`，否则接口可能返回 `success:true` 但实际不接入。
 - `state.listCountSources` 只允许用于日志、调试和后续抓包分析，不能渲染到业务界面。
 - 历史 tab 的可见数字和列表内容都只使用后端历史接口返回的数据。不要把 Web 本地缓存或清空列表缓存合并进业务历史列表。
 
