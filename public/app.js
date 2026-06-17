@@ -8318,7 +8318,7 @@ async function generateAutoAiSuggestion(expectedKey, options = {}) {
 }
 
 function getLatestAutoSuggestionMessage() {
-  return getLatestActionableInboundMessage();
+  return getLatestUnansweredInboundMessage();
 }
 
 function buildAutoSuggestionKey(message) {
@@ -8331,6 +8331,11 @@ function buildAutoSuggestionKey(message) {
     getMessageKey(message, index < 0 ? 0 : index),
     normalizeForMatch(message.content || "").slice(0, 120)
   ].join("::");
+}
+
+function isCurrentAutoSuggestionKey(expectedKey) {
+  if (!expectedKey) return true;
+  return buildAutoSuggestionKey(getLatestAutoSuggestionMessage()) === expectedKey;
 }
 
 function buildAiConversationContext() {
@@ -9093,6 +9098,25 @@ function getLatestActionableInboundMessage() {
   )) || null;
 }
 
+function getLatestUnansweredInboundMessage() {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index];
+    if (!message) continue;
+    if (isAutoReplyHandledBoundary(message)) return null;
+    if (message.direction === "incoming" && !message.isSystemNotice) {
+      return isNoReplyCandidate(message) ? null : message;
+    }
+  }
+  return null;
+}
+
+function isAutoReplyHandledBoundary(message) {
+  if (!message) return false;
+  if (message.direction === "outgoing" || message.direction === "ai") return true;
+  if (message.isSystemNotice || message.direction === "system") return true;
+  return false;
+}
+
 function getLatestSkillTriggerMessage() {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
     const message = state.messages[index];
@@ -9110,8 +9134,21 @@ function isNoReplyCandidate(message) {
   const text = normalizeForMatch(message?.content || "");
   if (!text) return true;
   if (message?.bizType === 19 || message?.bizType === "19") return true;
+  if (isOrderLookupResultText(text)) return true;
   if (/(提现|提取).{0,8}(成功|已提交|已经处理|等待处理|同步处理|到账)/.test(text)) return true;
   if (/(成功|已经处理|等待处理|同步处理).{0,8}(提现|提取)/.test(text)) return true;
+  return false;
+}
+
+function isOrderLookupResultText(text) {
+  const normalized = String(text || "");
+  if (!normalized) return false;
+  const hasQuestionOrProblem = /(查不到|查不出|没返|无返|没成功|不提示|失败|为什么|怎么|没有|没绑定|未绑定|吗|么|\?)/.test(normalized);
+  if (hasQuestionOrProblem) return false;
+  if (/发[【\[]?订单[】\]]?查看/.test(normalized)) return true;
+  if (/(正品行货|商品详情)/.test(normalized) && /(订单|查看)/.test(normalized)) return true;
+  if (/订单.{0,10}(成功|已生成|已提交|已绑定|已跟单|已记录|已查询)/.test(normalized)) return true;
+  if (/(成功|已生成|已提交|已绑定|已跟单|已记录|已查询).{0,10}订单/.test(normalized)) return true;
   return false;
 }
 
@@ -9125,8 +9162,10 @@ function isSkillSystemTrigger(message) {
 
 async function maybeBuildSkillSuggestion(options = {}) {
   if (!state.replySkills.length) await loadReplySkills();
+  if (options.autoReply && !isCurrentAutoSuggestionKey(options.expectedKey)) return null;
   const suggestion = buildSkillSuggestion();
   if (!suggestion) return null;
+  if (options.autoReply && !isCurrentAutoSuggestionKey(options.expectedKey)) return null;
   if (!options.autoReply && suggestion.promptKey && state.lastSkillPromptKey === suggestion.promptKey) return suggestion;
   state.lastSkillPromptKey = suggestion.promptKey || "";
   appendAiSuggestion(suggestion);
@@ -9146,6 +9185,8 @@ function canAutoReplySkill(suggestion) {
   const latest = getLatestSkillTriggerMessage();
   if (!latest) return false;
   if (latest.isSystemNotice || latest.direction === "system" || isNoReplyCandidate(latest)) return false;
+  const unanswered = getLatestUnansweredInboundMessage();
+  if (!unanswered || getMessageKey(unanswered, 0) !== getMessageKey(latest, 0)) return false;
   if (suggestion.allowAutoReply === false) return false;
   const key = `${getContactId(state.activeContact)}:${suggestion.skillId}:${getMessageKey(latest, 0)}`;
   if (state.lastSkillAutoReplyKey === key) return false;
@@ -12121,12 +12162,14 @@ async function requestAiRelaySuggestions(options = {}) {
     }
     return;
   }
+  if (options.expectedKey && !isCurrentAutoSuggestionKey(options.expectedKey)) return;
 
   const context = buildAiConversationContext();
   if (!context) {
     if (!silent) toast("No real chat context is available for AI suggestions.", true);
     return;
   }
+  if (options.expectedKey && !isCurrentAutoSuggestionKey(options.expectedKey)) return;
 
   const skillSuggestion = buildSkillSuggestion();
   state.aiGenerating = true;
@@ -12175,10 +12218,11 @@ async function requestAiRelaySuggestions(options = {}) {
 
     const suggestions = extractAiReplies(parsed);
     if (!suggestions.length) throw new Error("AI did not return suggestion content");
+    if (options.expectedKey && !isCurrentAutoSuggestionKey(options.expectedKey)) return;
     const fallbackSuggestions = suggestions.length >= 2 ? suggestions : buildLocalSuggestionVariants(suggestions[0]);
     appendAiSuggestions(mergeAiSuggestions(skillSuggestion, fallbackSuggestions), { silent });
   } catch (error) {
-    if (skillSuggestion) appendAiSuggestions([skillSuggestion], { silent: true });
+    if (skillSuggestion && (!options.expectedKey || isCurrentAutoSuggestionKey(options.expectedKey))) appendAiSuggestions([skillSuggestion], { silent: true });
     if (silent) {
       log("auto ai suggestion failed", { error: error.message, source: options.source || "" });
     } else {
@@ -12199,8 +12243,10 @@ async function generateAutoAiSuggestion(expectedKey, options = {}) {
 
   state.aiAutoSuggestInFlightKey = key;
   try {
-    const skillSuggestion = await maybeBuildSkillSuggestion({ autoReply: true });
-    await requestAiRelaySuggestions({ silent: true, source: options.source || "auto" });
+    const skillSuggestion = await maybeBuildSkillSuggestion({ autoReply: true, expectedKey: key });
+    if (!isCurrentAutoSuggestionKey(key)) return;
+    await requestAiRelaySuggestions({ silent: true, source: options.source || "auto", expectedKey: key });
+    if (!isCurrentAutoSuggestionKey(key)) return;
     state.lastAutoAiSuggestionKey = key;
     if (skillSuggestion && !state.aiSuggestion) appendAiSuggestion(skillSuggestion);
   } finally {

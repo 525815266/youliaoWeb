@@ -625,6 +625,8 @@ Recent AI behavior:
 - AI recommendation is automatic after selecting a contact or loading/merging messages.
 - It first tries skill. If no skill matches, it calls `/ai/chat/completions`.
 - It deduplicates by latest actionable customer message key.
+- Auto recommendation/auto reply must only use the latest unanswered inbound customer message. If an outgoing/AI/system/robot handling result appears after the customer message, do not reply to the old customer question.
+- Order lookup result prompts are no-reply boundaries, including `发【订单】查看`, product title + `订单/查看`, and order success/bound/tracked/queried phrases.
 - Manual AI button still works and shows errors.
 - Auto AI failures are silent and logged.
 
