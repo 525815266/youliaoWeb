@@ -540,11 +540,22 @@ function renderImageStrip(urls) {
     <div class="training-images">
       ${values.map((url, index) => `
         <a href="${escapeAttr(url)}" target="_blank" rel="noreferrer" title="打开图片 ${index + 1}">
-          <img src="${escapeAttr(url)}" alt="skill 图片 ${index + 1}" loading="lazy" />
+          <img src="${escapeAttr(getDisplayMediaUrl(url))}" alt="skill 图片 ${index + 1}" loading="lazy" />
         </a>
       `).join("")}
     </div>
   `;
+}
+
+function getDisplayMediaUrl(value) {
+  const url = String(value || "").trim();
+  if (!url) return "";
+  if (/^(data:|blob:|https:)/i.test(url)) return url;
+  if (url.startsWith("//")) return "https:" + url;
+  if (/^http:\/\//i.test(url) && window.location.protocol === "https:") {
+    return "/local/media-proxy?url=" + encodeURIComponent(url);
+  }
+  return url;
 }
 
 function renderSkeleton() {

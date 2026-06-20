@@ -2,6 +2,7 @@ const http = require("http");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { Readable } = require("stream");
 const { URL } = require("url");
 const signalR = require("@microsoft/signalr");
 
@@ -24,6 +25,7 @@ const MAX_LINK_PREVIEW_BYTES = 900000;
 const API_PROXY_TIMEOUT_MS = 60000;
 const OSS_UPLOAD_TIMEOUT_MS = 20000;
 const AI_PROXY_TIMEOUT_MS = 90000;
+const MEDIA_PROXY_TIMEOUT_MS = 30000;
 const PROMPTWORKS_TIMEOUT_MS = Math.max(10000, Number(process.env.PROMPTWORKS_TIMEOUT_MS || 60000));
 const SIGNALR_START_TIMEOUT_MS = 12000;
 const SIGNALR_KEEP_ALIVE_MS = 120000;
@@ -2478,6 +2480,70 @@ async function handleLinkPreview(req, res) {
   }
 }
 
+async function handleMediaProxy(req, res) {
+  if (req.method !== "GET") {
+    res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Method not allowed");
+    return;
+  }
+
+  const parsed = new URL(req.url, `http://localhost:${PORT}`);
+  const url = normalizePreviewUrl(parsed.searchParams.get("url"));
+  if (!url) {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Invalid media URL");
+    return;
+  }
+
+  try {
+    const upstream = await fetchWithTimeout(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 YouChat-Web-MediaProxy/1.0",
+        Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8"
+      }
+    }, MEDIA_PROXY_TIMEOUT_MS, "media proxy");
+
+    if (!upstream.ok) {
+      res.writeHead(upstream.status, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(`Upstream media returned ${upstream.status}`);
+      return;
+    }
+
+    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+    const lowerType = contentType.toLowerCase();
+    const finalUrl = upstream.url || url;
+    const finalPath = new URL(finalUrl).pathname;
+    const allowedType = lowerType.startsWith("image/")
+      || lowerType.startsWith("video/")
+      || lowerType.includes("octet-stream")
+      || /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|mp4|webm|ogg|ogv|mov|m4v|m3u8)$/i.test(finalPath);
+    if (!allowedType) {
+      res.writeHead(415, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(`Unsupported media type: ${contentType}`);
+      return;
+    }
+
+    const headers = {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=3600",
+      "X-Content-Type-Options": "nosniff"
+    };
+    const contentLength = upstream.headers.get("content-length");
+    if (contentLength) headers["Content-Length"] = contentLength;
+    res.writeHead(200, headers);
+    if (upstream.body) {
+      Readable.fromWeb(upstream.body).pipe(res);
+    } else {
+      res.end(Buffer.from(await upstream.arrayBuffer()));
+    }
+  } catch (error) {
+    res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end(`Media proxy failed: ${error.message}`);
+  }
+}
+
 function normalizeApiBase(value) {
   const raw = String(value || DEFAULT_API_BASE).trim().replace(/\/+$/, "");
   if (!raw) return DEFAULT_API_BASE;
@@ -3332,6 +3398,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url.startsWith("/local/link-preview")) {
     await handleLinkPreview(req, res);
+    return;
+  }
+
+  if (req.url.startsWith("/local/media-proxy")) {
+    await handleMediaProxy(req, res);
     return;
   }
 

@@ -3251,3 +3251,40 @@ Do not regress:
 - Current prompt/order context must outrank old matched suggestion platform when learning from a manual reply.
 - Right-side order record matches are real-data evidence; do not replace them with fake platform guesses.
 - Keep default `state.orderType=0` from classifying unrelated numeric ids as Taobao outside actual order context.
+
+
+## 2026-06-21 Handoff: HTTPS Mixed Content Fix for Lucky Public URL
+
+Public URL:
+
+- `https://yzkf.xmmhsj.cn:8001/`
+
+Problem:
+
+- Cert is valid, but browser warns that parts of the page are not secure.
+- Treat this as mixed content, not a certificate failure.
+
+Implemented:
+
+- `server.js`: added `/local/media-proxy?url=...`, streaming image/video-like upstream responses from the current origin.
+- `public/app.js`: added `getDisplayMediaUrl()`, `getPreviewFrameUrl()`, and HTTPS embed guards.
+- HTTPS page no longer browser-connects to HTTP SignalR; it relies on `/local/signalr/consume` server bridge.
+- Chat images, avatars, link thumbnails, mini-program covers, order images, skill thumbs, and link preview media are display-proxied when source is HTTP.
+- HTTP iframe previews are blocked in HTTPS page and replaced by a message; open-page action still works.
+- `public/skill-training.js`: training image strip uses display proxy for HTTP images when page is HTTPS.
+
+Important rule:
+
+- Proxy URLs are display-only. Preserve original image URLs for sending, learning, copying, opening, and storage.
+
+Verified:
+
+- `npm run check` passed.
+- `git diff --check` passed.
+- Static scan found no remaining direct risky display template patterns for image `src` or preview iframe `src`.
+
+If user reports the warning persists:
+
+1. Open DevTools > Security / Console on `https://yzkf.xmmhsj.cn:8001/`.
+2. Copy the exact `Mixed Content` URL.
+3. Add that render path to `getDisplayMediaUrl()` or block embedding if it is an iframe/script/style.

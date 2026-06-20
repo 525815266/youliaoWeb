@@ -6010,3 +6010,46 @@ Follow-up:
 
 - Existing learned skills that were previously stored under the wrong platform may still need review in the skill training page, but new learning should no longer be polluted by default Taobao state or stale matched suggestions.
 - If real data shows more Douyin/Kuaishou/JD/PDD order-number shapes, add the pattern in both `public/app.js` and `server.js`, then rerun the VM verification.
+
+
+## 78. 2026-06-21 Public HTTPS reverse proxy mixed-content fix
+
+User issue:
+
+- Public Lucky reverse-proxy URL: `https://yzkf.xmmhsj.cn:8001/`.
+- Browser certificate is valid, but the page reports that parts of the site are not secure.
+- Root cause is mixed content: the HTTPS page could still directly load HTTP resources such as chat images, avatars, order images, link preview iframes/videos, or browser-side SignalR to the internal YouChat server.
+
+Files changed:
+
+- `C:\youchat-dev-web\server.js`
+- `C:\youchat-dev-web\public\app.js`
+- `C:\youchat-dev-web\public\skill-training.js`
+
+Backend change:
+
+- Added `GET /local/media-proxy?url=...`.
+- The proxy fetches only HTTP/HTTPS media-like resources and returns them from the current Web origin.
+- Allowed upstream types include `image/*`, `video/*`, octet-stream, and common image/video file extensions.
+- This lets an HTTPS public page load `https://yzkf.xmmhsj.cn:8001/local/media-proxy?...` instead of directly loading `http://...`.
+
+Frontend changes:
+
+1. Added safe display helpers in `public/app.js`: `isHttpsPage()`, `getDisplayMediaUrl(value)`, `canEmbedInHttps(value)`, and `getPreviewFrameUrl(value)`.
+2. Updated browser-visible media display to use `getDisplayMediaUrl()`: friend request avatars, chat images, link thumbnails, mini-program icons/covers, link preview media, skill thumbnails, and order images.
+3. Kept original URLs for sending, copying, learning, and opening externally. Do not send `/local/media-proxy?...` to customers.
+4. HTTPS pages now block browser-side direct HTTP SignalR. Web still uses `/local/signalr/consume` server-side bridge first.
+5. HTTP page/player previews are no longer embedded inside the HTTPS page; users can still open the target separately.
+6. `public/skill-training.js` image strip now uses its own `getDisplayMediaUrl()` helper.
+
+Verification:
+
+- `npm run check` passed.
+- `git diff --check` passed.
+- Static scan no longer finds direct risky display patterns for image `src` or preview iframe `src`.
+
+Follow-up:
+
+- If Lucky still shows mixed content after deploy, inspect browser DevTools Security/Console and copy the exact `Mixed Content` URL.
+- The remaining likely culprit would be an external script/style inserted outside this Web app or Lucky injecting content.
+- Because CSP is not yet enforced, this fix avoids mixed content by rewriting known Web app display paths rather than blocking everything globally.

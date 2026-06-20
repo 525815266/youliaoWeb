@@ -2691,6 +2691,9 @@ async function ensureSignalRConnection() {
   if (!window.signalR?.HubConnectionBuilder) {
     throw new Error("SignalR browser client is not loaded");
   }
+  if (window.location.protocol === "https:" && /^http:\/\//i.test(getSignalRBaseUrl())) {
+    throw new Error("HTTPS 页面已禁用浏览器直连 HTTP SignalR，请使用本地 SignalR 桥");
+  }
   const accountId = getSignalRAccountId();
   if (!accountId) {
     throw new Error("missing account id for SignalR registration");
@@ -3795,7 +3798,7 @@ function renderFriendSourceCount(source) {
 
 function renderFriendRequestRow(item) {
   const avatar = item.avatar
-    ? `<img class="friend-avatar" src="${escapeAttr(normalizeImageUrl(item.avatar))}" alt="">`
+    ? `<img class="friend-avatar" src="${escapeAttr(getDisplayMediaUrl(item.avatar))}" alt="">`
     : `<span class="friend-avatar">${escapeHtml(getInitial(item.nickName))}</span>`;
   const canOperate = Number(item.status || 0) === 0 || state.friendRequestStatus === "";
   return `
@@ -5641,7 +5644,8 @@ function renderMessageContent(message) {
   const content = message.content || "";
   if (message.contentType === 1 || isImageUrl(content)) {
     const imageUrl = normalizeImageUrl(content);
-    return `<button class="message-image-button" type="button" data-image-preview="${escapeAttr(imageUrl)}" aria-label="预览聊天图片"><img class="message-image" src="${escapeAttr(imageUrl)}" alt="聊天图片"></button>`;
+    const displayImageUrl = getDisplayMediaUrl(imageUrl);
+    return `<button class="message-image-button" type="button" data-image-preview="${escapeAttr(imageUrl)}" aria-label="预览聊天图片"><img class="message-image" src="${escapeAttr(displayImageUrl)}" alt="聊天图片"></button>`;
   }
   const fileCard = buildMessageFileCard(message);
   if (fileCard) return renderMessageFileCard(fileCard);
@@ -5787,7 +5791,7 @@ function renderMessageLinkCard(card, message) {
           <span>${escapeHtml(card.siteName || host || status)}</span>
         </div>
         <div class="link-card-thumb ${hasImage ? "" : "is-empty"} ${card.imageKind === "site-logo" ? "is-site-logo" : ""}">
-          ${hasImage ? `<img src="${escapeAttr(normalizeImageUrl(card.image))}" alt="${escapeAttr(card.siteBrand || card.siteName || "网站")}"${card.imageFallback ? ` onerror="this.onerror=null;this.src='${escapeAttr(card.imageFallback)}';"` : ""}>` : `<span>${escapeHtml(fallbackText)}</span>`}
+          ${hasImage ? `<img src="${escapeAttr(getDisplayMediaUrl(card.image))}" alt="${escapeAttr(card.siteBrand || card.siteName || "网站")}"${card.imageFallback ? ` onerror="this.onerror=null;this.src='${escapeAttr(card.imageFallback)}';"` : ""}>` : `<span>${escapeHtml(fallbackText)}</span>`}
         </div>
       </div>
       <div class="link-card-actions">
@@ -5876,12 +5880,12 @@ function renderMessageMiniProgramCard(card) {
   return `
     <article class="message-mini-card">
       <div class="mini-card-app">
-        ${card.appIcon ? `<img src="${escapeAttr(normalizeImageUrl(card.appIcon))}" alt="">` : '<span class="mini-card-app-mark" aria-hidden="true"></span>'}
+        ${card.appIcon ? `<img src="${escapeAttr(getDisplayMediaUrl(card.appIcon))}" alt="">` : '<span class="mini-card-app-mark" aria-hidden="true"></span>'}
         <span>${escapeHtml(card.appName || "小程序")}</span>
       </div>
       <strong class="mini-card-heading">${escapeHtml(card.title || card.desc || "小程序")}</strong>
       <div class="mini-card-cover${card.imagePlaceholder ? " is-placeholder" : ""}">
-        <img src="${escapeAttr(normalizeImageUrl(card.image))}" alt=""${card.imageFallback ? ` onerror="this.onerror=null;this.src='${escapeAttr(card.imageFallback)}';"` : ""}>
+        <img src="${escapeAttr(getDisplayMediaUrl(card.image))}" alt=""${card.imageFallback ? ` onerror="this.onerror=null;this.src='${escapeAttr(card.imageFallback)}';"` : ""}>
       </div>
       <div class="mini-card-footer">
         <span class="mini-card-mark" aria-hidden="true"></span>
@@ -6662,32 +6666,42 @@ function renderActiveLinkPreview() {
     el.linkPreviewOpen.disabled = !canOpenExternal;
     el.linkPreviewBody.innerHTML = `
       <div class="link-preview-image-wrap">
-        <img class="link-preview-image" src="${escapeAttr(url)}" alt="聊天图片预览">
+        <img class="link-preview-image" src="${escapeAttr(getDisplayMediaUrl(url))}" alt="聊天图片预览">
       </div>
     `;
     return;
   }
   const videoUrl = getDirectPreviewVideoUrl(meta);
   const playerUrl = getPreviewPlayerUrl(meta);
-  const imageUrl = meta.image ? normalizeImageUrl(meta.image) : "";
+  const imageUrl = meta.image ? getDisplayMediaUrl(meta.image) : "";
   if (videoUrl) {
     el.linkPreviewBody.innerHTML = `
-      <video class="link-preview-video" src="${escapeAttr(videoUrl)}" controls playsinline poster="${escapeAttr(imageUrl)}"></video>
+      <video class="link-preview-video" src="${escapeAttr(getDisplayMediaUrl(videoUrl))}" controls playsinline poster="${escapeAttr(imageUrl)}"></video>
     `;
     return;
   }
-  if (playerUrl) {
+  const embeddablePlayerUrl = getPreviewFrameUrl(playerUrl);
+  if (playerUrl && !embeddablePlayerUrl) {
+    el.linkPreviewBody.innerHTML = '<div class="empty-state">HTTPS blocked an embedded HTTP preview. Use Open Page to view it separately.</div>';
+    return;
+  }
+  if (embeddablePlayerUrl) {
     el.linkPreviewBody.innerHTML = `
-      <iframe class="link-preview-frame" src="${escapeAttr(playerUrl)}" title="${escapeAttr(title)}" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" allow="fullscreen; autoplay; encrypted-media; picture-in-picture"></iframe>
+      <iframe class="link-preview-frame" src="${escapeAttr(embeddablePlayerUrl)}" title="${escapeAttr(title)}" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" allow="fullscreen; autoplay; encrypted-media; picture-in-picture"></iframe>
       <div class="link-preview-fallback">
         <span>${escapeHtml(meta.loading ? "正在获取视频预览..." : "如果预览为空白，说明目标网页禁止嵌入。")}</span>
       </div>
     `;
     return;
   }
-  if (url) {
+  const embeddableUrl = getPreviewFrameUrl(url);
+  if (url && !embeddableUrl) {
+    el.linkPreviewBody.innerHTML = '<div class="empty-state">HTTPS blocked an embedded HTTP page preview. Use Open Page to view it separately.</div>';
+    return;
+  }
+  if (embeddableUrl) {
     el.linkPreviewBody.innerHTML = `
-      <iframe class="link-preview-frame" src="${escapeAttr(url)}" title="${escapeAttr(title)}" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+      <iframe class="link-preview-frame" src="${escapeAttr(embeddableUrl)}" title="${escapeAttr(title)}" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
       <div class="link-preview-fallback">
         <span>${escapeHtml(meta.loading ? "正在获取网页预览..." : meta.failed ? "网页可能禁止嵌入，仍可打开原网页。" : "如果页面为空白，说明目标网页禁止嵌入。")}</span>
       </div>
@@ -9187,9 +9201,10 @@ function renderSkillImageStrip(skillOrSuggestion, options = {}) {
     <div class="skill-image-strip" aria-label="skill 图片">
       ${visibleImages.map((step, index) => {
         const imageUrl = normalizeImageUrl(step.url || step.content);
+        const displayImageUrl = getDisplayMediaUrl(imageUrl);
         return `
           <button class="skill-image-thumb" type="button" data-image-preview="${escapeAttr(imageUrl)}" title="${escapeAttr(step.label || `skill 图片 ${index + 1}`)}">
-            <img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(step.label || `skill 图片 ${index + 1}`)}">
+            <img src="${escapeAttr(displayImageUrl)}" alt="${escapeAttr(step.label || `skill 图片 ${index + 1}`)}">
           </button>
         `;
       }).join("")}
@@ -11227,7 +11242,7 @@ function renderOrderCard(order) {
   return `
     <article class="order-card">
       <div class="order-row">
-        ${order.imageUrl ? `<img class="order-image" src="${escapeAttr(normalizeImageUrl(order.imageUrl))}" alt="">` : `<span class="order-image order-image-fallback">${escapeHtml(order.platformName.slice(0, 1))}</span>`}
+        ${order.imageUrl ? `<img class="order-image" src="${escapeAttr(getDisplayMediaUrl(order.imageUrl))}" alt="">` : `<span class="order-image order-image-fallback">${escapeHtml(order.platformName.slice(0, 1))}</span>`}
         <div class="order-main">
           <h4 title="${escapeAttr(title)}">${escapeHtml(title)}</h4>
           <p class="order-pay">付款金额：${copyMoney(order.amount, "money-pay")}</p>
@@ -12138,9 +12153,42 @@ function normalizeImageUrl(value) {
   return url;
 }
 
-function normalizePreviewImageUrl(value) {
+function isHttpsPage() {
+  return typeof window !== "undefined" && window.location?.protocol === "https:";
+}
+
+function getDisplayMediaUrl(value) {
   const url = normalizeImageUrl(value).trim();
+  if (!url) return "";
+  if (/^(data:|blob:)/i.test(url)) return url;
+  if (/^https:\/\//i.test(url)) return url;
+  if (/^http:\/\//i.test(url)) {
+    return isHttpsPage() ? `/local/media-proxy?url=${encodeURIComponent(url)}` : url;
+  }
+  if (/^(\/(?!\/)|\.{1,2}\/)/.test(url)) {
+    try {
+      return new URL(url, window.location.href).toString();
+    } catch {
+      return "";
+    }
+  }
+  return url;
+}
+
+function canEmbedInHttps(value) {
+  const url = String(value || "").trim();
+  return !isHttpsPage() || !/^http:\/\//i.test(url);
+}
+
+function getPreviewFrameUrl(value) {
+  const url = normalizeLinkUrl(value);
+  return canEmbedInHttps(url) ? url : "";
+}
+
+function normalizePreviewImageUrl(value) {
+  const url = getDisplayMediaUrl(value).trim();
   if (/^https?:\/\//i.test(url) || /^blob:/i.test(url) || /^data:image\//i.test(url)) return url;
+  if (/^\/local\/media-proxy\?/i.test(url)) return url;
   if (/^(\/(?!\/)|\.{1,2}\/)/.test(url)) {
     try {
       return new URL(url, window.location.href).toString();
