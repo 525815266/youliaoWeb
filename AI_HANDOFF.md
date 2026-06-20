@@ -3168,3 +3168,45 @@ Do not regress:
   - `data/reply-skills.json`
   - `logs/api-capture.ndjson`
 
+
+
+## 2026-06-20 Handoff: Skill Platform Detection for Douyin Orders
+
+User issue:
+
+- Skill training knew messages contained order numbers, but did not reliably classify the platform.
+- Douyin order ids such as `5120219343689007205` were not detected as `douyin`.
+- Generic numeric rules and default Taobao order filter state could pollute platform matching.
+
+Changed files:
+
+- `public/app.js`
+- `server.js`
+- `public/skill-training.js`
+
+Important logic:
+
+- `public/app.js`:
+  - Douyin platform aliases now include Douyin Shop terms.
+  - Douyin high-confidence order pattern: `/^5\d{18}$/`.
+  - `detectPlatformOrderNo(text)` now uses explicit text platform, real order state, PDD pattern, then Douyin 5-prefix 19-digit rule before generic numeric rules.
+  - `detectOrderPlatformFromState()` no longer returns Taobao simply because `state.orderType=0`; it requires real order context.
+- `server.js`:
+  - `detectTrainingOrderPlatformKey(text)` mirrors the Douyin/PDD order-id logic for skill training and PromptWorks imports.
+  - `detectTrainingPlatformKey(text)` returns `douyin` for explicit Douyin aliases before generic platforms.
+
+Verified:
+
+- `npm run check` passed.
+- Frontend VM test proved:
+  - `5120219343689007205` -> `douyin`
+  - PDD hyphen id -> `pdd`
+  - default Taobao filter outside order context -> no platform
+  - active order tool with Douyin filter -> `douyin`
+- Server VM test proved the same for training sampler.
+
+Do not regress:
+
+- Keep Douyin high-confidence numeric detection before Taobao/JD generic pure-number matching.
+- Do not use default order filter state as platform evidence unless the order tool actually has keyword/data/context.
+- If adding new platform order patterns, update both frontend matching and server training sampler.

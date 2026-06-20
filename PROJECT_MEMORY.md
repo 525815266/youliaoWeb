@@ -5887,3 +5887,69 @@ http://192.168.9.83:5177
 - 如果 PromptWorks 里没有模型，会返回“还没有可用模型”，需要先在 PromptWorks 的 LLM 管理配置 provider/model。
 - 不要把 CodeBuddy 直接塞进 PromptWorks，除非 PromptWorks 支持 `X-Api-Key` 或走 Web 中转。
 
+
+
+## 76. 2026-06-20 Skill order platform detection and Douyin order classification
+
+User issue:
+
+- Skill training and skill matching could detect that a message contains an order number, but could not reliably classify which platform the order belongs to.
+- Douyin orders, especially pure numeric order ids like `5120219343689007205`, were not classified as `douyin`.
+- Because the platform stayed `unknown` or was swallowed by generic Taobao/JD numeric rules, learned skill buckets could not produce platform-specific replies.
+
+Files changed:
+
+- `C:\youchat-dev-web\public\app.js`
+- `C:\youchat-dev-web\server.js`
+- `C:\youchat-dev-web\public\skill-training.js`
+
+Frontend changes:
+
+1. Expanded the Douyin platform definition:
+   - aliases now include `douyin`, `iesdouyin`, `aweme`, and Douyin Shop naming.
+   - high-confidence order pattern added: `/^5\d{18}$/`.
+
+2. Reworked `detectPlatformOrderNo(text)`:
+   - detects explicit platform words in message text first.
+   - uses current right-side order context only when there is real order context, not merely because the order filter defaults to Taobao.
+   - checks PDD hyphen format first.
+   - checks Douyin 19-digit 5-prefix order numbers before generic numeric platform rules.
+
+3. Reworked `detectOrderPlatformFromState()`:
+   - no longer returns Taobao just because `state.orderType` defaults to `0`.
+   - prefers actual loaded order rows, order platform name, or active order-tool context with keyword/records.
+
+Server changes:
+
+1. Added `detectTrainingOrderPlatformKey(text)` for skill training and PromptWorks/import sampling.
+2. Updated `detectTrainingPlatformKey(text)` so sampled manual replies classify:
+   - PDD hyphen order ids as `pdd`.
+   - 19-digit 5-prefix Douyin order ids as `douyin`.
+   - explicit Douyin text/aliases as `douyin`.
+
+Training UI change:
+
+- The skill training platform input placeholder now includes `douyin`:
+
+`taobao / jd / pdd / douyin`
+
+Verification:
+
+- `npm run check` passed.
+- Frontend function VM test:
+  - `5120219343689007205` -> `douyin`
+  - `20260601-123456789` -> `pdd`
+  - explicit Douyin text + numeric order -> `douyin`
+  - default non-order page Taobao filter -> empty platform, no pollution
+  - active order tool with Douyin filter + numeric order -> `douyin`
+- Server function VM test:
+  - `5120219343689007205` -> `douyin`
+  - explicit Douyin text + numeric order -> `douyin`
+  - PDD hyphen order -> `pdd`
+  - explicit Taobao text -> `taobao`
+
+Follow-up:
+
+- This solves the current Douyin-order classification gap, but platform-specific replies still depend on enough approved/learned skills per platform.
+- If later real data shows other Douyin prefixes, extend the high-confidence rule in both `public/app.js` and `server.js` together.
+- Avoid reintroducing default `state.orderType=0` as a platform source outside the actual order tool context.

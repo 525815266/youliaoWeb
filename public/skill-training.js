@@ -442,7 +442,7 @@ function renderTrainingItem(item) {
             </label>
             <label>
               <span>平台</span>
-              <input data-field="platformKey" value="${escapeAttr(item.platformKey || "")}" placeholder="taobao / jd / pdd" />
+              <input data-field="platformKey" value="${escapeAttr(item.platformKey || "")}" placeholder="taobao / jd / pdd / douyin" />
             </label>
             <label>
               <span>意图</span>

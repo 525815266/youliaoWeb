@@ -113,8 +113,8 @@ const SKILL_PLATFORM_DEFS = [
   {
     key: "douyin",
     label: "抖音",
-    aliases: ["抖音", "douyin", "iesdouyin", "aweme"],
-    orderPatterns: []
+    aliases: ["抖音", "抖店", "抖音小店", "douyin", "iesdouyin", "aweme"],
+    orderPatterns: [/^5\d{18}$/]
   },
   {
     key: "kuaishou",
@@ -8830,27 +8830,78 @@ function collectSkillContextMeta(triggerMessage, contextText = "") {
 function detectPlatformOrderNo(text) {
   const rawText = String(text || "");
   const candidates = rawText.match(/[A-Za-z0-9-]{8,24}/g) || [];
+  const explicitPlatformKey = detectPlatformKeyFromText(rawText);
+  const statePlatformKey = detectOrderPlatformFromState();
   for (const candidate of candidates) {
     const orderNo = normalizeOrderNo(candidate);
     if (!orderNo) continue;
-    for (const platform of SKILL_PLATFORM_DEFS) {
-      if ((platform.orderPatterns || []).some((pattern) => pattern.test(orderNo))) {
-        return { orderNo, platformKey: platform.key, source: "message" };
-      }
+    const platformKey = inferOrderPlatformKey(orderNo, {
+      explicitPlatformKey,
+      statePlatformKey
+    });
+    if (platformKey) {
+      return { orderNo, platformKey, source: explicitPlatformKey ? "message-platform" : statePlatformKey ? "order-state" : "message" };
     }
   }
   return { orderNo: "", platformKey: "", source: "" };
 }
 
+function inferOrderPlatformKey(orderNo, options = {}) {
+  const normalized = normalizeOrderNo(orderNo);
+  if (!normalized) return "";
+  if (/^\d{8}-\d{4,}$/.test(normalized)) return "pdd";
+
+  const explicitPlatformKey = options.explicitPlatformKey || "";
+  if (explicitPlatformKey && isOrderNoCompatibleWithPlatform(normalized, explicitPlatformKey, { allowGeneric: true })) {
+    return explicitPlatformKey;
+  }
+
+  const statePlatformKey = options.statePlatformKey || "";
+  if (statePlatformKey && isOrderNoCompatibleWithPlatform(normalized, statePlatformKey, { allowGeneric: true })) {
+    return statePlatformKey;
+  }
+
+  // Douyin Shop order ids often use 19 digits starting with 5, so check before generic numeric rules.
+  if (/^5\d{18}$/.test(normalized)) return "douyin";
+
+  for (const platform of SKILL_PLATFORM_DEFS) {
+    if ((platform.orderPatterns || []).some((pattern) => pattern.test(normalized))) {
+      return platform.key;
+    }
+  }
+  return "";
+}
+
+function isOrderNoCompatibleWithPlatform(orderNo, platformKey, options = {}) {
+  const normalized = normalizeOrderNo(orderNo);
+  const platform = getPlatformDefByKey(platformKey);
+  if (!normalized || !platform) return false;
+  if ((platform.orderPatterns || []).some((pattern) => pattern.test(normalized))) return true;
+  if (!options.allowGeneric) return false;
+  if (platformKey === "pdd") return /^\d{8}-\d{4,}$/.test(normalized);
+  return /^\d{10,24}$/.test(normalized);
+}
+
+function detectPlatformKeyFromText(text) {
+  const normalized = normalizeForMatch(text);
+  if (!normalized) return "";
+  return SKILL_PLATFORM_DEFS.find((platform) => (
+    (platform.aliases || []).some((alias) => normalized.includes(normalizeForMatch(alias)))
+  ))?.key || "";
+}
+
 function detectOrderPlatformFromState() {
-  const activeOrderType = Number(state.orderType);
-  const fromFilter = getOrderPlatformKey(activeOrderType);
-  if (fromFilter) return fromFilter;
   const firstOrder = Array.isArray(state.orders) ? state.orders[0] : null;
   if (firstOrder?.platformKey) return firstOrder.platformKey;
   const byName = normalizeForMatch(firstOrder?.platformName || "");
-  if (!byName) return "";
-  return SKILL_PLATFORM_DEFS.find((platform) => platform.aliases.some((alias) => byName.includes(normalizeForMatch(alias))))?.key || "";
+  const byOrderName = byName
+    ? SKILL_PLATFORM_DEFS.find((platform) => platform.aliases.some((alias) => byName.includes(normalizeForMatch(alias))))?.key || ""
+    : "";
+  if (byOrderName) return byOrderName;
+
+  const fromFilter = getOrderPlatformKey(state.orderType);
+  const hasOrderContext = state.activeTool === "order" && (state.orderKeyword || state.orderTotal || (Array.isArray(state.orders) && state.orders.length));
+  return hasOrderContext ? fromFilter : "";
 }
 
 function detectSkillIntentKey(text) {
