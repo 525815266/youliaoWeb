@@ -8043,7 +8043,8 @@ async function learnFromSentSuggestion(suggestion, steps = []) {
     .filter(Boolean);
   if (!reply && !images.length) return;
   const matchedSkill = suggestion.skillId ? getSkillById(suggestion.skillId) : null;
-  const platformKey = suggestion.platformKey || detectPlatformOrderNo(prompt).platformKey || detectOrderPlatformFromState() || "";
+  const promptPlatformKey = detectPlatformOrderNo(prompt).platformKey || detectOrderPlatformFromState() || "";
+  const platformKey = promptPlatformKey || suggestion.platformKey || "";
   const intentKey = suggestion.intentKey || detectSkillIntentKey(prompt) || "";
   if (matchedSkill && !matchedSkill.noReply) {
     await learnMatchedSkillOverride(matchedSkill, {
@@ -8776,6 +8777,67 @@ function getOrderPlatformKey(orderType) {
   return ORDER_TYPE_PLATFORM_KEYS[Number(orderType)] || "";
 }
 
+function detectPlatformKeyFromOrderName(value) {
+  const normalized = normalizeForMatch(value);
+  if (!normalized) return "";
+  return SKILL_PLATFORM_DEFS.find((platform) => (
+    platform.aliases.some((alias) => normalized.includes(normalizeForMatch(alias)))
+  ))?.key || "";
+}
+
+function getOrderRecordPlatformKey(order) {
+  if (!order) return "";
+  return String(order.platformKey || "")
+    || getOrderPlatformKey(order.orderType ?? order.type)
+    || detectPlatformKeyFromOrderName([
+      order.platformName,
+      order.platform,
+      order.source,
+      order.appName,
+      order.shopType,
+      order.orderSource,
+      order.title,
+      order.remark
+    ].filter(Boolean).join(" "));
+}
+
+function getOrderRecordNumbers(order) {
+  if (!order || typeof order !== "object") return [];
+  const direct = [
+    order.orderNo,
+    order.parentOrderNo,
+    order.orderId,
+    order.parentOrderId,
+    order.tradeId,
+    order.tradeNo,
+    order.tradeParentId,
+    order.tradeParentNo,
+    order.orderSn,
+    order.orderSN,
+    order.outOrderNo,
+    order.bizOrderNo,
+    order.id
+  ];
+  const byKey = Object.entries(order)
+    .filter(([key, value]) => /order|trade|sn|no/i.test(key) && ["string", "number"].includes(typeof value))
+    .map(([, value]) => value);
+  return [...new Set([...direct, ...byKey]
+    .map(normalizeOrderNo)
+    .filter((item) => item && item !== "订单"))];
+}
+
+function detectOrderPlatformFromRecords(orderNo) {
+  const target = normalizeOrderNo(orderNo);
+  if (!target || !Array.isArray(state.orders)) return "";
+  for (const order of state.orders) {
+    const numbers = getOrderRecordNumbers(order);
+    if (!numbers.some((item) => item === target || item.includes(target) || target.includes(item))) continue;
+    const platformKey = getOrderRecordPlatformKey(order);
+    if (platformKey) return platformKey;
+  }
+  return "";
+}
+
 function getPlatformDefByKey(key) {
   return key ? SKILL_PLATFORM_LOOKUP.get(String(key)) || null : null;
 }
@@ -8835,12 +8897,15 @@ function detectPlatformOrderNo(text) {
   for (const candidate of candidates) {
     const orderNo = normalizeOrderNo(candidate);
     if (!orderNo) continue;
+    const recordPlatformKey = detectOrderPlatformFromRecords(orderNo);
     const platformKey = inferOrderPlatformKey(orderNo, {
       explicitPlatformKey,
+      recordPlatformKey,
       statePlatformKey
     });
     if (platformKey) {
-      return { orderNo, platformKey, source: explicitPlatformKey ? "message-platform" : statePlatformKey ? "order-state" : "message" };
+      const source = explicitPlatformKey ? "message-platform" : recordPlatformKey ? "order-record" : statePlatformKey ? "order-state" : "message";
+      return { orderNo, platformKey, source };
     }
   }
   return { orderNo: "", platformKey: "", source: "" };
@@ -8856,13 +8921,18 @@ function inferOrderPlatformKey(orderNo, options = {}) {
     return explicitPlatformKey;
   }
 
+  const recordPlatformKey = options.recordPlatformKey || "";
+  if (recordPlatformKey && isOrderNoCompatibleWithPlatform(normalized, recordPlatformKey, { allowGeneric: true })) {
+    return recordPlatformKey;
+  }
+
+  // Douyin Shop order ids often use 19 digits starting with 5, so check before generic/default numeric rules.
+  if (/^5\d{18}$/.test(normalized)) return "douyin";
+
   const statePlatformKey = options.statePlatformKey || "";
   if (statePlatformKey && isOrderNoCompatibleWithPlatform(normalized, statePlatformKey, { allowGeneric: true })) {
     return statePlatformKey;
   }
-
-  // Douyin Shop order ids often use 19 digits starting with 5, so check before generic numeric rules.
-  if (/^5\d{18}$/.test(normalized)) return "douyin";
 
   for (const platform of SKILL_PLATFORM_DEFS) {
     if ((platform.orderPatterns || []).some((pattern) => pattern.test(normalized))) {
@@ -8883,21 +8953,13 @@ function isOrderNoCompatibleWithPlatform(orderNo, platformKey, options = {}) {
 }
 
 function detectPlatformKeyFromText(text) {
-  const normalized = normalizeForMatch(text);
-  if (!normalized) return "";
-  return SKILL_PLATFORM_DEFS.find((platform) => (
-    (platform.aliases || []).some((alias) => normalized.includes(normalizeForMatch(alias)))
-  ))?.key || "";
+  return detectPlatformKeyFromOrderName(text);
 }
 
 function detectOrderPlatformFromState() {
   const firstOrder = Array.isArray(state.orders) ? state.orders[0] : null;
-  if (firstOrder?.platformKey) return firstOrder.platformKey;
-  const byName = normalizeForMatch(firstOrder?.platformName || "");
-  const byOrderName = byName
-    ? SKILL_PLATFORM_DEFS.find((platform) => platform.aliases.some((alias) => byName.includes(normalizeForMatch(alias))))?.key || ""
-    : "";
-  if (byOrderName) return byOrderName;
+  const byRecord = getOrderRecordPlatformKey(firstOrder);
+  if (byRecord) return byRecord;
 
   const fromFilter = getOrderPlatformKey(state.orderType);
   const hasOrderContext = state.activeTool === "order" && (state.orderKeyword || state.orderTotal || (Array.isArray(state.orders) && state.orders.length));
@@ -9367,7 +9429,7 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
   const matchedSkillId = options.matchedSkill?.skillId;
   const matchedSkill = matchedSkillId ? getSkillById(matchedSkillId) : null;
   const contextMeta = collectSkillContextMeta(latest, prompt);
-  const detectedPlatformKey = options.matchedSkill?.platformKey || contextMeta.platformKey || detectOrderPlatformFromState() || "";
+  const detectedPlatformKey = contextMeta.platformKey || detectOrderPlatformFromState() || options.matchedSkill?.platformKey || "";
   const detectedIntentKey = options.matchedSkill?.intentKey || contextMeta.intentKey || "";
   if (canLearnAsMatchedSkill(matchedSkill, latest, prompt, {
     ...contextMeta,
@@ -10048,10 +10110,14 @@ async function loadHistoryMessages(page = 1, mode = "replace", options = {}) {
 }
 
 function normalizeOrder(item) {
-  const platformKey = getOrderPlatformKey(item.orderType ?? item.type ?? state.orderType) || getOrderPlatformKey(state.orderType);
+  const rawOrderNo = item.parentOrderNo || item.orderNo || item.orderId || item.id || "订单";
+  const platformKey = getOrderPlatformKey(item.orderType ?? item.type)
+    || detectPlatformKeyFromOrderName([item.platformName, item.platform, item.source, item.appName, item.shopType, item.orderSource, item.title, item.remark].filter(Boolean).join(" "))
+    || inferOrderPlatformKey(rawOrderNo, { statePlatformKey: getOrderPlatformKey(state.orderType) })
+    || getOrderPlatformKey(state.orderType);
   return {
     ...item,
-    orderNo: item.parentOrderNo || item.orderNo || item.orderId || item.id || "订单",
+    orderNo: rawOrderNo,
     status: [item.statusStr, item.reStatusStr].filter(Boolean).join("/") || item.statusName || item.status || "未知",
     amount: item.payment ?? item.amount ?? item.orderAmount ?? item.price ?? "-",
     income: item.commission ?? item.income ?? item.commissionAmount ?? "-",

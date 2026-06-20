@@ -693,27 +693,33 @@ function chooseSkillTrainingImages(skill, manualSummary) {
 function detectTrainingOrderPlatformKey(text) {
   const value = String(text || "");
   const candidates = value.match(/[A-Za-z0-9-]{8,24}/g) || [];
+  const explicitPlatformKey = detectTrainingPlatformAliasKey(value);
   for (const candidate of candidates) {
     const orderNo = String(candidate || "").trim().replace(/[^\dA-Za-z-]/g, "");
     if (!orderNo) continue;
     if (/^\d{8}-\d{4,}$/.test(orderNo)) return "pdd";
-    // Douyin Shop order ids often use 19 digits starting with 5, so check before generic numeric rules.
     if (/^5\d{18}$/.test(orderNo)) return "douyin";
+    if (explicitPlatformKey && /^\d{10,24}$/.test(orderNo)) return explicitPlatformKey;
   }
   return "";
 }
 
-function detectTrainingPlatformKey(text) {
+function detectTrainingPlatformAliasKey(text) {
   const value = String(text || "").toLowerCase();
-  if (/\d{8}-\d{4,}/.test(value) || /(拼多多|pdd|pinduoduo|yangkeduo|多多)/i.test(value)) return "pdd";
   if (/(抖音|抖店|抖音小店|douyin|iesdouyin|aweme)/i.test(value)) return "douyin";
+  if (/(拼多多|pdd|pinduoduo|yangkeduo|多多)/i.test(value)) return "pdd";
   if (/(京东|jd|jdmobile)/i.test(value)) return "jd";
   if (/(淘宝|天猫|taobao|tmall|tbopen)/i.test(value)) return "taobao";
   if (/(唯品会|vipshop)/i.test(value)) return "vip";
   if (/(美团|meituan|大众点评)/i.test(value)) return "meituan";
-  if (/(饿了么|eleme)/i.test(value)) return "eleme";
+  if (/(饿了么|eleme|ele\.me)/i.test(value)) return "eleme";
   if (/(快手|kuaishou|kwai|gifshow)/i.test(value)) return "kuaishou";
-  return detectTrainingOrderPlatformKey(value);
+  return "";
+}
+
+function detectTrainingPlatformKey(text) {
+  const value = String(text || "");
+  return detectTrainingOrderPlatformKey(value) || detectTrainingPlatformAliasKey(value);
 }
 
 function detectTrainingIntentKey(text) {

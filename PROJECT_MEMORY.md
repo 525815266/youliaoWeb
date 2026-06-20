@@ -5953,3 +5953,60 @@ Follow-up:
 - This solves the current Douyin-order classification gap, but platform-specific replies still depend on enough approved/learned skills per platform.
 - If later real data shows other Douyin prefixes, extend the high-confidence rule in both `public/app.js` and `server.js` together.
 - Avoid reintroducing default `state.orderType=0` as a platform source outside the actual order tool context.
+
+
+## 77. 2026-06-20 Platform-aware skill learning from real order records
+
+User issue:
+
+- Skill could identify that a customer sent an order number, but sometimes still failed to classify the platform, especially Douyin orders.
+- A stale or default platform state, such as the order filter defaulting to Taobao, could pollute automatic skill learning.
+- If an old suggestion was already classified under the wrong platform, manual replies could continue learning into that wrong platform bucket.
+
+Files changed:
+
+- `C:\youchat-dev-web\public\app.js`
+- `C:\youchat-dev-web\server.js`
+
+Frontend changes:
+
+1. Added real order-record platform lookup:
+   - `getOrderRecordNumbers(order)` collects common order fields such as `orderNo`, `parentOrderNo`, `orderId`, `tradeNo`, `orderSn`, `bizOrderNo`, and other order/trade/sn/no-like keys.
+   - `detectOrderPlatformFromRecords(orderNo)` matches the customer message order id against the currently loaded right-side order list.
+   - When a match is found, `detectPlatformOrderNo(text)` returns source `order-record`, which is stronger than a generic filter state.
+
+2. Tightened platform priority:
+   - Explicit platform words in the customer text still win.
+   - Exact right-side order record matches are next.
+   - Douyin 19-digit 5-prefix ids are checked before default/generic numeric state matching.
+   - Default `state.orderType=0` can no longer swallow Douyin ids as Taobao.
+
+3. Improved skill learning priority:
+   - When sending or manually replying, the current prompt/order context platform is preferred over the old matched suggestion platform.
+   - This prevents an old Taobao-classified skill suggestion from forcing a Douyin/PDD/JD manual reply back into the wrong learning bucket.
+
+Server training changes:
+
+- `detectTrainingPlatformAliasKey(text)` separates explicit platform aliases from order-id shape matching.
+- `detectTrainingPlatformKey(text)` now checks order-id rules first, then explicit aliases.
+- Explicit platform aliases can classify generic numeric order ids for training imports, while high-confidence PDD/Douyin patterns still work without aliases.
+
+Verification:
+
+- `npm run check` passed.
+- Frontend VM verification:
+  - right-side order record `5120219343689007205` with `orderType=11` -> `douyin`, source `order-record`
+  - default Taobao state + `5120219343689007205` -> `douyin`
+  - `20260601-123456789` -> `pdd`
+  - `京东订单 3309003552115074869` -> `jd`
+- Server VM verification:
+  - `5120219343689007205` -> `douyin`
+  - `抖音订单 3309003552115074869` -> `douyin`
+  - `20260601-123456789` -> `pdd`
+  - `京东订单 3309003552115074869` -> `jd`
+  - `淘宝订单 3309003552115074869` -> `taobao`
+
+Follow-up:
+
+- Existing learned skills that were previously stored under the wrong platform may still need review in the skill training page, but new learning should no longer be polluted by default Taobao state or stale matched suggestions.
+- If real data shows more Douyin/Kuaishou/JD/PDD order-number shapes, add the pattern in both `public/app.js` and `server.js`, then rerun the VM verification.

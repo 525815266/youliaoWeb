@@ -3210,3 +3210,44 @@ Do not regress:
 - Keep Douyin high-confidence numeric detection before Taobao/JD generic pure-number matching.
 - Do not use default order filter state as platform evidence unless the order tool actually has keyword/data/context.
 - If adding new platform order patterns, update both frontend matching and server training sampler.
+
+
+## 2026-06-20 Handoff: Platform-aware Skill Learning from Order Records
+
+What changed after the first Douyin fix:
+
+- Added exact order-record platform matching in `public/app.js`.
+- New helper path:
+  - `getOrderRecordNumbers(order)`
+  - `getOrderRecordPlatformKey(order)`
+  - `detectOrderPlatformFromRecords(orderNo)`
+  - `detectPlatformOrderNo(text)`
+- `detectPlatformOrderNo(text)` now returns `source: "order-record"` when the customer order number matches a real right-side order row.
+- `inferOrderPlatformKey(orderNo, options)` now checks Douyin 19-digit 5-prefix ids before default/generic state platform matching.
+- Skill send/manual-learning platform priority now prefers current context platform before old suggestion platform, preventing stale skill matches from teaching the wrong platform.
+
+Server training:
+
+- `detectTrainingPlatformAliasKey(text)` now handles explicit aliases.
+- `detectTrainingPlatformKey(text)` checks order id patterns first, then aliases.
+- Training imports can classify generic numeric ids when text explicitly says Douyin/JD/Taobao/etc.
+
+Verified commands/tests:
+
+- `npm run check`
+- Frontend VM cases:
+  - record Douyin order `5120219343689007205` -> `douyin/order-record`
+  - default Taobao + `5120219343689007205` -> `douyin`
+  - PDD hyphen -> `pdd`
+  - explicit JD -> `jd`
+- Server VM cases:
+  - Douyin pattern -> `douyin`
+  - explicit Douyin numeric -> `douyin`
+  - PDD hyphen -> `pdd`
+  - explicit JD/Taobao -> correct platform
+
+Do not regress:
+
+- Current prompt/order context must outrank old matched suggestion platform when learning from a manual reply.
+- Right-side order record matches are real-data evidence; do not replace them with fake platform guesses.
+- Keep default `state.orderType=0` from classifying unrelated numeric ids as Taobao outside actual order context.
