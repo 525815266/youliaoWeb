@@ -432,6 +432,7 @@ const state = {
   contactListHasMore: false,
   contactListLoading: false,
   contactListAutoLoading: false,
+  contactListKeyboardActive: false,
   clearedListUntil: {},
   clearedContactState: loadClearedContactState(),
   messages: [],
@@ -756,16 +757,24 @@ function bindEvents() {
   el.toolContent.addEventListener("keydown", handleToolKeydown);
   el.messageList.addEventListener("click", handleMessageListClick);
   el.messageList.addEventListener("scroll", handleMessageListScroll);
+  el.contactList.addEventListener("focusin", () => {
+    state.contactListKeyboardActive = true;
+  });
+  el.contactList.addEventListener("mousedown", () => {
+    state.contactListKeyboardActive = true;
+  });
   el.contactList.addEventListener("click", handleContactListClick);
   el.contactList.addEventListener("keydown", handleContactListKeydown);
   el.contactList.addEventListener("contextmenu", handleContactContextMenu);
   el.contactList.addEventListener("scroll", handleContactListScroll);
   document.addEventListener("error", handleAvatarImageError, true);
   document.addEventListener("click", closeContextMenu);
+  document.addEventListener("click", handleContactListFocusOutside);
   document.addEventListener("click", closeClientSettingsMenuOnOutside);
   document.addEventListener("click", closeEmojiOnOutside);
   window.addEventListener("resize", closeEmojiPopover);
   document.addEventListener("keydown", (event) => {
+    if (handleGlobalContactListKeydown(event)) return;
     if (event.key === "Escape") {
       closeContextMenu();
       closeClientSettingsMenu();
@@ -4901,7 +4910,31 @@ function resetContactScopedState() {
   state.lastSkillAutoReplyKey = "";
 }
 
-function handleContactListClick(event) {
+function handleContactListFocusOutside(event) {
+  if (el.contactList?.contains(event.target)) return;
+  if (event.target?.closest?.("[data-list-tab]")) return;
+  state.contactListKeyboardActive = false;
+}
+
+function isEditableKeyTarget(target) {
+  if (!target) return false;
+  const tagName = String(target.tagName || "").toUpperCase();
+  return ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(tagName) || Boolean(target.isContentEditable);
+}
+
+function handleGlobalContactListKeydown(event) {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return false;
+  if (isEditableKeyTarget(event.target)) return false;
+  const activeElement = document.activeElement;
+  const isListFocused = Boolean(activeElement && el.contactList?.contains(activeElement));
+  if (!state.contactListKeyboardActive && !isListFocused) return false;
+  event.preventDefault();
+  state.contactListKeyboardActive = true;
+  selectAdjacentContact(event.key === "ArrowDown" ? 1 : -1);
+  return true;
+}
+
+async function handleContactListClick(event) {
   const actionTarget = event.target.closest("[data-contact-action]");
   if (actionTarget) {
     event.stopPropagation();
@@ -4912,12 +4945,16 @@ function handleContactListClick(event) {
 
   const card = event.target.closest("[data-contact-id]");
   if (!card) return;
-  selectContactById(card.dataset.contactId);
+  state.contactListKeyboardActive = true;
+  card.focus({ preventScroll: true });
+  await selectContactById(card.dataset.contactId);
+  focusContactCard(card.dataset.contactId, { preventScroll: true });
 }
 
 function handleContactListKeydown(event) {
   if (event.key === "ArrowUp" || event.key === "ArrowDown") {
     event.preventDefault();
+    event.stopPropagation();
     selectAdjacentContact(event.key === "ArrowDown" ? 1 : -1);
     return;
   }
@@ -4936,10 +4973,15 @@ function selectAdjacentContact(delta) {
   const next = state.contacts[nextIndex];
   if (!next) return;
   selectContactById(getContactId(next)).then(() => {
-    const card = el.contactList.querySelector(`[data-contact-id="${CSS.escape(String(getContactId(next)))}"]`);
-    card?.focus();
-    card?.scrollIntoView({ block: "nearest" });
+    focusContactCard(getContactId(next), { scroll: true });
   });
+}
+
+function focusContactCard(contactId, options = {}) {
+  const card = el.contactList?.querySelector(`[data-contact-id="${CSS.escape(String(contactId || ""))}"]`);
+  if (!card) return;
+  card.focus({ preventScroll: options.preventScroll === true });
+  if (options.scroll) card.scrollIntoView({ block: "nearest" });
 }
 
 function getInitial(name) {

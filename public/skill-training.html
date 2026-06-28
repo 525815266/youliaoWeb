@@ -15,13 +15,14 @@
         <span class="brand-shield small">U</span>
         <div>
           <strong>skill 训练中心</strong>
-          <span>按相似场景逐条复核自动学习</span>
+          <span>采样真实回复，AI 初审后由你逐条标记</span>
         </div>
       </div>
       <div class="training-actions">
         <a class="light-button training-link" href="/">返回工作台</a>
-        <button id="sampleTraining" class="light-button" type="button">闲时采样</button>
-        <button id="refreshTraining" class="send-button" type="button">刷新总结</button>
+        <button id="sampleTraining" class="light-button" type="button">采样日常回复</button>
+        <button id="aiAuditCurrent" class="light-button" type="button">AI 初审当前条</button>
+        <button id="refreshTraining" class="send-button" type="button">刷新待审</button>
       </div>
     </header>
 
@@ -40,10 +41,18 @@
             <input id="onlyIssues" type="checkbox" checked />
             <span>只看需要处理</span>
           </label>
+          <label class="training-check compact">
+            <input id="autoAuditTraining" type="checkbox" />
+            <span>打开页面时自动采样</span>
+          </label>
         </div>
 
         <div class="training-summary-grid" id="summaryGrid"></div>
         <div class="training-summary-lines" id="summaryLines"></div>
+        <div class="training-flow-note">
+          <strong>标记规则</strong>
+          <span>AI 初审只生成候选，不会自动入库。保存并启用：确认可直接推荐；保存修改：你已改好关键词、文案或图片；继续人工处理：先留在待审；不再使用：停用但保留记录；删除记录：彻底移除误学样本。</span>
+        </div>
 
         <section class="promptworks-import-panel" aria-label="PromptWorks 导入训练">
           <div class="promptworks-import-title">
@@ -72,13 +81,13 @@
 
       <section class="training-list-head">
         <div>
-          <strong>待审回复</strong>
+          <strong>数据标记队列</strong>
           <span id="trainingCount">0 条</span>
         </div>
         <div class="training-legend">
           <span class="training-chip danger">疑似脏学习</span>
           <span class="training-chip warn">待优化</span>
-          <span class="training-chip ok">可批准</span>
+          <span class="training-chip ok">可入库</span>
         </div>
       </section>
 

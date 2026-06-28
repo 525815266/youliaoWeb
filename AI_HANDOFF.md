@@ -3288,3 +3288,63 @@ If user reports the warning persists:
 1. Open DevTools > Security / Console on `https://yzkf.xmmhsj.cn:8001/`.
 2. Copy the exact `Mixed Content` URL.
 3. Add that render path to `getDisplayMediaUrl()` or block embedding if it is an iframe/script/style.
+
+
+## 2026-06-29 Handoff: Conversation Keyboard Navigation and Skill Training Marking UI
+
+Changed files:
+
+- `public/app.js`
+- `public/skill-training.html`
+- `public/skill-training.js`
+- `public/skill-training.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Conversation list keyboard behavior:
+
+- `state.contactListKeyboardActive` tracks whether the left conversation list is the current keyboard target.
+- Clicking, mousing down, or focusing the contact list enables keyboard navigation.
+- Global `ArrowUp` / `ArrowDown` handling now switches conversations when the list is active and the user is not typing in an input/textarea/select/button/contenteditable target.
+- `focusContactCard(contactId)` restores focus after async `selectContactById()` renders the list again.
+- The original contact-list keydown handler now stops propagation for up/down to avoid double navigation.
+
+Skill training UI:
+
+- Training page is now framed as a data marking queue, not an unclear approval screen.
+- Header actions:
+  - `采样日常回复` calls `/local/skill-training/sample`.
+  - `AI 初审当前条` runs the existing AI organize flow for the current visible card only.
+  - `刷新待审` reloads `/local/skill-training`.
+- `打开页面时自动采样` persists to `localStorage` key `youchat.training.autoAudit`. When enabled, the page samples real manual replies on load and every 10 minutes while open. It does not save skills automatically.
+- Button labels map to backend actions:
+  - `approve` -> 保存并启用
+  - `optimize` -> 保存修改
+  - `needs-review` -> 继续人工处理
+  - `disable` -> 不再使用
+  - `delete` -> 删除记录
+  - `clear-overrides` -> 清空误学样本
+
+Keyword tag editor:
+
+- The old plain keywords input is now rendered by `renderKeywordEditor()`.
+- Keywords display as removable chips. Users can click `x` to delete or type and press Enter to add.
+- `splitKeywordValue()` supports whitespace, comma, Chinese comma/dunhao, semicolon, pipe, and slash separators.
+- `collectPatch()` calls `syncAllKeywordEditors()` before saving so pending typed keywords are not lost.
+- Storage remains the original `keywords` field, so existing `data/reply-skills.json` stays compatible.
+
+Do not regress:
+
+- AI初审 must only fill candidate editor fields. It must not silently save, enable, disable, or delete a skill.
+- Auto sampling must not mutate mature enabled skills without later manual marking.
+- If adding more platform/intent labels, update `TRAINING_PLATFORM_LABELS`, `TRAINING_INTENT_LABELS`, and possibly the server-side detection in `server.js`.
+
+Verified:
+
+- `npm run check`
+- Local server health and training assets returned 200:
+  - `http://127.0.0.1:5177/health`
+  - `http://127.0.0.1:5177/skill-training.html`
+  - `http://127.0.0.1:5177/skill-training.js`
+  - `http://127.0.0.1:5177/skill-training.css`
+  - `http://127.0.0.1:5177/local/skill-training?scope=today`

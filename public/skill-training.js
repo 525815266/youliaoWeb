@@ -32,11 +32,40 @@ const AI_PRESETS = {
 };
 
 const COMPLETED_TRAINING_STATUSES = new Set(["approved", "optimized", "disabled", "overrides_cleared"]);
+const TRAINING_AUTO_AUDIT_STORAGE_KEY = "youchat.training.autoAudit";
+const TRAINING_AUTO_AUDIT_INTERVAL_MS = 10 * 60 * 1000;
+const TRAINING_PLATFORM_LABELS = {
+  taobao: "淘宝/天猫",
+  jd: "京东",
+  pdd: "拼多多",
+  douyin: "抖音",
+  kuaishou: "快手",
+  vip: "唯品会",
+  meituan: "美团",
+  eleme: "饿了么"
+};
+const TRAINING_INTENT_LABELS = {
+  order_missing: "订单查不到",
+  order_waiting: "下单后没提示",
+  bind_failed: "绑定失败",
+  withdraw_query: "提现相关",
+  rebate_status: "到账/饭粒状态",
+  manual_service: "转人工",
+  general: "通用"
+};
+const TRAINING_STAGE_LABELS = {
+  first_answer: "首次答复",
+  customer_followup: "客户追问",
+  after_service_reply: "客服补充",
+  no_reply_guidance: "未回复引导"
+};
 
 const state = {
   date: getTodayKey(),
   scope: "today",
   onlyIssues: true,
+  autoAudit: localStorage.getItem(TRAINING_AUTO_AUDIT_STORAGE_KEY) === "true",
+  autoAuditTimer: null,
   currentIndex: 0,
   items: [],
   summary: null,
@@ -57,12 +86,14 @@ function init() {
     "toastHost",
     "trainingDate",
     "onlyIssues",
+    "autoAuditTraining",
     "summaryGrid",
     "summaryLines",
     "trainingCount",
     "trainingList",
     "refreshTraining",
     "sampleTraining",
+    "aiAuditCurrent",
     "promptWorksContactLimit",
     "promptWorksMessageLimit",
     "promptWorksSampleLimit",
@@ -75,13 +106,18 @@ function init() {
   });
   el.trainingDate.value = state.date;
   el.onlyIssues.checked = state.onlyIssues;
+  el.autoAuditTraining.checked = state.autoAudit;
   bindEvents();
-  loadTraining();
+  loadTraining().finally(() => {
+    if (state.autoAudit) sampleTrainingReplies({ silent: true });
+    refreshAutoAuditTimer();
+  });
 }
 
 function bindEvents() {
   el.refreshTraining.addEventListener("click", () => loadTraining({ preserveIndex: true }));
   el.sampleTraining.addEventListener("click", sampleTrainingReplies);
+  el.aiAuditCurrent.addEventListener("click", auditCurrentTrainingItemWithAi);
   el.previewPromptWorksImport.addEventListener("click", () => importPromptWorksTraining({ dryRun: true }));
   el.runPromptWorksImport.addEventListener("click", () => importPromptWorksTraining({ dryRun: false }));
   el.trainingDate.addEventListener("change", () => {
@@ -94,6 +130,12 @@ function bindEvents() {
     state.currentIndex = 0;
     renderTraining();
   });
+  el.autoAuditTraining.addEventListener("change", () => {
+    state.autoAudit = el.autoAuditTraining.checked;
+    localStorage.setItem(TRAINING_AUTO_AUDIT_STORAGE_KEY, state.autoAudit ? "true" : "false");
+    refreshAutoAuditTimer();
+    if (state.autoAudit) sampleTrainingReplies({ silent: true });
+  });
   document.querySelectorAll("[data-scope]").forEach((button) => {
     button.addEventListener("click", () => {
       state.scope = button.dataset.scope || "today";
@@ -103,6 +145,8 @@ function bindEvents() {
     });
   });
   el.trainingList.addEventListener("click", handleTrainingClick);
+  el.trainingList.addEventListener("keydown", handleTrainingListKeydown);
+  el.trainingList.addEventListener("focusout", handleTrainingFocusout);
   document.addEventListener("keydown", handleTrainingKeydown);
 }
 
@@ -131,7 +175,18 @@ async function loadTraining(options = {}) {
   }
 }
 
-async function sampleTrainingReplies() {
+function refreshAutoAuditTimer() {
+  if (state.autoAuditTimer) {
+    window.clearInterval(state.autoAuditTimer);
+    state.autoAuditTimer = null;
+  }
+  if (!state.autoAudit) return;
+  state.autoAuditTimer = window.setInterval(() => {
+    sampleTrainingReplies({ silent: true });
+  }, TRAINING_AUTO_AUDIT_INTERVAL_MS);
+}
+
+async function sampleTrainingReplies(options = {}) {
   const previousId = getVisibleItems()[state.currentIndex]?.id || "";
   el.sampleTraining.disabled = true;
   el.sampleTraining.textContent = "采样中";
@@ -154,12 +209,12 @@ async function sampleTrainingReplies() {
     state.currentIndex = nextIndex >= 0 ? nextIndex : Math.min(state.currentIndex, Math.max(0, getVisibleItems().length - 1));
     renderTraining();
     const sampled = payload.sampled || {};
-    toast(`已采样 ${sampled.sampledPairs || 0} 组人工回复，新增 ${sampled.created || 0} 条，更新 ${sampled.updated || 0} 条。`);
+    if (!options.silent) toast(`已采样 ${sampled.sampledPairs || 0} 组人工回复，新增 ${sampled.created || 0} 条，更新 ${sampled.updated || 0} 条。`);
   } catch (error) {
-    toast(`闲时采样失败：${error.message}`, true);
+    if (!options.silent) toast(`日常回复采样失败：${error.message}`, true);
   } finally {
     el.sampleTraining.disabled = false;
-    el.sampleTraining.textContent = "闲时采样";
+    el.sampleTraining.textContent = "采样日常回复";
   }
 }
 
@@ -403,15 +458,16 @@ function renderTrainingItem(item) {
           <span>${escapeHtml(formatMetaLine(item))}</span>
         </div>
         <div class="training-chip-row">
+          ${renderTrainingLabelChips(item)}
           ${(item.reasons || []).map((reason) => `<span class="training-chip ${escapeAttr(reason.level)}">${escapeHtml(reason.label)}</span>`).join("")}
         </div>
       </header>
 
       <div class="training-card-grid">
         <section class="training-block training-cluster">
-          <h3>相似场景</h3>
+          <h3>客户场景</h3>
           <dl class="training-kv">
-            <div><dt>关键词</dt><dd>${escapeHtml((item.keywords || []).join("、") || "-")}</dd></div>
+            <div><dt>关键词</dt><dd>${renderReadonlyTags(item.keywords)}</dd></div>
             <div><dt>样本</dt><dd>${escapeHtml((item.samples || []).slice(0, 5).join(" / ") || "-")}</dd></div>
             <div><dt>阶段</dt><dd>${escapeHtml((item.stageLabels || []).join(" / ") || "-")}</dd></div>
             <div><dt>最近</dt><dd>${latestOverride ? escapeHtml(latestOverride.prompt || "-") : "-"}</dd></div>
@@ -434,7 +490,11 @@ function renderTrainingItem(item) {
         </section>
 
         <section class="training-block training-editor">
-          <h3>审核编辑</h3>
+          <h3>人工标记</h3>
+          <div class="training-ai-review">
+            <strong>${escapeHtml(buildReviewTitle(item))}</strong>
+            <span>${escapeHtml(item.recommendation || "请核对关键词、回复文案和图片后再入库。")}</span>
+          </div>
           <div class="training-editor-row">
             <label>
               <span>标题</span>
@@ -449,10 +509,7 @@ function renderTrainingItem(item) {
               <input data-field="intentKey" value="${escapeAttr(item.intentKey || "")}" placeholder="order_missing / withdraw_query" />
             </label>
           </div>
-          <label>
-            <span>关键词</span>
-            <input data-field="keywords" value="${escapeAttr((item.keywords || []).join(" "))}" />
-          </label>
+          ${renderKeywordEditor(item.keywords)}
           <label>
             <span>样本问题</span>
             <textarea data-field="samples" rows="2" placeholder="每行或空格分隔一个样本">${escapeHtml((item.samples || []).join("\n"))}</textarea>
@@ -477,20 +534,81 @@ function renderTrainingItem(item) {
       </div>
 
       <footer class="training-card-actions">
-        <button class="mini-action" type="button" data-local-action="use-current">填入当前</button>
-        ${latestOverride ? '<button class="mini-action" type="button" data-local-action="use-override">填入最近人工</button>' : ""}
-        ${latestOverride?.imageUrls?.length ? '<button class="mini-action" type="button" data-local-action="use-override-images">填入最近图片</button>' : ""}
-        <button class="mini-action" type="button" data-local-action="ai-organize">AI 整理</button>
+        <button class="mini-action" type="button" data-local-action="use-current">用入库话术</button>
+        ${latestOverride ? '<button class="mini-action" type="button" data-local-action="use-override">用最近人工回复</button>' : ""}
+        ${latestOverride?.imageUrls?.length ? '<button class="mini-action" type="button" data-local-action="use-override-images">用最近图片</button>' : ""}
+        <button class="mini-action" type="button" data-local-action="ai-organize">AI 审核整理</button>
         <span class="training-action-spacer"></span>
-        <button class="mini-action ghost" type="button" data-training-action="needs-review">标记待优化</button>
-        <button class="mini-action" type="button" data-training-action="approve">批准启用</button>
-        <button class="mini-action primary" type="button" data-training-action="optimize">保存优化</button>
-        ${item.manualOverrideCount ? '<button class="mini-action ghost" type="button" data-training-action="clear-overrides">清空覆盖</button>' : ""}
-        <button class="mini-action danger" type="button" data-training-action="disable">停用</button>
-        <button class="mini-action danger ghost" type="button" data-training-action="delete">删除</button>
+        <button class="mini-action ghost" type="button" data-training-action="needs-review">继续人工处理</button>
+        <button class="mini-action" type="button" data-training-action="approve">保存并启用</button>
+        <button class="mini-action primary" type="button" data-training-action="optimize">保存修改</button>
+        ${item.manualOverrideCount ? '<button class="mini-action ghost" type="button" data-training-action="clear-overrides">清空误学样本</button>' : ""}
+        <button class="mini-action danger" type="button" data-training-action="disable">不再使用</button>
+        <button class="mini-action danger ghost" type="button" data-training-action="delete">删除记录</button>
       </footer>
     </article>
   `;
+}
+
+function getTrainingPlatformLabel(key) {
+  const value = String(key || "").trim();
+  return TRAINING_PLATFORM_LABELS[value] || value;
+}
+
+function getTrainingIntentLabel(key) {
+  const value = String(key || "").trim();
+  return TRAINING_INTENT_LABELS[value] || value;
+}
+
+function getTrainingStageLabel(key) {
+  const value = String(key || "").trim();
+  return TRAINING_STAGE_LABELS[value] || value;
+}
+
+function renderTrainingLabelChips(item) {
+  const chips = [
+    item.platformKey ? { level: "info", label: getTrainingPlatformLabel(item.platformKey) } : null,
+    item.intentKey ? { level: "info", label: getTrainingIntentLabel(item.intentKey) } : null,
+    item.learningStage ? { level: "muted", label: getTrainingStageLabel(item.learningStage) || item.learningStage } : null
+  ].filter(Boolean);
+  return chips.map((chip) => `<span class="training-chip ${escapeAttr(chip.level)}">${escapeHtml(chip.label)}</span>`).join("");
+}
+
+function buildReviewTitle(item) {
+  if (item.reasons?.some((reason) => reason.level === "danger")) return "需要你判断：这条可能学错了";
+  if (item.reasons?.some((reason) => reason.level === "warn")) return "建议复核：确认后再入库";
+  return "可入库候选：检查无误后保存";
+}
+
+function renderReadonlyTags(values = []) {
+  const tags = normalizeKeywordList(values);
+  if (!tags.length) return "-";
+  return `<span class="keyword-readonly-row">${tags.map((tag) => `<span class="keyword-chip readonly">${escapeHtml(tag)}</span>`).join("")}</span>`;
+}
+
+function renderKeywordEditor(values = []) {
+  const keywords = normalizeKeywordList(values);
+  return `
+    <label class="training-keyword-field">
+      <span>关键词标签</span>
+      <div class="keyword-editor" data-keyword-editor>
+        <input data-field="keywords" type="hidden" value="${escapeAttr(keywords.join(" "))}" />
+        <div class="keyword-tags" data-keyword-list>${renderKeywordChips(keywords)}</div>
+        <input class="keyword-entry" data-keyword-entry type="text" placeholder="输入后回车添加" />
+      </div>
+    </label>
+  `;
+}
+
+function renderKeywordChips(values = []) {
+  const keywords = normalizeKeywordList(values);
+  if (!keywords.length) return '<span class="keyword-empty">还没有关键词</span>';
+  return keywords.map((keyword, index) => `
+    <span class="keyword-chip">
+      <span>${escapeHtml(keyword)}</span>
+      <button type="button" data-keyword-remove="${index}" aria-label="删除关键词 ${escapeAttr(keyword)}">×</button>
+    </span>
+  `).join("");
 }
 
 function renderPromptVariants(prompts = []) {
@@ -566,7 +684,73 @@ function renderSkeleton() {
   `;
 }
 
+function splitKeywordValue(value) {
+  if (Array.isArray(value)) return value.flatMap(splitKeywordValue);
+  return String(value || "")
+    .split(/[\s,，、;；|/]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeKeywordList(values = []) {
+  const seen = new Set();
+  const result = [];
+  splitKeywordValue(values).forEach((keyword) => {
+    const key = keyword.toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    result.push(keyword);
+  });
+  return result.slice(0, 24);
+}
+
+function getKeywordEditorValues(editor, options = {}) {
+  const hidden = editor?.querySelector('[data-field="keywords"]');
+  const entry = editor?.querySelector("[data-keyword-entry]");
+  const values = normalizeKeywordList([
+    hidden?.value || "",
+    options.includeEntry ? (entry?.value || "") : ""
+  ]);
+  return values;
+}
+
+function setKeywordEditorValues(editor, values = []) {
+  if (!editor) return;
+  const keywords = normalizeKeywordList(values);
+  const hidden = editor.querySelector('[data-field="keywords"]');
+  const list = editor.querySelector("[data-keyword-list]");
+  if (hidden) hidden.value = keywords.join(" ");
+  if (list) list.innerHTML = renderKeywordChips(keywords);
+}
+
+function commitKeywordEntry(input) {
+  const editor = input?.closest("[data-keyword-editor]");
+  if (!editor) return;
+  const next = getKeywordEditorValues(editor, { includeEntry: true });
+  setKeywordEditorValues(editor, next);
+  input.value = "";
+}
+
+function syncAllKeywordEditors(root) {
+  root?.querySelectorAll?.("[data-keyword-editor]").forEach((editor) => {
+    const entry = editor.querySelector("[data-keyword-entry]");
+    if (entry?.value.trim()) commitKeywordEntry(entry);
+    else setKeywordEditorValues(editor, getKeywordEditorValues(editor));
+  });
+}
+
 async function handleTrainingClick(event) {
+  const keywordRemove = event.target.closest("[data-keyword-remove]");
+  if (keywordRemove) {
+    event.preventDefault();
+    const editor = keywordRemove.closest("[data-keyword-editor]");
+    const values = getKeywordEditorValues(editor);
+    values.splice(Number(keywordRemove.dataset.keywordRemove || 0), 1);
+    setKeywordEditorValues(editor, values);
+    editor?.querySelector("[data-keyword-entry]")?.focus();
+    return;
+  }
+
   const localAction = event.target.closest("[data-local-action]");
   if (localAction) {
     await applyLocalAction(localAction);
@@ -579,10 +763,33 @@ async function handleTrainingClick(event) {
   if (!card) return;
   const action = actionTarget.dataset.trainingAction;
   if (["delete", "disable", "clear-overrides"].includes(action)) {
-    const ok = window.confirm(action === "delete" ? "确定删除这条学习记录吗？" : action === "disable" ? "确定停用这条 skill 吗？" : "确定清空这条 skill 的学习覆盖吗？");
+    const ok = window.confirm(action === "delete" ? "确定彻底删除这条学习记录吗？" : action === "disable" ? "确定标记为不再使用吗？" : "确定清空这条 skill 的误学样本吗？");
     if (!ok) return;
   }
   await submitTrainingAction(card, action);
+}
+
+function handleTrainingListKeydown(event) {
+  const input = event.target.closest?.("[data-keyword-entry]");
+  if (!input) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    commitKeywordEntry(input);
+    return;
+  }
+  if (event.key === "Backspace" && !input.value) {
+    const editor = input.closest("[data-keyword-editor]");
+    const values = getKeywordEditorValues(editor);
+    if (!values.length) return;
+    values.pop();
+    setKeywordEditorValues(editor, values);
+  }
+}
+
+function handleTrainingFocusout(event) {
+  const input = event.target.closest?.("[data-keyword-entry]");
+  if (!input || !input.value.trim()) return;
+  commitKeywordEntry(input);
 }
 
 function handleTrainingKeydown(event) {
@@ -633,6 +840,16 @@ async function applyLocalAction(button) {
   } else if (action === "ai-organize") {
     await organizeTrainingItemWithAi(card, item);
   }
+}
+
+async function auditCurrentTrainingItemWithAi() {
+  const item = getVisibleItems()[state.currentIndex];
+  const card = el.trainingList.querySelector("[data-skill-id]");
+  if (!item || !card) {
+    toast("当前没有可初审的训练项。", true);
+    return;
+  }
+  await organizeTrainingItemWithAi(card, item);
 }
 
 function moveQueue(delta) {
@@ -687,6 +904,7 @@ function advanceAfterAction(skillId, oldIndex) {
 }
 
 function collectPatch(card) {
+  syncAllKeywordEditors(card);
   return {
     title: card.querySelector('[data-field="title"]')?.value || "",
     platformKey: card.querySelector('[data-field="platformKey"]')?.value || "",
@@ -758,6 +976,7 @@ function buildAiTrainingPrompt(item, currentPatch) {
     learningStage: item.learningStage,
     stageLabels: item.stageLabels || [],
     keywords: item.keywords || [],
+    currentEditorKeywords: splitKeywordValue(currentPatch.keywords),
     samples: item.samples || [],
     promptVariants: item.promptVariants || [],
     currentStoredReply: item.currentText || "",
@@ -775,6 +994,13 @@ function buildAiTrainingPrompt(item, currentPatch) {
 
 function applyAiTrainingPatch(card, patch) {
   const setValue = (field, value) => {
+    if (field === "keywords") {
+      const editor = card.querySelector("[data-keyword-editor]");
+      if (editor) {
+        setKeywordEditorValues(editor, value);
+        return;
+      }
+    }
     const node = card.querySelector(`[data-field="${field}"]`);
     if (!node || value === undefined || value === null) return;
     node.value = Array.isArray(value) ? value.join(field === "samples" ? "\n" : " ") : String(value);
@@ -849,14 +1075,14 @@ function setCardBusy(card, busy) {
 
 function actionLabel(action) {
   const map = {
-    approve: "已批准并启用这条 skill。",
-    optimize: "已保存优化话术，并进入下一条。",
-    "needs-review": "已标记为待优化，并进入下一条。",
-    disable: "已停用这条 skill。",
+    approve: "已保存并启用这条 skill。",
+    optimize: "已保存修改，并进入下一条。",
+    "needs-review": "已保留在待处理队列，并进入下一条。",
+    disable: "已标记为不再使用。",
     delete: "已删除这条学习记录。",
-    "clear-overrides": "已清空学习覆盖。"
+    "clear-overrides": "已清空误学样本。"
   };
-  return map[action] || "训练已保存。";
+  return map[action] || "标记已保存。";
 }
 
 function toast(message, isError = false) {

@@ -109,6 +109,10 @@
   margin-left: auto;
 }
 
+.training-check.compact {
+  margin-left: 0;
+}
+
 .training-segment {
   display: inline-flex;
   border: 1px solid #c9d8ea;
@@ -171,6 +175,24 @@
 
 .training-summary-lines p {
   margin: 0;
+}
+
+.training-flow-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #d8e7f6;
+  border-radius: 5px;
+  color: #41536b;
+  background: #f8fbff;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.training-flow-note strong {
+  flex: 0 0 auto;
+  color: #0d63c7;
 }
 
 .promptworks-import-panel {
@@ -570,6 +592,86 @@
   overflow-wrap: anywhere;
 }
 
+.keyword-readonly-row,
+.keyword-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.keyword-editor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 6px;
+  border: 1px solid #cfdced;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.keyword-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 0 4px 0 8px;
+  border: 1px solid #d3dbe6;
+  border-radius: 4px;
+  color: #24344d;
+  background: #f7f9fc;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.keyword-chip.readonly {
+  padding: 0 8px;
+}
+
+.keyword-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.keyword-chip button {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 4px;
+  color: #7b8798;
+  background: transparent;
+  line-height: 16px;
+}
+
+.keyword-chip button:hover,
+.keyword-chip button:focus-visible {
+  color: #be2d2d;
+  background: #ffecee;
+}
+
+.keyword-entry {
+  flex: 1 1 120px;
+  width: auto !important;
+  min-width: 110px;
+  height: 24px;
+  border: 0 !important;
+  padding: 0 2px !important;
+  outline: 0;
+  background: transparent !important;
+}
+
+.keyword-empty {
+  color: #8a97aa;
+  font-size: 12px;
+}
+
 .training-block pre,
 .training-override p {
   max-height: 186px;
@@ -685,6 +787,26 @@
 .training-editor {
   display: grid;
   gap: 8px;
+}
+
+.training-ai-review {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid #d7e7f8;
+  border-radius: 5px;
+  background: #f4f9ff;
+}
+
+.training-ai-review strong {
+  color: #0d63c7;
+  font-size: 12px;
+}
+
+.training-ai-review span {
+  color: #4c5e75;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .training-editor-row {
@@ -841,5 +963,9 @@
 
   .training-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .training-flow-note {
+    display: grid;
   }
 }

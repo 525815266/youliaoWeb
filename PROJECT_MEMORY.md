@@ -69,6 +69,7 @@
 73. [2026-06-17 PromptWorks 旁路训练工作台](#73-2026-06-17-promptworks-旁路训练工作台)
 74. [2026-06-17 PromptWorks 前端 Failed to fetch 修复](#74-2026-06-17-promptworks-前端-failed-to-fetch-修复)
 75. [2026-06-17 悠聊人工回复导入 PromptWorks 训练](#75-2026-06-17-悠聊人工回复导入-promptworks-训练)
+79. [2026-06-29 会话列表键盘切换与 Skill 训练标记台](#79-2026-06-29-会话列表键盘切换与-skill-训练标记台)
 
 ## 1. 项目目标
 
@@ -6053,3 +6054,67 @@ Follow-up:
 - If Lucky still shows mixed content after deploy, inspect browser DevTools Security/Console and copy the exact `Mixed Content` URL.
 - The remaining likely culprit would be an external script/style inserted outside this Web app or Lucky injecting content.
 - Because CSP is not yet enforced, this fix avoids mixed content by rewriting known Web app display paths rather than blocking everything globally.
+
+
+## 79. 2026-06-29 会话列表键盘切换与 Skill 训练标记台
+
+用户问题：
+
+- Web 客服工作台左侧会话列表里，选中会话后按键盘上/下不能稳定切换会话。
+- Skill 训练页的含义不够明确，按钮如“批准启用、同意、删除、不保存”不符合人工标注习惯。
+- 关键词需要像标签一样展示和编辑：点 `x` 删除，输入后回车快速新增。
+- 希望训练页能采样已有真实人工回复，AI 做初审，最后由人工审核入库，避免自动学习继续把错误图片或错误话术学坏。
+
+文件改动：
+
+- `public/app.js`
+- `public/skill-training.html`
+- `public/skill-training.js`
+- `public/skill-training.css`
+
+会话列表键盘修复：
+
+- 新增 `state.contactListKeyboardActive`，点击、鼠标按下或聚焦左侧会话列表后进入列表键盘态。
+- 新增全局 `ArrowUp` / `ArrowDown` 兜底处理：当前焦点不在输入框、按钮、下拉框等可编辑控件时，按上下键会调用 `selectAdjacentContact()`。
+- 点击会话后会把焦点还给对应会话卡片，异步切换后再通过 `focusContactCard()` 保持焦点和滚动位置。
+- 会话列表自身的 `keydown` 已停止冒泡，避免一次按键被列表 handler 和全局 handler 处理两次。
+
+Skill 训练页交互改造：
+
+- 顶部标题改成“采样真实回复，AI 初审后由你逐条标记”，并新增标记规则说明。
+- “闲时采样”改名为“采样日常回复”，“刷新总结”改名为“刷新待审”。
+- 新增“AI 初审当前条”顶部按钮，复用当前卡片的 AI 整理能力，只生成候选内容，不自动保存入库。
+- 新增“打开页面时自动采样”开关，状态存储在 `localStorage` 的 `youchat.training.autoAudit`，开启后训练页会按 10 分钟间隔采样真实人工回复进入待审候选。
+- 训练列表标题改为“数据标记队列”，强调这是人工标注流程，不是直接训练黑盒。
+- 卡片里的平台、意图、阶段现在以可读标签展示，例如淘宝/天猫、京东、拼多多、抖音、订单查不到、下单后没提示等。
+
+关键词标签编辑：
+
+- 原先普通 `keywords` 输入框改为标签编辑器。
+- 关键词会以标签显示，支持点击 `x` 删除。
+- 输入关键词后按 Enter 可快速增加，支持空格、逗号、顿号、分号、斜杠等分隔。
+- 保存前会自动同步还停留在输入框里的关键词，最终仍写回原有 `keywords` 字段，兼容 `data/reply-skills.json` 的既有结构。
+
+按钮语义调整：
+
+- `approve` 展示为“保存并启用”：确认这条可直接参与推荐或自动回复。
+- `optimize` 展示为“保存修改”：人工已经改好标题、关键词、文案或图片。
+- `needs-review` 展示为“继续人工处理”：不丢弃，继续留在待审队列。
+- `disable` 展示为“不再使用”：停用但保留记录。
+- `delete` 展示为“删除记录”：彻底删除误学样本。
+- `clear-overrides` 展示为“清空误学样本”：清掉手动覆盖/误学习记录，避免错误图片长期污染 skill。
+
+验证：
+
+- `npm run check` passed。
+- 本地后台启动 `node server.js` 后：
+  - `http://127.0.0.1:5177/health` 返回 200。
+  - `http://127.0.0.1:5177/skill-training.html` 返回 200。
+  - `http://127.0.0.1:5177/skill-training.js` 和 `skill-training.css` 返回 200。
+  - `http://127.0.0.1:5177/local/skill-training?scope=today` 返回 200。
+
+后续注意：
+
+- 自动采样只负责把真实人工回复拉成候选，不会自动保存 skill。
+- AI 初审只填充当前卡片候选内容，仍需人工点击“保存并启用”或“保存修改”。
+- 如继续增强训练智能化，优先在 `server.js` 的 `sampleManualRepliesForTraining()` 和训练候选聚类逻辑上做多样本聚类，而不是让单次回复直接覆盖成熟 skill。
