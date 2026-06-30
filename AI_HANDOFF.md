@@ -3348,3 +3348,72 @@ Verified:
   - `http://127.0.0.1:5177/skill-training.js`
   - `http://127.0.0.1:5177/skill-training.css`
   - `http://127.0.0.1:5177/local/skill-training?scope=today`
+
+
+## 2026-06-30 Handoff: Order-number Skill Training Correction
+
+Problem:
+
+- Customer messages that are only an order number, for example `5121974090067009148`, were being learned as raw numeric keywords/samples.
+- Douyin order-number scenarios could inherit or update Taobao-style learned replies.
+- Ads/promotions plus polite manual replies could enter the skill training queue.
+
+Changed files:
+
+- `server.js`
+- `public/app.js`
+- `public/skill-training.js`
+- `public/skill-training.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Server-side training rules:
+
+- New helpers in `server.js` detect likely order numbers and pure-order prompts:
+  - `getTrainingOrderNumbers()`
+  - `isLikelyTrainingOrderNo()`
+  - `isPureTrainingOrderPrompt()`
+  - `hasTrainingOrderSignal()`
+- Pure order-number prompts, and order-number prompts without stronger intent, default to `intentKey=order_waiting`.
+- 19-digit order numbers starting with `5`, such as `5121974090067009148`, classify as `douyin`.
+- Raw order numbers are removed from `keywords`.
+- Semantic keyword replacements are generated, for example:
+  - `抖音订单`
+  - `订单未提示`
+  - `首次答复`
+  - `客户发订单号`
+- `learningBucketKey` uses semantic platform/intent/stage tokens instead of the raw order number.
+- Pure order-number prompts no longer fallback-merge into old learned skills by prompt similarity. This prevents Douyin order replies from being written into old Taobao skills.
+- `queueTrainingCandidate()` skips ad-like prompts and low-value polite replies, such as `好的`, `收到`, `稍等`, unless there is an order/business signal.
+
+Frontend manual learning:
+
+- `public/app.js` mirrors the backend behavior:
+  - `detectSkillIntentKey()` returns `order_waiting` for pure order-number text.
+  - `extractLearningKeywords()` returns semantic order keywords for order-number prompts.
+  - `shouldSkipManualLearning()` rejects ad-like prompts and low-value polite replies.
+  - Current detected platform/intent outranks stale matched skill metadata.
+  - Pure order-number prompts do not fallback to old prompt-similar learned skills.
+
+Training UI:
+
+- Platform is now a native `<select>` with options: 未识别、淘宝/天猫、京东、拼多多、抖音、快手、唯品会、美团、饿了么.
+- Intent was renamed to `回复类型` and is now a native `<select>` with options: 通用、订单未提示、订单无回馈/查不到、绑定失败、提现相关、到账/回馈状态、转人工.
+- Keyword chips filter raw order numbers and replace them with semantic tags based on the current platform/type selects.
+- AI audit prompt asks for `platformKey` and `intentKey` and explicitly says not to use raw order numbers as keywords.
+
+Verified:
+
+- `npm run check`
+- `git diff --check`
+- Node VM cases:
+  - `5121974090067009148` -> `douyin/order_waiting`, keywords are semantic and contain no raw number.
+  - `京东订单 3309003552115074869` -> `jd/order_waiting`, keywords are semantic.
+  - Ad prompt + `好的` -> skipped.
+  - `你好` + `收到` -> skipped.
+
+Do not regress:
+
+- Never store raw order numbers as training keywords.
+- Do not merge pure order-number prompts into old learned skills by fuzzy prompt match.
+- If adding platform order patterns, update both `server.js` and `public/app.js`.

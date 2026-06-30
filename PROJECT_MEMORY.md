@@ -70,6 +70,7 @@
 74. [2026-06-17 PromptWorks 前端 Failed to fetch 修复](#74-2026-06-17-promptworks-前端-failed-to-fetch-修复)
 75. [2026-06-17 悠聊人工回复导入 PromptWorks 训练](#75-2026-06-17-悠聊人工回复导入-promptworks-训练)
 79. [2026-06-29 会话列表键盘切换与 Skill 训练标记台](#79-2026-06-29-会话列表键盘切换与-skill-训练标记台)
+80. [2026-06-30 订单号场景 Skill 训练纠偏](#80-2026-06-30-订单号场景-skill-训练纠偏)
 
 ## 1. 项目目标
 
@@ -6118,3 +6119,79 @@ Skill 训练页交互改造：
 - 自动采样只负责把真实人工回复拉成候选，不会自动保存 skill。
 - AI 初审只填充当前卡片候选内容，仍需人工点击“保存并启用”或“保存修改”。
 - 如继续增强训练智能化，优先在 `server.js` 的 `sampleManualRepliesForTraining()` 和训练候选聚类逻辑上做多样本聚类，而不是让单次回复直接覆盖成熟 skill。
+
+
+## 80. 2026-06-30 订单号场景 Skill 训练纠偏
+
+用户问题：
+
+- 训练页出现客户只发订单号 `5121974090067009148`，关键词、样本、相似问法全是订单号本身。
+- 这类 5 开头 19 位订单号实际更像抖音订单，但历史学习可能套用了淘宝话术。
+- 客户发订单号一般意味着“订单没提示/没跟单/查不到”，需要先识别平台，再按平台学习话术。
+- 广告、无关推广、客服礼貌性短回复不应该进入 skill 学习。
+- 训练页里的平台、回复类型不应该是难懂的文本输入框，应改为下拉选择。
+
+文件改动：
+
+- `server.js`
+- `public/app.js`
+- `public/skill-training.js`
+- `public/skill-training.css`
+
+服务端训练规则：
+
+- 新增订单号检测辅助：
+  - `normalizeTrainingOrderNo()`
+  - `getTrainingOrderNumbers()`
+  - `isLikelyTrainingOrderNo()`
+  - `isPureTrainingOrderPrompt()`
+  - `hasTrainingOrderSignal()`
+- 纯订单号 prompt 或含订单号但没有更强意图时，默认 `intentKey=order_waiting`。
+- `5121974090067009148` 这类 5 开头 19 位订单号会识别为 `douyin`。
+- 纯订单号不再进入 `keywords`；会被语义化为：
+  - `抖音订单`
+  - `订单未提示`
+  - `首次答复`
+  - `客户发订单号`
+- `learningBucketKey` 不再用订单号本身，改用平台/意图/阶段语义，例如：
+  - `learn:douyin:order_waiting:first_answer:抖音订单_订单未提示_首次答复`
+- 服务端 `queueTrainingCandidate()` 对疑似广告和低价值礼貌短回复直接跳过：
+  - 疑似广告/无关客户消息。
+  - `好的`、`收到`、`稍等`、`我看看` 等没有明确业务场景的短回复。
+- 纯订单号不再通过 prompt 相似度合并到旧 skill，避免抖音订单误合并进淘宝旧样本。
+
+前端手动学习规则：
+
+- `public/app.js` 的手动学习也同步：
+  - 纯订单号默认 `order_waiting`。
+  - 含订单号会生成语义关键词，不把订单号本身作为关键词。
+  - 广告、推广、无业务场景礼貌短回复不会自动学习。
+  - 当前订单上下文的 `platformKey/intentKey` 优先于旧命中 skill，减少抖音回复被写回淘宝 skill。
+  - 纯订单号不再 fallback 到旧 prompt 相似 skill。
+
+训练页 UI：
+
+- 平台字段从输入框改为下拉框：
+  - 未识别、淘宝/天猫、京东、拼多多、抖音、快手、唯品会、美团、饿了么。
+- 意图字段改名为“回复类型”，从输入框改为下拉框：
+  - 通用、订单未提示、订单无回馈/查不到、绑定失败、提现相关、到账/回馈状态、转人工。
+- 关键词标签组件会过滤纯订单号；如果发现订单号，会用当前下拉选择的平台和回复类型生成语义标签。
+- AI 初审提示词新增约束：
+  - 客户只发订单号时不要把订单号本身作为关键词。
+  - 返回 `platformKey` 和 `intentKey`。
+  - 疑似广告、无关推广、礼貌性短回复不应启用为 skill。
+
+验证：
+
+- `npm run check` passed。
+- `git diff --check` passed。
+- Node VM 验证：
+  - `5121974090067009148` -> `platformKey=douyin`，`intentKey=order_waiting`，关键词不含订单号。
+  - `京东订单 3309003552115074869` -> `platformKey=jd`，`intentKey=order_waiting`，关键词语义化。
+  - `加微信代理项目 www.example.com` + `好的` -> skipped，原因 `疑似广告/无关客户消息`。
+  - `你好` + `收到` -> skipped，原因 `礼貌性短回复，不适合作为 skill`。
+
+后续注意：
+
+- 已存在的旧错误 skill 仍需在训练页里清空误学样本、保存修改或删除记录；新规则能阻止后续继续污染。
+- 如果后续发现更多平台订单号规则，要同时更新 `server.js` 和 `public/app.js` 的订单号识别。

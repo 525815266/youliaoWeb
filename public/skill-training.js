@@ -59,6 +59,26 @@ const TRAINING_STAGE_LABELS = {
   after_service_reply: "客服补充",
   no_reply_guidance: "未回复引导"
 };
+const TRAINING_PLATFORM_OPTIONS = [
+  ["", "未识别"],
+  ["taobao", "淘宝/天猫"],
+  ["jd", "京东"],
+  ["pdd", "拼多多"],
+  ["douyin", "抖音"],
+  ["kuaishou", "快手"],
+  ["vip", "唯品会"],
+  ["meituan", "美团"],
+  ["eleme", "饿了么"]
+];
+const TRAINING_INTENT_OPTIONS = [
+  ["general", "通用"],
+  ["order_waiting", "订单未提示"],
+  ["order_missing", "订单无回馈/查不到"],
+  ["bind_failed", "绑定失败"],
+  ["withdraw_query", "提现相关"],
+  ["rebate_status", "到账/回馈状态"],
+  ["manual_service", "转人工"]
+];
 
 const state = {
   date: getTodayKey(),
@@ -467,7 +487,7 @@ function renderTrainingItem(item) {
         <section class="training-block training-cluster">
           <h3>客户场景</h3>
           <dl class="training-kv">
-            <div><dt>关键词</dt><dd>${renderReadonlyTags(item.keywords)}</dd></div>
+            <div><dt>关键词</dt><dd>${renderReadonlyTags(item.keywords, item)}</dd></div>
             <div><dt>样本</dt><dd>${escapeHtml((item.samples || []).slice(0, 5).join(" / ") || "-")}</dd></div>
             <div><dt>阶段</dt><dd>${escapeHtml((item.stageLabels || []).join(" / ") || "-")}</dd></div>
             <div><dt>最近</dt><dd>${latestOverride ? escapeHtml(latestOverride.prompt || "-") : "-"}</dd></div>
@@ -502,14 +522,14 @@ function renderTrainingItem(item) {
             </label>
             <label>
               <span>平台</span>
-              <input data-field="platformKey" value="${escapeAttr(item.platformKey || "")}" placeholder="taobao / jd / pdd / douyin" />
+              ${renderTrainingSelect("platformKey", item.platformKey || "", TRAINING_PLATFORM_OPTIONS)}
             </label>
             <label>
-              <span>意图</span>
-              <input data-field="intentKey" value="${escapeAttr(item.intentKey || "")}" placeholder="order_missing / withdraw_query" />
+              <span>回复类型</span>
+              ${renderTrainingSelect("intentKey", item.intentKey || "general", TRAINING_INTENT_OPTIONS)}
             </label>
           </div>
-          ${renderKeywordEditor(item.keywords)}
+          ${renderKeywordEditor(item.keywords, item)}
           <label>
             <span>样本问题</span>
             <textarea data-field="samples" rows="2" placeholder="每行或空格分隔一个样本">${escapeHtml((item.samples || []).join("\n"))}</textarea>
@@ -574,20 +594,30 @@ function renderTrainingLabelChips(item) {
   return chips.map((chip) => `<span class="training-chip ${escapeAttr(chip.level)}">${escapeHtml(chip.label)}</span>`).join("");
 }
 
+function renderTrainingSelect(field, value, options) {
+  return `
+    <select data-field="${escapeAttr(field)}">
+      ${options.map(([optionValue, label]) => `
+        <option value="${escapeAttr(optionValue)}" ${String(optionValue) === String(value || "") ? "selected" : ""}>${escapeHtml(label)}</option>
+      `).join("")}
+    </select>
+  `;
+}
+
 function buildReviewTitle(item) {
   if (item.reasons?.some((reason) => reason.level === "danger")) return "需要你判断：这条可能学错了";
   if (item.reasons?.some((reason) => reason.level === "warn")) return "建议复核：确认后再入库";
   return "可入库候选：检查无误后保存";
 }
 
-function renderReadonlyTags(values = []) {
-  const tags = normalizeKeywordList(values);
+function renderReadonlyTags(values = [], item = null) {
+  const tags = normalizeKeywordList(values, item);
   if (!tags.length) return "-";
   return `<span class="keyword-readonly-row">${tags.map((tag) => `<span class="keyword-chip readonly">${escapeHtml(tag)}</span>`).join("")}</span>`;
 }
 
-function renderKeywordEditor(values = []) {
-  const keywords = normalizeKeywordList(values);
+function renderKeywordEditor(values = [], item = null) {
+  const keywords = normalizeKeywordList(values, item);
   return `
     <label class="training-keyword-field">
       <span>关键词标签</span>
@@ -692,31 +722,76 @@ function splitKeywordValue(value) {
     .filter(Boolean);
 }
 
-function normalizeKeywordList(values = []) {
+function isLikelyTrainingOrderKeyword(value) {
+  const text = String(value || "").trim().replace(/[^\dA-Za-z-]/g, "");
+  return /^\d{8}-\d{4,}$/.test(text) || /^\d{10,24}$/.test(text) || /^5\d{18}$/.test(text);
+}
+
+function getSemanticKeywordFallback(item) {
+  if (!item) return [];
+  return [
+    item.platformKey ? `${getTrainingPlatformLabel(item.platformKey)}订单` : "订单号",
+    item.intentKey ? getTrainingIntentLabel(item.intentKey) : "订单未提示",
+    item.learningStage ? getTrainingStageLabel(item.learningStage) || item.learningStage : "",
+    "客户发订单号"
+  ].filter(Boolean);
+}
+
+function normalizeKeywordList(values = [], item = null) {
   const seen = new Set();
   const result = [];
+  let hadOrderKeyword = false;
   splitKeywordValue(values).forEach((keyword) => {
+    if (isLikelyTrainingOrderKeyword(keyword)) {
+      hadOrderKeyword = true;
+      return;
+    }
     const key = keyword.toLowerCase();
     if (!key || seen.has(key)) return;
     seen.add(key);
     result.push(keyword);
   });
+  if (hadOrderKeyword) {
+    getSemanticKeywordFallback(item).forEach((keyword) => {
+      const key = keyword.toLowerCase();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      result.push(keyword);
+    });
+  }
   return result.slice(0, 24);
 }
 
 function getKeywordEditorValues(editor, options = {}) {
   const hidden = editor?.querySelector('[data-field="keywords"]');
   const entry = editor?.querySelector("[data-keyword-entry]");
+  const card = editor?.closest("[data-skill-id]");
+  const item = card ? {
+    platformKey: card.querySelector('[data-field="platformKey"]')?.value || "",
+    intentKey: card.querySelector('[data-field="intentKey"]')?.value || "",
+    learningStage: state.items.find((entryItem) => String(entryItem.id) === String(card.dataset.skillId))?.learningStage || ""
+  } : null;
   const values = normalizeKeywordList([
     hidden?.value || "",
     options.includeEntry ? (entry?.value || "") : ""
-  ]);
+  ], item);
   return values;
+}
+
+function getTrainingItemForCard(card) {
+  return state.items.find((entryItem) => String(entryItem.id) === String(card?.dataset.skillId)) || null;
 }
 
 function setKeywordEditorValues(editor, values = []) {
   if (!editor) return;
-  const keywords = normalizeKeywordList(values);
+  const card = editor.closest("[data-skill-id]");
+  const sourceItem = getTrainingItemForCard(card);
+  const item = card ? {
+    platformKey: card.querySelector('[data-field="platformKey"]')?.value || sourceItem?.platformKey || "",
+    intentKey: card.querySelector('[data-field="intentKey"]')?.value || sourceItem?.intentKey || "",
+    learningStage: sourceItem?.learningStage || ""
+  } : null;
+  const keywords = normalizeKeywordList(values, item);
   const hidden = editor.querySelector('[data-field="keywords"]');
   const list = editor.querySelector("[data-keyword-list]");
   if (hidden) hidden.value = keywords.join(" ");
@@ -942,8 +1017,10 @@ async function organizeTrainingItemWithAi(card, item) {
               "你是悠聊客服 skill 训练助手。",
               "请把相似客户问题、人工回复变体和当前入库话术整理成一个稳定 skill。",
               "不要编造订单、余额、返利状态或后台查询结果。",
+              "客户只发订单号时，不要把订单号本身作为关键词；要识别平台和回复类型，例如 抖音订单、订单未提示、客户发订单号。",
+              "疑似广告、无关推广、客服礼貌性短回复，不应启用为 skill，可以设置 noReply 或在 note 里说明建议删除。",
               "如果这是后续追问，不要覆盖首次答复流程；把建议写成适合当前阶段的引导。",
-              "只返回 JSON 对象，字段为 title、keywords、samples、replyText、note、allowAutoReply、noReply。keywords 和 samples 返回数组。"
+              "只返回 JSON 对象，字段为 title、platformKey、intentKey、keywords、samples、replyText、note、allowAutoReply、noReply。keywords 和 samples 返回数组。"
             ].join("\n")
           },
           {
@@ -1006,6 +1083,8 @@ function applyAiTrainingPatch(card, patch) {
     node.value = Array.isArray(value) ? value.join(field === "samples" ? "\n" : " ") : String(value);
   };
   setValue("title", patch.title);
+  setValue("platformKey", patch.platformKey);
+  setValue("intentKey", patch.intentKey);
   setValue("keywords", patch.keywords);
   setValue("samples", patch.samples);
   setValue("replyText", patch.replyText);

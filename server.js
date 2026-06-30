@@ -600,6 +600,27 @@ function uniqueTrainingList(values, limit = 12) {
   return result.slice(0, limit);
 }
 
+const TRAINING_PLATFORM_LABELS = {
+  taobao: "淘宝/天猫",
+  jd: "京东",
+  pdd: "拼多多",
+  douyin: "抖音",
+  kuaishou: "快手",
+  vip: "唯品会",
+  meituan: "美团",
+  eleme: "饿了么"
+};
+
+const TRAINING_INTENT_LABELS = {
+  order_missing: "订单无回馈/查不到",
+  order_waiting: "订单未提示",
+  bind_failed: "绑定失败",
+  withdraw_query: "提现相关",
+  rebate_status: "到账/回馈状态",
+  manual_service: "转人工",
+  general: "通用"
+};
+
 function getTrainingStageLabel(stage) {
   const map = {
     first_answer: "首次答复",
@@ -692,6 +713,47 @@ function chooseSkillTrainingImages(skill, manualSummary) {
   return uniqueTrainingList([...(manualSummary?.imageUrls || []), ...variantImages], 12);
 }
 
+function normalizeTrainingOrderNo(value) {
+  return String(value || "").trim().replace(/[^\dA-Za-z-]/g, "");
+}
+
+function getTrainingOrderNumbers(text) {
+  return [...new Set((String(text || "").match(/[A-Za-z0-9-]{8,24}/g) || [])
+    .map(normalizeTrainingOrderNo)
+    .filter(isLikelyTrainingOrderNo))];
+}
+
+function isLikelyTrainingOrderNo(value) {
+  const text = normalizeTrainingOrderNo(value);
+  return /^\d{8}-\d{4,}$/.test(text) || /^\d{10,24}$/.test(text) || /^5\d{18}$/.test(text);
+}
+
+function stripTrainingOrderNumbers(text) {
+  let value = String(text || "");
+  getTrainingOrderNumbers(value).forEach((orderNo) => {
+    value = value.replaceAll(orderNo, " ");
+  });
+  return value.replace(/[^\p{Script=Han}A-Za-z]+/gu, "").trim();
+}
+
+function isPureTrainingOrderPrompt(text) {
+  const orderNos = getTrainingOrderNumbers(text);
+  if (!orderNos.length) return false;
+  return stripTrainingOrderNumbers(text).length === 0;
+}
+
+function hasTrainingOrderSignal(text) {
+  return getTrainingOrderNumbers(text).length > 0 || /(订单|单号|下单|跟单|提示|回馈|返利|饭粒|红包|鸿包)/.test(String(text || ""));
+}
+
+function getTrainingPlatformLabel(key) {
+  return TRAINING_PLATFORM_LABELS[String(key || "")] || "";
+}
+
+function getTrainingIntentLabel(key) {
+  return TRAINING_INTENT_LABELS[String(key || "")] || "";
+}
+
 function detectTrainingOrderPlatformKey(text) {
   const value = String(text || "");
   const candidates = value.match(/[A-Za-z0-9-]{8,24}/g) || [];
@@ -724,31 +786,92 @@ function detectTrainingPlatformKey(text) {
   return detectTrainingOrderPlatformKey(value) || detectTrainingPlatformAliasKey(value);
 }
 
-function detectTrainingIntentKey(text) {
+function detectTrainingIntentKey(text, options = {}) {
+  const prompt = String(options.prompt || text || "");
   const value = normalizeTrainingComparableText(text);
+  if (isPureTrainingOrderPrompt(prompt)) return "order_waiting";
   if (/(查不到|查不出|没返利|无返利|没成功|订单没有|不提示|没绑定|怎么没绑定)/.test(value)) return "order_missing";
   if (/(还没提示|还没显示|没等到订单|还没跟单|订单还没出|怎么还没出)/.test(value)) return "order_waiting";
   if (/(绑定失败|绑定不了|怎么绑定|未绑定|绑定方法|支付宝账号|绑定支付宝)/.test(value)) return "bind_failed";
   if (/(提现|提取|余额提现|提现入口|提现多久到账|提现审核|提现到支付宝)/.test(value)) return "withdraw_query";
   if (/(什么时候到账|多久到账|待返利|已返利|返利|到账没|到帐没)/.test(value)) return "rebate_status";
   if (/(在线客服|联系客服|人工客服|客服链接|客服在哪)/.test(value)) return "manual_service";
+  if (getTrainingOrderNumbers(prompt || text).length) return "order_waiting";
   return "general";
 }
 
-function extractTrainingKeywords(text) {
+function buildTrainingSemanticKeywords(context = {}) {
+  const platformLabel = getTrainingPlatformLabel(context.platformKey);
+  const intentLabel = getTrainingIntentLabel(context.intentKey);
+  return uniqueTrainingList([
+    platformLabel ? `${platformLabel}订单` : "订单号",
+    intentLabel,
+    context.learningStage ? getTrainingStageLabel(context.learningStage) : "",
+    "客户发订单号"
+  ], 8);
+}
+
+function extractTrainingKeywords(text, context = {}) {
   const normalized = String(text || "").replace(/[，。！？、,.!?]/g, " ").trim();
-  const pieces = normalized.split(/\s+/).filter((item) => item.length >= 2);
+  const pieces = normalized
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2 && !isLikelyTrainingOrderNo(item) && !/^https?:\/\//i.test(item));
+  if (isPureTrainingOrderPrompt(text) || (!pieces.length && getTrainingOrderNumbers(text).length)) {
+    return buildTrainingSemanticKeywords(context);
+  }
   const fallback = normalized.length > 12 ? [normalized.slice(0, 12), normalized.slice(-8)] : [normalized];
-  return uniqueTrainingList(pieces.length ? pieces : fallback, 8);
+  return uniqueTrainingList(pieces.length ? pieces : fallback.filter((item) => !isLikelyTrainingOrderNo(item)), 8);
 }
 
 function buildServerLearningBucketKey(prompt, platformKey = "", intentKey = "", learningStage = "first_answer") {
-  const keywords = extractTrainingKeywords(prompt)
+  const keywords = extractTrainingKeywords(prompt, { platformKey, intentKey, learningStage })
     .map(normalizeTrainingComparableText)
     .filter(Boolean)
     .slice(0, 3)
     .join("_");
   return ["learn", platformKey || "all", intentKey || "general", learningStage || "first_answer", keywords || normalizeTrainingComparableText(prompt).slice(0, 18)].join(":");
+}
+
+function isTrainingAdLikeText(text) {
+  const value = String(text || "");
+  return /(加微|加v|微信[:：]?|VX|QQ|兼职|刷单|贷款|办卡|推广|引流|合作|代理|招商|招聘|色粉|约吗|博彩|棋牌|返佣项目|私聊|私信|进群|群发|http[s]?:\/\/|www\.)/i.test(value);
+}
+
+function isLowValueTrainingReply(text) {
+  const value = normalizeTrainingComparableText(text);
+  if (!value) return true;
+  if (value.length <= 2) return true;
+  return /^(好的|收到|嗯嗯|可以|谢谢|不客气|您好|你好|稍等|稍等一下|我看看|看一下|已处理|没事|可以的|ok|OK)$/i.test(String(text || "").trim());
+}
+
+function shouldSkipTrainingCandidate(prompt, reply, imageUrls = []) {
+  const text = `${prompt}\n${reply}`;
+  const hasOrder = hasTrainingOrderSignal(text);
+  if (!hasOrder && isTrainingAdLikeText(prompt)) return { skip: true, reason: "疑似广告/无关客户消息" };
+  if (!hasOrder && !imageUrls.length && isLowValueTrainingReply(reply)) return { skip: true, reason: "礼貌性短回复，不适合作为 skill" };
+  if (!hasOrder && !detectTrainingPlatformAliasKey(text) && detectTrainingIntentKey(text) === "general" && String(reply || "").trim().length < 12) {
+    return { skip: true, reason: "缺少可学习场景" };
+  }
+  return { skip: false, reason: "" };
+}
+
+function sanitizeTrainingKeywords(values, context = {}) {
+  const raw = splitSkillListField(values);
+  const hasOrderKeyword = raw.some(isLikelyTrainingOrderNo);
+  const filtered = raw.filter((item) => !isLikelyTrainingOrderNo(item) && !isTrainingAdLikeText(item));
+  const sourceText = String(context.sourceText || "");
+  const semantic = hasOrderKeyword || getTrainingOrderNumbers(sourceText).length
+    ? buildTrainingSemanticKeywords(context)
+    : [];
+  return uniqueTrainingList([...filtered, ...semantic], 24);
+}
+
+function buildTrainingSkillTitle(prompt, platformKey, intentKey) {
+  if (isPureTrainingOrderPrompt(prompt) || getTrainingOrderNumbers(prompt).length) {
+    return `待训练：${[getTrainingPlatformLabel(platformKey), getTrainingIntentLabel(intentKey)].filter(Boolean).join(" ") || "订单号场景"}`;
+  }
+  return `待训练：${String(prompt || "").slice(0, 18)}`;
 }
 
 function queueTrainingCandidate(data, sample) {
@@ -757,8 +880,11 @@ function queueTrainingCandidate(data, sample) {
   const imageUrls = uniqueTrainingList(sample.imageUrls || [], 8);
   if (prompt.length < 2 || (reply.length < 2 && !imageUrls.length)) return { skipped: true };
 
+  const skip = shouldSkipTrainingCandidate(prompt, reply, imageUrls);
+  if (skip.skip) return { skipped: true, reason: skip.reason };
+
   const platformKey = sample.platformKey || detectTrainingPlatformKey(`${prompt}\n${reply}`);
-  const intentKey = sample.intentKey || detectTrainingIntentKey(`${prompt}\n${reply}`);
+  const intentKey = sample.intentKey || detectTrainingIntentKey(`${prompt}\n${reply}`, { prompt, reply, platformKey });
   const learningStage = sample.learningStage || "first_answer";
   const learningBucketKey = buildServerLearningBucketKey(prompt, platformKey, intentKey, learningStage);
   const now = new Date().toISOString();
@@ -776,7 +902,7 @@ function queueTrainingCandidate(data, sample) {
 
   data.skills = Array.isArray(data.skills) ? data.skills : [];
   let index = data.skills.findIndex((skill) => String(skill.learningBucketKey || "") === learningBucketKey);
-  if (index < 0) {
+  if (index < 0 && !isPureTrainingOrderPrompt(prompt)) {
     const promptKey = normalizeTrainingComparableText(prompt);
     index = data.skills.findIndex((skill) => (
       ["learned", "manual"].includes(String(skill.source || "")) &&
@@ -799,7 +925,7 @@ function queueTrainingCandidate(data, sample) {
   const nextSkill = {
     ...(existing || {}),
     id: existing?.id || `sampled-${Date.now()}-${crypto.createHash("sha1").update(learningBucketKey).digest("hex").slice(0, 8)}`,
-    title: existing?.title || `待训练：${prompt.slice(0, 18)}`,
+    title: existing?.title || buildTrainingSkillTitle(prompt, platformKey, intentKey),
     source: "learned",
     enabled: existing ? existing.enabled !== false : false,
     allowAutoReply: Boolean(existing?.allowAutoReply),
@@ -812,7 +938,12 @@ function queueTrainingCandidate(data, sample) {
     learningBucketKey,
     learningStage,
     trainingStatus: "needs_optimization",
-    keywords: uniqueTrainingList([...(existing?.keywords || []), ...extractTrainingKeywords(prompt)], 24),
+    keywords: sanitizeTrainingKeywords([...(existing?.keywords || []), ...extractTrainingKeywords(prompt, { platformKey, intentKey, learningStage })], {
+      platformKey,
+      intentKey,
+      learningStage,
+      sourceText: prompt
+    }),
     samples: uniqueTrainingList([...(existing?.samples || []), prompt, ...mergedOverrides.map((item) => item.prompt)], 14),
     manualOverrides: mergedOverrides,
     lastManualOverrideAt: now,
@@ -878,6 +1009,16 @@ function getSkillTrainingReasons(skill, text, latestDateKey, selectedDateKey) {
   if (manualSummary.stageLabels.length) reasons.push({ level: "info", label: manualSummary.stageLabels[0] });
   if (String(latestDateKey) === String(selectedDateKey)) reasons.push({ level: "info", label: "今日变动" });
   if (imageCount || manualSummary.imageUrls.length) reasons.push({ level: "info", label: `${Math.max(imageCount, manualSummary.imageUrls.length)} 张图片` });
+  const promptLikeValues = [
+    ...(Array.isArray(skill.samples) ? skill.samples : []),
+    ...(Array.isArray(skill.manualOverrides) ? skill.manualOverrides.map((item) => item.prompt || "") : [])
+  ];
+  if (promptLikeValues.some(isPureTrainingOrderPrompt)) {
+    reasons.push({ level: "warn", label: "纯订单号已语义化" });
+  }
+  if (Array.isArray(skill.manualOverrides) && skill.manualOverrides.some((item) => isTrainingAdLikeText(item.prompt) && !hasTrainingOrderSignal(item.prompt))) {
+    reasons.push({ level: "danger", label: "疑似广告样本" });
+  }
   if ((text || !(imageCount || manualSummary.imageUrls.length)) && (isTrainingDirtyText(text) || splitSkillListField(skill.keywords).some(isTrainingDirtyText))) {
     reasons.push({ level: "danger", label: "疑似脏学习" });
   }
@@ -892,6 +1033,22 @@ function getSkillTrainingReasons(skill, text, latestDateKey, selectedDateKey) {
 function getLatestSkillOverride(skill) {
   const overrides = Array.isArray(skill.manualOverrides) ? skill.manualOverrides : [];
   return [...overrides].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0))[0] || null;
+}
+
+function buildTrainingRecommendation(skill, reasons, manualSummary) {
+  if (reasons.some((item) => item.label === "疑似广告样本")) {
+    return "疑似广告或无关推广带来的礼貌回复，建议删除记录或不再使用。";
+  }
+  if (reasons.some((item) => item.label === "纯订单号已语义化")) {
+    return "客户只发订单号时，先确认平台和回复类型；关键词应是平台订单/订单未提示，不要保留订单号本身。";
+  }
+  if (reasons.some((item) => item.level === "danger" || item.level === "warn")) {
+    return "建议先改写、停用或删除这条学习记录。";
+  }
+  if (manualSummary?.replyVariants?.length >= 2) {
+    return "存在多种人工回复，请选最稳定的一种保存，避免后续推荐来回摇摆。";
+  }
+  return "可以保存并启用，后续推荐会继续参考。";
 }
 
 function buildSkillTrainingItems(data, options = {}) {
@@ -948,9 +1105,7 @@ function buildSkillTrainingItems(data, options = {}) {
         learningStage: String(latestOverride.learningStage || "")
       } : null,
       reasons,
-      recommendation: hasIssue
-        ? "建议先改写、停用或删除这条学习记录。"
-        : "可以批准原样，后续推荐会继续参考。"
+      recommendation: buildTrainingRecommendation(skill, reasons, manualSummary)
     };
   }).filter(Boolean);
 
@@ -989,11 +1144,19 @@ function applySkillTrainingPatch(skill, patch = {}, action = "approve") {
   const now = new Date().toISOString();
   const next = { ...skill };
   if (patch.title !== undefined) next.title = String(patch.title || next.title || "未命名 skill").trim();
-  if (patch.keywords !== undefined) next.keywords = splitSkillListField(patch.keywords).slice(0, 24);
-  if (patch.samples !== undefined) next.samples = splitSkillListField(patch.samples).slice(0, 14);
   if (patch.platformKey !== undefined) next.platformKey = String(patch.platformKey || "").trim();
   if (patch.intentKey !== undefined) next.intentKey = String(patch.intentKey || "").trim();
   if (patch.learningStage !== undefined) next.learningStage = String(patch.learningStage || "").trim();
+  if ((next.intentKey === "general" || !next.intentKey) && isPureTrainingOrderPrompt([patch.samples, next.samples].flat().join("\n"))) {
+    next.intentKey = "order_waiting";
+  }
+  if (patch.keywords !== undefined) next.keywords = sanitizeTrainingKeywords(patch.keywords, {
+    platformKey: String(next.platformKey || ""),
+    intentKey: String(next.intentKey || ""),
+    learningStage: String(next.learningStage || ""),
+    sourceText: [patch.samples, next.samples, next.keywords].flat().join("\n")
+  });
+  if (patch.samples !== undefined) next.samples = splitSkillListField(patch.samples).slice(0, 14);
   if (patch.allowAutoReply !== undefined) next.allowAutoReply = Boolean(patch.allowAutoReply);
   if (patch.noReply !== undefined) next.noReply = Boolean(patch.noReply);
   if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled);
@@ -1736,7 +1899,7 @@ async function collectManualReplySamples(options = {}) {
           contactId,
           messageKey: getSampleMessageKey(message, `${contactId}:${samples.length}`),
           platformKey: detectTrainingPlatformKey(sampleText),
-          intentKey: detectTrainingIntentKey(sampleText),
+          intentKey: detectTrainingIntentKey(sampleText, { prompt, reply }),
           learningStage,
           customerAt: customerAtMs ? new Date(customerAtMs).toISOString() : "",
           replyAt: replyAtMs ? new Date(replyAtMs).toISOString() : ""

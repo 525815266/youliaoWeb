@@ -9025,6 +9025,7 @@ function detectOrderPlatformFromState() {
 function detectSkillIntentKey(text) {
   const normalized = normalizeForMatch(text);
   if (!normalized) return "";
+  if (isPureOrderNumberText(text)) return "order_waiting";
   const ranked = SKILL_INTENT_DEFS
     .map((intent) => ({
       key: intent.key,
@@ -9035,7 +9036,7 @@ function detectSkillIntentKey(text) {
     }))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score);
-  return ranked[0]?.key || "";
+  return ranked[0]?.key || (getOrderNumbersFromText(text).length ? "order_waiting" : "");
 }
 
 function resolveSkillPlatformKey(skill, contextMeta) {
@@ -9268,6 +9269,53 @@ function getLatestActionableInboundMessage() {
   )) || null;
 }
 
+function isLikelyOrderNumberText(value) {
+  const text = normalizeOrderNo(value);
+  return /^\d{8}-\d{4,}$/.test(text) || /^\d{10,24}$/.test(text) || /^5\d{18}$/.test(text);
+}
+
+function getOrderNumbersFromText(text) {
+  return [...new Set((String(text || "").match(/[A-Za-z0-9-]{8,24}/g) || [])
+    .map(normalizeOrderNo)
+    .filter(isLikelyOrderNumberText))];
+}
+
+function stripOrderNumbersFromText(text) {
+  let value = String(text || "");
+  getOrderNumbersFromText(value).forEach((orderNo) => {
+    value = value.replaceAll(orderNo, " ");
+  });
+  return value.replace(/[^\p{Script=Han}A-Za-z]+/gu, "").trim();
+}
+
+function isPureOrderNumberText(text) {
+  const orderNos = getOrderNumbersFromText(text);
+  return Boolean(orderNos.length) && stripOrderNumbersFromText(text).length === 0;
+}
+
+function hasOrderLearningSignal(text) {
+  return getOrderNumbersFromText(text).length > 0 || /(订单|单号|下单|跟单|提示|回馈|返利|饭粒|红包|鸿包)/.test(String(text || ""));
+}
+
+function isAdLikeLearningText(text) {
+  return /(加微|加v|微信[:：]?|VX|QQ|兼职|刷单|贷款|办卡|推广|引流|合作|代理|招商|招聘|博彩|棋牌|私聊|私信|进群|群发|http[s]?:\/\/|www\.)/i.test(String(text || ""));
+}
+
+function isLowValueLearningReply(text) {
+  const raw = String(text || "").trim();
+  const value = normalizeForMatch(raw);
+  if (!value || value.length <= 2) return true;
+  return /^(好的|收到|嗯嗯|可以|谢谢|不客气|您好|你好|稍等|稍等一下|我看看|看一下|已处理|没事|可以的|ok)$/i.test(raw);
+}
+
+function shouldSkipManualLearning(prompt, reply, images = []) {
+  const text = `${prompt}\n${reply}`;
+  if (!hasOrderLearningSignal(text) && isAdLikeLearningText(prompt)) return true;
+  if (!hasOrderLearningSignal(text) && !images.length && isLowValueLearningReply(reply)) return true;
+  if (!hasOrderLearningSignal(text) && !detectPlatformKeyFromText(text) && !detectSkillIntentKey(text) && String(reply || "").trim().length < 12) return true;
+  return false;
+}
+
 function getLatestUnansweredInboundMessage() {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
     const message = state.messages[index];
@@ -9406,7 +9454,7 @@ function getLearningStageForMessage(latest) {
 }
 
 function buildLearningBucketKey(prompt, contextMeta = {}, learningStage = "") {
-  const keywords = extractLearningKeywords(prompt)
+  const keywords = extractLearningKeywords(prompt, { ...contextMeta, learningStage })
     .map(normalizeForMatch)
     .filter(Boolean)
     .slice(0, 4);
@@ -9423,12 +9471,34 @@ function findLearnedSkillForBucket(prompt, contextMeta = {}, learningStage = "")
   const bucketKey = buildLearningBucketKey(prompt, contextMeta, learningStage);
   const exact = state.replySkills.find((skill) => String(skill.learningBucketKey || "") === bucketKey);
   if (exact) return exact;
+  if (isPureOrderNumberText(prompt)) return null;
   const fallback = findLearnedSkillForPrompt(prompt);
   if (!fallback) return null;
   if (contextMeta.platformKey && getSkillPlatformKeys(fallback).length && !getSkillPlatformKeys(fallback).includes(contextMeta.platformKey)) return null;
   if (contextMeta.intentKey && getSkillIntentKeys(fallback).length && !getSkillIntentKeys(fallback).includes(contextMeta.intentKey)) return null;
   if (fallback.learningStage && learningStage && fallback.learningStage !== learningStage) return null;
   return fallback;
+}
+
+function buildSemanticLearningKeywords(contextMeta = {}, learningStage = "") {
+  return uniqueSkillStrings([
+    contextMeta.platformKey ? `${getPlatformLabelByKey(contextMeta.platformKey)}订单` : "订单号",
+    contextMeta.intentKey ? getIntentLabelByKey(contextMeta.intentKey) : "订单未提示",
+    learningStage === "customer_followup" ? "客户追问" : "首次答复",
+    "客户发订单号"
+  ], 8);
+}
+
+function sanitizeLearningKeywords(values, contextMeta = {}, sourceText = "") {
+  const raw = Array.isArray(values) ? values : [values];
+  const flat = raw.flatMap((value) => String(value || "").split(/[\n,，、\s]+/));
+  const filtered = flat
+    .map((item) => item.trim())
+    .filter((item) => item && !isLikelyOrderNumberText(item) && !isAdLikeLearningText(item));
+  const semantic = getOrderNumbersFromText(sourceText).length
+    ? buildSemanticLearningKeywords(contextMeta, contextMeta.learningStage)
+    : [];
+  return uniqueSkillStrings([...filtered, ...semantic], 20);
 }
 
 function uniqueSkillStrings(values, limit = 24) {
@@ -9477,6 +9547,7 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
   const reply = String(content || "").trim();
   const images = imageUrls.map(String).filter(Boolean);
   if (prompt.length < 2 || (reply.length < 2 && !images.length)) return;
+  if (shouldSkipManualLearning(prompt, reply, images)) return;
   const steps = [
     reply ? { type: "text", content: reply } : null,
     ...images.map((url, index) => ({ type: "image", url, label: `人工回复图片 ${index + 1}` }))
@@ -9487,7 +9558,7 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
   const matchedSkill = matchedSkillId ? getSkillById(matchedSkillId) : null;
   const contextMeta = collectSkillContextMeta(latest, prompt);
   const detectedPlatformKey = contextMeta.platformKey || detectOrderPlatformFromState() || options.matchedSkill?.platformKey || "";
-  const detectedIntentKey = options.matchedSkill?.intentKey || contextMeta.intentKey || "";
+  const detectedIntentKey = contextMeta.intentKey || options.matchedSkill?.intentKey || "";
   if (canLearnAsMatchedSkill(matchedSkill, latest, prompt, {
     ...contextMeta,
     platformKey: detectedPlatformKey,
@@ -9546,7 +9617,20 @@ async function learnFromManualReply(content, imageUrls = [], options = {}) {
     learningBucketKey,
     learningStage,
     trainingStatus: "needs_optimization",
-    keywords: [...new Set([...(existing?.keywords || []), ...extractLearningKeywords(prompt)])].slice(0, 20),
+    keywords: sanitizeLearningKeywords([
+      ...(existing?.keywords || []),
+      ...extractLearningKeywords(prompt, {
+        ...contextMeta,
+        platformKey: detectedPlatformKey,
+        intentKey: detectedIntentKey,
+        learningStage
+      })
+    ], {
+      ...contextMeta,
+      platformKey: detectedPlatformKey,
+      intentKey: detectedIntentKey,
+      learningStage
+    }, prompt),
     samples: uniqueSkillStrings([...(existing?.samples || []), prompt, ...overrides.map((item) => item.prompt)], 14),
     manualOverrides: overrides,
     lastManualOverrideAt: override.at,
@@ -9668,11 +9752,14 @@ function findLearnedSkillForPrompt(prompt) {
   return candidates[0]?.skill || null;
 }
 
-function extractLearningKeywords(text) {
+function extractLearningKeywords(text, contextMeta = {}) {
   const normalized = String(text || "").replace(/[，。！？、,.!?]/g, " ").trim();
-  const pieces = normalized.split(/\s+/).filter((item) => item.length >= 2);
+  const pieces = normalized.split(/\s+/).filter((item) => item.length >= 2 && !isLikelyOrderNumberText(item));
+  if (getOrderNumbersFromText(text).length) {
+    return buildSemanticLearningKeywords(contextMeta, contextMeta.learningStage);
+  }
   const fallback = normalized.length > 12 ? [normalized.slice(0, 12), normalized.slice(-8)] : [normalized];
-  return [...new Set(pieces.length ? pieces : fallback)].slice(0, 8);
+  return uniqueSkillStrings(pieces.length ? pieces : fallback.filter((item) => !isLikelyOrderNumberText(item)), 8);
 }
 
 function compactInlineText(value, max = 60) {

@@ -826,6 +826,7 @@
 }
 
 .training-editor input,
+.training-editor select,
 .training-editor textarea {
   width: 100%;
   border: 1px solid #cfdced;
@@ -833,6 +834,10 @@
   padding: 7px 8px;
   color: #1f2e45;
   background: #fff;
+}
+
+.training-editor select {
+  height: 34px;
 }
 
 .training-editor textarea {
