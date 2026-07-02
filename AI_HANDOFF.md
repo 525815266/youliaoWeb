@@ -3488,3 +3488,60 @@ Do not regress:
 - Do not add fixed desktop min-widths under the 760px breakpoint.
 - If a new composer control is added, test the 390px viewport. The mobile composer has only two intentional rows.
 - If mobile red-dot filtering is needed later, expose it through a mobile menu or tool panel, not by adding a third composer row.
+
+
+## 2026-07-03 Handoff: Withdrawal Refund-block AI Insight
+
+Problem:
+
+- Some users repeatedly try to withdraw, but the chat/system message says the request is paused because there are pending return/refund/exchange orders.
+- The user believes these repeat cases often mean the refund/rights-protection order has already finished, but the service has not synced the final order status.
+- The web client should surface this as an AI insight in the chat composer area, without fake data.
+
+Changed files:
+
+- `public/index.html`
+- `public/app.js`
+- `public/styles.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Key behavior:
+
+- Added `#withdrawRiskSignal` after the composer AI button.
+- Added `state.withdrawRisk`.
+- Scans real loaded messages plus optional deeper pages through existing `fetchMessagePage()`.
+- Scan window is the last 3 days, but if a withdrawal success/arrival/completion message appears, counting restarts after that success.
+- Threshold is `WITHDRAW_REFUND_MIN_COUNT = 3`, because the user asked for “超过2次”.
+- A refund-block hit must include withdrawal/extraction terms, refund/return/exchange/rights-protection terms, and blocked/paused/unresolved terms.
+- Customer messages that ask “why cannot withdraw / what happened” do not count as block events. They only increase probability/emotion score.
+- Urgency detection adds a separate warning signal for impatient or repeated questioning.
+
+UI states:
+
+- Loading: blue compact status.
+- Safe: green compact status with generic wording, for example `暂无异常感知，正常接待即可`. Do not mention withdrawal/refund in the safe state because more AI insight types will be added later.
+- Notice/warn: orange for customer urgency or medium confidence.
+- Danger: red for high-confidence repeated withdrawal block.
+- High-risk signal buttons:
+  - `查订单`: switches to the order tool and reloads orders.
+  - `复制`: copies the internal insight summary.
+
+AI context:
+
+- `buildAiConversationContext()` includes `AI感知提示：...` when the insight exists.
+- This should influence AI reply generation, especially for refund-block withdrawal cases and urgent customers.
+
+External order script:
+
+- The provided `3.52youzai` Tampermonkey script calls `https://3.52youzai.com/api/console/tbOrder/findTbOrderList`.
+- It captures its `authorization` token inside the `3.52youzai.com` page and GM storage.
+- The web client cannot directly read that GM storage. Do not hardcode that token in frontend code.
+- Future integration should be a backend proxy with configured token, or a Tampermonkey push-back endpoint that sends order status summaries to the web backend.
+
+Do not regress:
+
+- Do not count pre-success withdrawal failures after a later successful withdrawal.
+- Do not count customer restatements as system block events.
+- Do not show fabricated orders or fabricated training data for this insight.
+- Keep the insight compact and generic by default. It must not push the composer input down like the old AI suggestion layout issues.

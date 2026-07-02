@@ -246,6 +246,11 @@ const SEND_MODE_STORAGE_KEY = "youchat.composer.sendMode";
 const READ_STATE_GRACE_MS = 30000;
 const CLEAR_LIST_GRACE_MS = 30000;
 const APPLIED_SUGGESTION_TTL_MS = 10 * 60 * 1000;
+const WITHDRAW_REFUND_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
+const WITHDRAW_REFUND_MIN_COUNT = 3;
+const WITHDRAW_REFUND_SCAN_PAGE_SIZE = 50;
+const WITHDRAW_REFUND_MAX_SCAN_PAGES = 6;
+const WITHDRAW_REFUND_CACHE_MS = 90 * 1000;
 const CONTACT_LIST_ACCOUNT_ID_PATTERN = /^[1-9]\d{0,9}$/;
 const GLOBAL_SEARCH_PAGE_SIZE = 20;
 const CLIENT_NOTICE_PAGE_SIZE = 20;
@@ -473,6 +478,13 @@ const state = {
   historyAutoLoading: false,
   linkPreviewCache: {},
   activeLinkPreview: null,
+  withdrawRisk: {
+    contactId: "",
+    loading: false,
+    signal: null,
+    checkedAt: 0,
+    error: ""
+  },
   clientPaused: localStorage.getItem(CLIENT_PAUSED_STORAGE_KEY) === "true",
   clientOptions: null,
   clientOptionsLoading: false,
@@ -558,6 +570,8 @@ const state = {
 const el = {};
 let refreshTimer = null;
 let scrollRequestId = 0;
+let withdrawRiskScanTimer = null;
+let withdrawRiskScanToken = 0;
 let aiSettingsSnapshot = null;
 const scrollRequestIds = new WeakMap();
 
@@ -645,6 +659,7 @@ function boot() {
     "quickReplyTool",
     "orderTool",
     "skillReplyTool",
+    "withdrawRiskSignal",
     "redOnly",
     "accessIn",
     "transferAi",
@@ -714,6 +729,7 @@ function bindEvents() {
   el.aiSuggestionCard.addEventListener("click", handleAiSuggestionClick);
   el.draftImageTray.addEventListener("click", handleDraftImageClick);
   el.aiSuggest.addEventListener("click", generateAiWithRelay);
+  el.withdrawRiskSignal?.addEventListener("click", handleWithdrawRiskSignalClick);
   el.replyText.addEventListener("input", handleReplyInput);
   el.replyText.addEventListener("keydown", handleReplyKeydown);
   el.replyText.addEventListener("paste", handleReplyPaste);
@@ -2947,6 +2963,7 @@ function renderAll() {
   renderActive();
   renderMessages();
   renderToolContent();
+  renderWithdrawRiskSignal();
   updateMobilePanelState();
 }
 
@@ -4388,6 +4405,7 @@ function renderMessagesFromContactPreview() {
   state.messageLoading = false;
   state.messagesFromPreview = true;
   renderMessages();
+  scheduleWithdrawRiskScan({ deep: false, source: "contact-preview" });
 }
 
 function loadReadContactState() {
@@ -4943,6 +4961,16 @@ function resetContactScopedState() {
   clearAppliedSuggestionContext();
   state.lastSkillPromptKey = "";
   state.lastSkillAutoReplyKey = "";
+  state.withdrawRisk = {
+    contactId: "",
+    loading: false,
+    signal: null,
+    checkedAt: 0,
+    error: ""
+  };
+  if (withdrawRiskScanTimer) window.clearTimeout(withdrawRiskScanTimer);
+  withdrawRiskScanTimer = null;
+  renderWithdrawRiskSignal();
 }
 
 function handleContactListFocusOutside(event) {
@@ -5274,6 +5302,7 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
       maybeBuildSkillSuggestion({ autoReply: mode === "merge" }).catch((error) => log("skill suggestion failed", { error: error.message }));
       scheduleAutoAiSuggestion({ source: `messages:${mode}` });
     }
+    scheduleWithdrawRiskScan({ deep: mode !== "append", source: `messages:${mode}` });
   } catch (error) {
     if (page === 1) {
       if (redOnly) {
@@ -5294,6 +5323,7 @@ async function loadMessages(page = 1, mode = "replace", options = {}) {
     } else if (jumpUnread) {
       scrollToFirstUnreadMessage();
     }
+    scheduleWithdrawRiskScan({ deep: false, source: `messages:error:${mode}` });
     toast(`聊天记录接口失败：${error.message}`, true);
   }
 }
@@ -8446,8 +8476,10 @@ function buildAiConversationContext() {
     .filter(Boolean);
 
   if (!rows.length) return "";
+  const withdrawInsightText = getWithdrawRiskSignalText(state.withdrawRisk.signal);
 
   return [
+    withdrawInsightText ? `AI感知提示：${withdrawInsightText}` : "",
     `当前客户昵称：${contact.userNick || "-"}`,
     `客户微信ID：${contact.userName || "-"}`,
     `客户用户ID：${userId || "-"}`,
@@ -10005,6 +10037,360 @@ function renderAiSuggestionCard() {
   }
 }
 
+function scheduleWithdrawRiskScan(options = {}) {
+  const contactId = String(getContactId(state.activeContact) || "");
+  if (!contactId) {
+    state.withdrawRisk = {
+      contactId: "",
+      loading: false,
+      signal: null,
+      checkedAt: 0,
+      error: ""
+    };
+    renderWithdrawRiskSignal();
+    return;
+  }
+
+  const canUseCached = !options.deep
+    && state.withdrawRisk.contactId === contactId
+    && state.withdrawRisk.checkedAt
+    && Date.now() - Number(state.withdrawRisk.checkedAt) < WITHDRAW_REFUND_CACHE_MS;
+  if (canUseCached) {
+    renderWithdrawRiskSignal();
+    return;
+  }
+
+  if (withdrawRiskScanTimer) window.clearTimeout(withdrawRiskScanTimer);
+  state.withdrawRisk = {
+    ...state.withdrawRisk,
+    contactId,
+    loading: true,
+    error: ""
+  };
+  renderWithdrawRiskSignal();
+
+  withdrawRiskScanTimer = window.setTimeout(() => {
+    runWithdrawRiskScan(options).catch((error) => {
+      const activeId = String(getContactId(state.activeContact) || "");
+      if (activeId !== contactId) return;
+      state.withdrawRisk = {
+        contactId,
+        loading: false,
+        signal: buildWithdrawSafeSignal({ error: error.message }),
+        checkedAt: Date.now(),
+        error: error.message
+      };
+      renderWithdrawRiskSignal();
+      log("withdraw risk scan failed", { source: options.source || "", error: error.message });
+    });
+  }, options.delay ?? 220);
+}
+
+async function runWithdrawRiskScan(options = {}) {
+  const contact = state.activeContact;
+  const contactId = String(getContactId(contact) || "");
+  if (!contactId) return;
+  const token = ++withdrawRiskScanToken;
+  const messages = await collectWithdrawRiskMessages(contact, options);
+  if (token !== withdrawRiskScanToken) return;
+  if (String(getContactId(state.activeContact) || "") !== contactId) return;
+  state.withdrawRisk = {
+    contactId,
+    loading: false,
+    signal: buildWithdrawInsightSignal(messages, contact),
+    checkedAt: Date.now(),
+    error: ""
+  };
+  renderWithdrawRiskSignal();
+}
+
+async function collectWithdrawRiskMessages(contact, options = {}) {
+  const contactId = String(getContactId(contact) || "");
+  const cutoff = Date.now() - WITHDRAW_REFUND_LOOKBACK_MS;
+  const messages = [];
+  const addMessages = (items = []) => {
+    items.filter(Boolean).forEach((item) => messages.push(item));
+  };
+
+  addMessages(state.messages);
+  if (String(state.historyContactId || "") === contactId) addMessages(state.historyMessages);
+  if (Array.isArray(contact?.records)) addMessages(contact.records);
+
+  if (!options.deep) return mergeMessages(messages);
+
+  let cursor = "";
+  for (let page = 1; page <= WITHDRAW_REFUND_MAX_SCAN_PAGES; page += 1) {
+    let result;
+    try {
+      result = await fetchMessagePage(contact, page, WITHDRAW_REFUND_SCAN_PAGE_SIZE, { endTime: cursor });
+    } catch (error) {
+      if (messages.length) {
+        log("withdraw risk scan fallback to loaded messages", { page, error: error.message });
+        break;
+      }
+      throw error;
+    }
+    const records = result.records || [];
+    if (!records.length) break;
+    addMessages(records);
+
+    const merged = mergeMessages(records);
+    const oldest = merged[0];
+    cursor = getMessageCursorTime(oldest);
+    const oldestTime = getMessageTimeValue(oldest);
+    if (!cursor) break;
+    if (oldestTime && oldestTime < cutoff) break;
+    if (records.length < WITHDRAW_REFUND_SCAN_PAGE_SIZE) break;
+  }
+
+  return mergeMessages(messages);
+}
+
+function buildWithdrawInsightSignal(messages = [], contact = state.activeContact) {
+  const merged = mergeMessages(messages).filter((message) => getMessageTimeValue(message) > 0);
+  const lastSuccessAt = getLastWithdrawSuccessTime(merged);
+  const cutoff = Math.max(Date.now() - WITHDRAW_REFUND_LOOKBACK_MS, lastSuccessAt || 0);
+  const windowMessages = merged.filter((message) => getMessageTimeValue(message) >= cutoff);
+  const failures = windowMessages.filter(isWithdrawRefundBlockMessage);
+  const failureCount = failures.length;
+  const customerQuestions = windowMessages.filter(isWithdrawQuestionMessage);
+  const emotion = analyzeCustomerUrgency(windowMessages);
+
+  if (failureCount >= WITHDRAW_REFUND_MIN_COUNT) {
+    const probability = calculateWithdrawRiskProbability({
+      failureCount,
+      customerQuestionCount: customerQuestions.length,
+      emotionScore: emotion.score,
+      firstAt: getMessageTimeValue(failures[0]),
+      lastAt: getMessageTimeValue(failures[failures.length - 1]),
+      lastSuccessAt
+    });
+    const severity = probability >= 82 ? "danger" : probability >= 64 ? "warn" : "notice";
+    return {
+      kind: "withdraw_refund_block",
+      severity,
+      probability,
+      count: failureCount,
+      questionCount: customerQuestions.length,
+      emotion,
+      firstAt: getMessageTimeValue(failures[0]),
+      lastAt: getMessageTimeValue(failures[failures.length - 1]),
+      lastSuccessAt,
+      windowDays: 3,
+      sampleText: compactInlineText(failures[failures.length - 1]?.content || "", 90),
+      copyText: buildWithdrawRiskCopy({
+        contact,
+        count: failureCount,
+        questionCount: customerQuestions.length,
+        probability,
+        emotion,
+        firstAt: getMessageTimeValue(failures[0]),
+        lastAt: getMessageTimeValue(failures[failures.length - 1]),
+        lastSuccessAt
+      })
+    };
+  }
+
+  if (emotion.score >= 42) {
+    return {
+      kind: "customer_urgency",
+      severity: emotion.score >= 70 ? "warn" : "notice",
+      probability: Math.min(78, Math.max(46, emotion.score)),
+      count: failureCount,
+      questionCount: customerQuestions.length,
+      emotion,
+      windowDays: 3,
+      copyText: `客户可能有急躁追问，建议先安抚，再核实订单或提现状态。命中线索：${emotion.reasons.join("、") || "追问较多"}`
+    };
+  }
+
+  return buildWithdrawSafeSignal({ emotion, lastSuccessAt });
+}
+
+function buildWithdrawSafeSignal(options = {}) {
+  return {
+    kind: "safe",
+    severity: "ok",
+    probability: 0,
+    count: 0,
+    questionCount: 0,
+    emotion: options.emotion || { score: 0, reasons: [] },
+    lastSuccessAt: options.lastSuccessAt || 0,
+    error: options.error || "",
+    copyText: options.error
+      ? `AI感知扫描失败：${options.error}`
+      : "AI感知：暂无异常感知，按客户当前需求正常接待即可。"
+  };
+}
+
+function getLastWithdrawSuccessTime(messages = []) {
+  return messages.reduce((latest, message) => {
+    if (!isWithdrawSuccessMessage(message)) return latest;
+    return Math.max(latest, getMessageTimeValue(message));
+  }, 0);
+}
+
+function isWithdrawRefundBlockMessage(message) {
+  if (message?.direction === "incoming" && !message?.isSystemNotice) return false;
+  const text = normalizeWithdrawText(message?.content || "");
+  if (!text) return false;
+  const hasWithdraw = /(提现|提取|提出来|提不了|微信提现)/.test(text);
+  const hasRefundIssue = /(退货|退款|换货|维权|售后)/.test(text);
+  const hasBlock = /(暂缓|阻止|不能|无法|存在|申请中|未完成|卡住|解除|完成后|12h|12小时)/.test(text);
+  return hasWithdraw && hasRefundIssue && hasBlock;
+}
+
+function isWithdrawSuccessMessage(message) {
+  const text = normalizeWithdrawText(message?.content || "");
+  if (!text) return false;
+  if (isWithdrawRefundBlockMessage(message)) return false;
+  return /(提现|提取|转出).{0,12}(成功|到账|打款|已完成|完成|已处理)|(?:成功|到账|打款|已完成|完成|已处理).{0,12}(提现|提取|转出)/.test(text);
+}
+
+function isWithdrawQuestionMessage(message) {
+  if (!message || message.direction === "outgoing" || message.direction === "ai") return false;
+  const text = normalizeWithdrawText(message.content || "");
+  if (!text) return false;
+  return /(提现|提取|钱|余额|账户|到账|维权|退款|退货).{0,16}(为什么|为啥|咋|怎么|什么情况|啥情况|不行|不了|失败|还没|一直|又|多久|问号|\?)|(?:为什么|为啥|咋|怎么|什么情况|啥情况|不行|不了|失败|还没|一直|又|多久|\?).{0,16}(提现|提取|钱|余额|到账|维权|退款|退货)/.test(text);
+}
+
+function analyzeCustomerUrgency(messages = []) {
+  let score = 0;
+  const reasons = new Set();
+  const inbound = messages.filter((message) => message && message.direction === "incoming" && !message.isSystemNotice);
+  inbound.forEach((message) => {
+    const text = normalizeWithdrawText(message.content || "");
+    if (!text) return;
+    if (/(急|赶紧|快点|马上|立刻|等不及|着急)/.test(text)) {
+      score += 24;
+      reasons.add("急躁催促");
+    }
+    if (/(怎么回事|什么情况|为啥|为什么|咋回事|咋还|到底|搞什么|无语)/.test(text)) {
+      score += 18;
+      reasons.add("疑问追问");
+    }
+    if (/(一直|又|多次|几天|好几天|反复|还不行|还是不行|还没好)/.test(text)) {
+      score += 16;
+      reasons.add("反复遇到");
+    }
+    if (/(投诉|生气|骗人|不处理|没人管)/.test(text)) {
+      score += 30;
+      reasons.add("投诉倾向");
+    }
+    if (/[?？]{2,}|[!！]{2,}/.test(String(message.content || ""))) {
+      score += 12;
+      reasons.add("连续标点");
+    }
+  });
+
+  return {
+    score: Math.min(100, score),
+    reasons: [...reasons].slice(0, 4)
+  };
+}
+
+function calculateWithdrawRiskProbability(input = {}) {
+  const countScore = Math.min(48, Number(input.failureCount || 0) * 16);
+  const questionScore = Math.min(20, Number(input.customerQuestionCount || 0) * 8);
+  const emotionScore = Math.min(18, Math.round(Number(input.emotionScore || 0) * 0.22));
+  const span = Number(input.lastAt || 0) - Number(input.firstAt || 0);
+  const spanScore = span > 18 * 60 * 60 * 1000 ? 8 : span > 3 * 60 * 60 * 1000 ? 4 : 0;
+  const recentScore = Date.now() - Number(input.lastAt || 0) < 24 * 60 * 60 * 1000 ? 6 : 0;
+  const resetPenalty = input.lastSuccessAt && Number(input.lastSuccessAt) > Number(input.firstAt || 0) ? 10 : 0;
+  return Math.max(0, Math.min(96, 28 + countScore + questionScore + emotionScore + spanScore + recentScore - resetPenalty));
+}
+
+function normalizeWithdrawText(value) {
+  return String(value || "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, "")
+    .replace(/提[现現]/g, "提现")
+    .replace(/维[权權]/g, "维权")
+    .replace(/退[款款讯]/g, "退款");
+}
+
+function getMessageTimeValue(message) {
+  return getTimeValue(message?.sortTime || message?.sendTime || message?.createDate || message?.createTime || message?.time || message?.id || "");
+}
+
+function buildWithdrawRiskCopy(input = {}) {
+  const lines = [
+    "AI感知：用户可能遇到订单维权/退款结案状态未同步，导致提现反复被暂缓。",
+    `近3天命中次数：${input.count || 0} 次`,
+    `客户追问线索：${input.questionCount || 0} 条`,
+    `成立概率：${input.probability || 0}%`
+  ];
+  if (input.emotion?.reasons?.length) lines.push(`情绪线索：${input.emotion.reasons.join("、")}`);
+  if (input.firstAt) lines.push(`首次命中：${formatTime(input.firstAt)}`);
+  if (input.lastAt) lines.push(`最近命中：${formatTime(input.lastAt)}`);
+  if (input.lastSuccessAt) lines.push(`最近成功提现后重新计数：${formatTime(input.lastSuccessAt)}`);
+  const userName = getContactDisplayName(input.contact || state.activeContact);
+  if (userName) lines.unshift(`客户：${userName}`);
+  return lines.join("\n");
+}
+
+function renderWithdrawRiskSignal() {
+  if (!el.withdrawRiskSignal) return;
+  const contactId = String(getContactId(state.activeContact) || "");
+  if (!contactId) {
+    el.withdrawRiskSignal.className = "withdraw-risk-signal is-hidden";
+    el.withdrawRiskSignal.innerHTML = "";
+    return;
+  }
+
+  const insight = state.withdrawRisk.signal;
+  if (state.withdrawRisk.loading && !insight) {
+    el.withdrawRiskSignal.className = "withdraw-risk-signal is-loading";
+    el.withdrawRiskSignal.innerHTML = '<strong>AI感知</strong><span>正在扫描提现/维权与客户情绪...</span>';
+    return;
+  }
+
+  if (!insight) {
+    el.withdrawRiskSignal.className = "withdraw-risk-signal is-hidden";
+    el.withdrawRiskSignal.innerHTML = "";
+    return;
+  }
+
+  const severityClass = `is-${insight.severity || "ok"}`;
+  const text = getWithdrawRiskSignalText(insight);
+  const canOpenOrders = insight.kind === "withdraw_refund_block";
+  el.withdrawRiskSignal.className = `withdraw-risk-signal ${severityClass}`;
+  el.withdrawRiskSignal.innerHTML = `
+    <strong>AI感知</strong>
+    <span title="${escapeAttr(text)}">${escapeHtml(text)}</span>
+    ${canOpenOrders ? '<button type="button" data-withdraw-risk-action="orders">查订单</button>' : ""}
+    <button type="button" data-withdraw-risk-action="copy">复制</button>
+  `;
+}
+
+function getWithdrawRiskSignalText(insight) {
+  if (!insight) return "";
+  if (insight.kind === "withdraw_refund_block") {
+    const emotion = insight.emotion?.reasons?.length ? `，${insight.emotion.reasons.join("、")}` : "";
+    return `用户近3天提现被维权/退款拦截 ${insight.count} 次，疑似订单结案未同步，概率 ${insight.probability}%${emotion}`;
+  }
+  if (insight.kind === "customer_urgency") {
+    const reason = insight.emotion?.reasons?.join("、") || "多次追问";
+    return `客户可能有急躁情绪，${reason}，建议先安抚再核实`;
+  }
+  if (insight.error) return `扫描失败：${insight.error}`;
+  return "暂无异常感知，正常接待即可";
+}
+
+function handleWithdrawRiskSignalClick(event) {
+  const actionTarget = event.target.closest("[data-withdraw-risk-action]");
+  const action = actionTarget?.dataset.withdrawRiskAction || "";
+  if (action === "copy") {
+    copyToClipboard(state.withdrawRisk.signal?.copyText || getWithdrawRiskSignalText(state.withdrawRisk.signal));
+    return;
+  }
+  if (action === "orders" || !action) {
+    state.orderKeyword = "";
+    setToolTab("order");
+    loadOrders(1);
+  }
+}
+
 function getSuggestionPanelTitle(suggestion) {
   if (!suggestion) return "AI 推荐";
   if (suggestion.type === "optimize") return "文字优化";
@@ -10268,6 +10654,7 @@ async function loadHistoryMessages(page = 1, mode = "replace", options = {}) {
   } finally {
     state.historyLoading = false;
     renderToolContent();
+    scheduleWithdrawRiskScan({ deep: false, source: `history:${mode}` });
     const nextHistoryList = el.toolContent.querySelector("[data-history-list]");
     if (nextHistoryList) {
       if (mode === "append") {
