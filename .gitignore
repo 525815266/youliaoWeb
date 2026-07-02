@@ -9,6 +9,9 @@ logs/api-capture.ndjson
 deploy-dist/
 __pycache__/
 *.pyc
+
+# 一次性 NAS 调试探针（含明文密码，切勿提交）
+scripts/_fnos_*.py
 *.log
 *.tmp
 *.temp
