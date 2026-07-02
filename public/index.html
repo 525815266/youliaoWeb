@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>悠聊 Web 客服工作台</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -207,6 +207,7 @@
 
         <main class="chat-pane">
           <header class="chat-head">
+            <button id="mobileBackToList" class="mobile-panel-button mobile-back-button" type="button">会话</button>
             <div class="active-contact">
               <span id="activeAvatar" class="contact-avatar active-photo active-contact-avatar active-avatar-empty" aria-hidden="true"></span>
               <div>
@@ -218,6 +219,7 @@
               <button id="accessIn" class="light-button" type="button">人工接入</button>
               <button id="transferAi" class="light-button" type="button">转 AI</button>
               <button id="refreshMessages" class="light-button" type="button">刷新</button>
+              <button id="mobileOpenTools" class="mobile-panel-button" type="button">工具</button>
             </div>
           </header>
 
@@ -281,6 +283,10 @@
         </main>
 
         <aside class="tool-pane">
+          <header class="mobile-tool-head">
+            <button id="mobileBackToChat" class="mobile-panel-button mobile-back-button" type="button">聊天</button>
+            <strong>工具栏</strong>
+          </header>
           <div class="tool-tabs" role="tablist" aria-label="右侧工具栏">
             <button class="tool-tab is-active" data-tool-tab="user" type="button">用户</button>
             <button class="tool-tab" data-tool-tab="quick" type="button">快捷回复</button>

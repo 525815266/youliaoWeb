@@ -3417,3 +3417,74 @@ Do not regress:
 - Never store raw order numbers as training keywords.
 - Do not merge pure order-number prompts into old learned skills by fuzzy prompt match.
 - If adding platform order patterns, update both `server.js` and `public/app.js`.
+
+
+## 2026-07-02 Handoff: Mobile Workbench Adaptation
+
+Problem:
+
+- On mobile Safari/phone browsers, the desktop three-column workbench was squeezed into a narrow viewport.
+- Conversation list, chat pane, and a blank right-side area could appear together.
+- The composer and top tools could be clipped, especially near the iPhone browser chrome.
+
+Changed files:
+
+- `public/index.html`
+- `public/app.js`
+- `public/styles.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Key implementation:
+
+- `public/index.html`
+  - viewport now includes `viewport-fit=cover`.
+  - Added mobile-only controls:
+    - `#mobileBackToList`
+    - `#mobileOpenTools`
+    - `#mobileBackToChat`
+  - Added `.mobile-tool-head` above the right-side tool tabs.
+
+- `public/app.js`
+  - Added `MOBILE_WORKBENCH_QUERY = "(max-width: 760px)"`.
+  - Added `state.mobilePanel`, default `list`.
+  - Added:
+    - `isMobileWorkbench()`
+    - `setMobilePanel(panel)`
+    - `updateMobilePanelState()`
+  - `#workbenchView.dataset.mobilePanel` drives mobile panel visibility.
+  - Selecting a contact on mobile switches to `chat`.
+  - Calling `setToolTab()` on mobile switches to `tool`.
+  - Resize updates the mobile panel state and closes the emoji popover.
+
+- `public/styles.css`
+  - Below 760px, `.client-layout` is no longer a three-column grid.
+  - `.conversation-pane`, `.chat-pane`, and `.tool-pane` become full-screen absolute panels.
+  - The visible panel is selected by `#workbenchView[data-mobile-panel="list|chat|tool"]`.
+  - Mobile topbar hides `#operatorName` to avoid status/operator overlap.
+  - Mobile chat head hides `#refreshMessages`; it keeps `会话`, `人工接入`, `转 AI`, and `工具`.
+  - Mobile composer tools wrap into two rows:
+    - icon row
+    - 快捷回复/查订单/skill/AI row
+  - Mobile composer hides `.red-dot-filter` to avoid a third row pushing the input away.
+  - Desktop layout remains unchanged.
+
+Verified:
+
+- `npm run check`
+- Local server health:
+  - `http://127.0.0.1:5177/health`
+- Playwright via system Edge/Chrome:
+  - 390x844 mobile viewport has no horizontal overflow (`scrollWidth === 390`).
+  - list/chat/tool mobile panels become visible with `opacity=1` after transition.
+  - composer stays inside viewport and keeps an editor height around 92px.
+  - chat header buttons are not clipped.
+  - composer tool buttons are not clipped.
+  - 1440x900 desktop keeps three columns: 306px / 752px / 382px.
+
+Do not regress:
+
+- Do not restore the old 760px behavior that stacked `.conversation-pane` and `.chat-pane` vertically.
+- Do not add fixed desktop min-widths under the 760px breakpoint.
+- If a new composer control is added, test the 390px viewport. The mobile composer has only two intentional rows.
+- If mobile red-dot filtering is needed later, expose it through a mobile menu or tool panel, not by adding a third composer row.

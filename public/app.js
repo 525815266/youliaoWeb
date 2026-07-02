@@ -370,6 +370,7 @@ const EMOJI_DEFS = [
 const EMOJI_SHORTCUTS = EMOJI_DEFS.map((item) => item.token);
 const EMOJI_LOOKUP = new Map(EMOJI_DEFS.map((item) => [item.token, item]));
 const EMOJI_TOKEN_PATTERN = new RegExp(`(${EMOJI_DEFS.map((item) => escapeRegex(item.token)).join("|")})`, "g");
+const MOBILE_WORKBENCH_QUERY = "(max-width: 760px)";
 
 const state = {
   apiBase: loadStoredApiBase(),
@@ -427,6 +428,7 @@ const state = {
   activeModal: null,
   listTab: "current",
   activeTool: "user",
+  mobilePanel: "list",
   contacts: [],
   contactListPage: 1,
   contactListHasMore: false,
@@ -613,6 +615,9 @@ function boot() {
     "activeAvatar",
     "activeTitle",
     "activeMeta",
+    "mobileBackToList",
+    "mobileOpenTools",
+    "mobileBackToChat",
     "messageList",
     "replyText",
     "refreshMessages",
@@ -753,6 +758,9 @@ function bindEvents() {
   });
   el.accessIn.addEventListener("click", accessIn);
   el.transferAi.addEventListener("click", transferAi);
+  el.mobileBackToList?.addEventListener("click", () => setMobilePanel("list"));
+  el.mobileOpenTools?.addEventListener("click", () => setMobilePanel("tool"));
+  el.mobileBackToChat?.addEventListener("click", () => setMobilePanel("chat"));
   el.toolContent.addEventListener("click", handleToolClick);
   el.toolContent.addEventListener("keydown", handleToolKeydown);
   el.messageList.addEventListener("click", handleMessageListClick);
@@ -772,7 +780,10 @@ function bindEvents() {
   document.addEventListener("click", handleContactListFocusOutside);
   document.addEventListener("click", closeClientSettingsMenuOnOutside);
   document.addEventListener("click", closeEmojiOnOutside);
-  window.addEventListener("resize", closeEmojiPopover);
+  window.addEventListener("resize", () => {
+    closeEmojiPopover();
+    updateMobilePanelState();
+  });
   document.addEventListener("keydown", (event) => {
     if (handleGlobalContactListKeydown(event)) return;
     if (event.key === "Escape") {
@@ -2903,6 +2914,7 @@ function showWorkbench() {
   el.operatorName.textContent = `客服 ${state.account || "未登录"}`;
   updateConnectionState(false);
   updateClientChromeState();
+  updateMobilePanelState();
 }
 
 function showLogin() {
@@ -2910,6 +2922,7 @@ function showLogin() {
   stopSignalRConnection().catch((error) => log("SignalR stop on login view failed", { error: error.message }));
   el.workbenchView.classList.add("is-hidden");
   el.loginView.classList.remove("is-hidden");
+  setMobilePanel("list");
 }
 
 function updateConnectionState(failed) {
@@ -2934,6 +2947,26 @@ function renderAll() {
   renderActive();
   renderMessages();
   renderToolContent();
+  updateMobilePanelState();
+}
+
+function isMobileWorkbench() {
+  if (typeof window === "undefined") return false;
+  if (typeof window.matchMedia === "function") {
+    return window.matchMedia(MOBILE_WORKBENCH_QUERY).matches;
+  }
+  return window.innerWidth <= 760;
+}
+
+function setMobilePanel(panel) {
+  state.mobilePanel = ["list", "chat", "tool"].includes(panel) ? panel : "list";
+  updateMobilePanelState();
+}
+
+function updateMobilePanelState() {
+  if (!el.workbenchView) return;
+  const panel = ["list", "chat", "tool"].includes(state.mobilePanel) ? state.mobilePanel : "list";
+  el.workbenchView.dataset.mobilePanel = panel;
 }
 
 function renderFriendRequestBadge() {
@@ -4782,6 +4815,7 @@ async function selectContactById(id, options = {}) {
   const jumpUnread = Boolean(options.jumpUnread);
 
   if (String(getContactId(state.activeContact)) === String(id)) {
+    if (isMobileWorkbench()) setMobilePanel("chat");
     if (jumpUnread) {
       const jumped = await jumpToUnreadInLoadedMessages();
       confirmContactReadInBackground(nextContact);
@@ -4796,6 +4830,7 @@ async function selectContactById(id, options = {}) {
   }
 
   state.activeContact = nextContact;
+  if (isMobileWorkbench()) setMobilePanel("chat");
   resetContactScopedState();
   renderMessagesFromContactPreview();
   renderContacts();
@@ -10296,6 +10331,7 @@ function usesInternalToolScroll(tab = state.activeTool) {
 
 function setToolTab(tab) {
   state.activeTool = tab;
+  if (isMobileWorkbench()) setMobilePanel("tool");
   document.querySelectorAll("[data-tool-tab]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.toolTab === tab);
   });

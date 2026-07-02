@@ -6195,3 +6195,81 @@ Skill 训练页交互改造：
 
 - 已存在的旧错误 skill 仍需在训练页里清空误学样本、保存修改或删除记录；新规则能阻止后续继续污染。
 - 如果后续发现更多平台订单号规则，要同时更新 `server.js` 和 `public/app.js` 的订单号识别。
+
+
+## 81. 2026-07-02 移动端工作台适配
+
+用户问题：
+
+- 手机访问 `yzkf.xmmhsj.cn` 时，桌面三栏被硬挤在手机宽度里。
+- 左侧会话列表、中间聊天框、右侧空白区域同时出现，页面像被截断。
+- iPhone Safari 底部地址栏附近容易盖住输入区，顶部工具栏和聊天输入区也会被挤出半截。
+
+文件改动：
+
+- `public/index.html`
+- `public/app.js`
+- `public/styles.css`
+
+HTML 结构：
+
+- viewport 改为 `width=device-width, initial-scale=1, viewport-fit=cover`，支持 iPhone 安全区。
+- 聊天头部新增移动端按钮：
+  - `#mobileBackToList`：回到会话列表。
+  - `#mobileOpenTools`：打开工具栏。
+- 右侧工具栏新增移动端头部：
+  - `#mobileBackToChat`：从工具栏返回聊天。
+  - 标题显示“工具栏”。
+- 这些按钮桌面端默认隐藏。
+
+JS 行为：
+
+- 新增 `MOBILE_WORKBENCH_QUERY = "(max-width: 760px)"`。
+- `state.mobilePanel` 记录手机端当前面板：`list`、`chat`、`tool`。
+- 新增：
+  - `isMobileWorkbench()`
+  - `setMobilePanel(panel)`
+  - `updateMobilePanelState()`
+- `#workbenchView` 会写入 `data-mobile-panel`，CSS 根据该值显示对应面板。
+- 手机端点击会话后，`selectContactById()` 会自动切到 `chat` 面板。
+- 手机端点击快捷回复、订单、skill、右侧工具 tab 时，`setToolTab()` 会自动切到 `tool` 面板。
+- resize 时会同步面板状态并关闭表情弹窗，避免横竖屏切换后状态错乱。
+
+CSS 移动端布局：
+
+- 760px 以下不再把三栏上下堆叠，也不再保留桌面列宽。
+- `.workbench-view` 改为满屏两行：顶部栏 + 工作区。
+- `.client-layout` 改为相对定位容器。
+- `.conversation-pane`、`.chat-pane`、`.tool-pane` 在手机端都变为全屏绝对定位面板，只显示当前 `data-mobile-panel` 对应面板。
+- 顶部栏压缩：
+  - 手机端隐藏 `#operatorName`，保留连接状态和原生功能按钮。
+  - 原生顶部按钮允许横向轻扫，但页面本身不横向滚动。
+- 聊天头部：
+  - 保留“会话 / 人工接入 / 转 AI / 工具”。
+  - 手机端隐藏聊天头里的 `#refreshMessages`，避免半截按钮。
+- 输入区：
+  - 使用 `100dvh` 和 `env(safe-area-inset-bottom)` 适配 iPhone Safari。
+  - 工具条改为最多两行：第一行图标，第二行快捷回复/查订单/skill/AI。
+  - 手机端暂时收起输入区里的红点过滤，避免第三行把输入框挤没。
+  - 输入框保持至少约 92px 高度。
+- 工具栏：
+  - 手机端变成全屏面板。
+  - 工具 tab 横向轻扫，避免把 tab 挤变形。
+
+验证：
+
+- `npm run check` passed。
+- 本地 `http://127.0.0.1:5177/health` 返回 200。
+- 使用系统 Edge/Chrome 的 Playwright 通道验证：
+  - 390x844 手机视口：`document.documentElement.scrollWidth === 390`。
+  - 会话面板、聊天面板、工具面板都能独占全屏，切换后 `visibility=visible` 且 `opacity=1`。
+  - 聊天输入框底部贴合视口，不再被三栏布局挤出屏幕。
+  - 聊天头部三个按钮完整显示，不再出现半截“工具/刷新”。
+  - 输入区工具条不再出现半截“查订单”。
+  - 1440x900 桌面视口仍保持三栏布局：306px / 752px / 382px，移动端按钮桌面隐藏。
+
+后续注意：
+
+- 手机端是分面板工作流，不是桌面三栏缩放。后续新增右侧工具时，需要确认 `setToolTab()` 在手机端仍会进入 `tool` 面板。
+- 手机端输入区红点过滤目前收起，如果以后要在移动端使用红点过滤，建议放进聊天头工具菜单或工具栏，而不是再塞回输入工具条。
+- 不要重新引入 `.client-layout` 的固定最小列宽到 760px 以下，否则会恢复横向溢出。
