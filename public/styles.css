@@ -986,11 +986,48 @@ textarea:focus-visible {
   text-align: left;
   background: #fff;
   cursor: pointer;
+  transition: background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
 .contact-card:hover,
 .contact-card.is-active {
   background: #eaf4ff;
+}
+
+.contact-card.has-ai-urgency {
+  background: linear-gradient(90deg, rgba(240, 253, 244, 0.98) 0%, #fff 72%);
+}
+
+.contact-card.has-ai-urgency:hover,
+.contact-card.has-ai-urgency.is-active {
+  background: linear-gradient(90deg, rgba(226, 246, 235, 0.98) 0%, #eaf4ff 78%);
+}
+
+.contact-card.is-urgency-notice {
+  background: linear-gradient(90deg, rgba(255, 251, 235, 0.98) 0%, #fff 72%);
+}
+
+.contact-card.is-urgency-notice:hover,
+.contact-card.is-urgency-notice.is-active {
+  background: linear-gradient(90deg, rgba(254, 243, 199, 0.96) 0%, #eaf4ff 78%);
+}
+
+.contact-card.is-urgency-warn {
+  background: linear-gradient(90deg, rgba(255, 247, 237, 0.98) 0%, #fff 74%);
+}
+
+.contact-card.is-urgency-warn:hover,
+.contact-card.is-urgency-warn.is-active {
+  background: linear-gradient(90deg, rgba(255, 237, 213, 0.98) 0%, #eaf4ff 78%);
+}
+
+.contact-card.is-urgency-danger {
+  background: linear-gradient(90deg, rgba(254, 242, 242, 1) 0%, #fff 76%);
+}
+
+.contact-card.is-urgency-danger:hover,
+.contact-card.is-urgency-danger.is-active {
+  background: linear-gradient(90deg, rgba(254, 226, 226, 1) 0%, #eaf4ff 80%);
 }
 
 .contact-card.has-unread::before {
@@ -1183,6 +1220,41 @@ textarea:focus-visible {
   text-align: center;
   line-height: 18px;
   background: #ef4444;
+}
+
+.contact-urgency-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid #b8dfc7;
+  border-radius: 999px;
+  color: #177245;
+  background: #edf8f1;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.contact-card.is-urgency-notice .contact-urgency-pill {
+  border-color: #f3c978;
+  color: #9a570d;
+  background: #fff8e8;
+}
+
+.contact-card.is-urgency-warn .contact-urgency-pill {
+  border-color: #f3b26a;
+  color: #b54708;
+  background: #fff3e5;
+}
+
+.contact-card.is-urgency-danger .contact-urgency-pill {
+  border-color: #f4a7a2;
+  color: #b42318;
+  background: #fff1f0;
 }
 
 .conversation-tabs {
@@ -2189,6 +2261,18 @@ textarea:focus-visible {
 
 .withdraw-risk-signal button:hover {
   background: #fff;
+}
+
+.withdraw-dismiss-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 2px;
+}
+
+.withdraw-dismiss-actions button {
+  font-weight: 700;
 }
 
 .withdraw-risk-signal.is-loading {

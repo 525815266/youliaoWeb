@@ -3545,3 +3545,75 @@ Do not regress:
 - Do not count customer restatements as system block events.
 - Do not show fabricated orders or fabricated training data for this insight.
 - Keep the insight compact and generic by default. It must not push the composer input down like the old AI suggestion layout issues.
+
+
+## 2026-07-03 Handoff: AI Insight Urgency and Dismissal
+
+Problem:
+
+- The safe AI insight state had an unnecessary `复制` button.
+- The safe state wording was too specific to withdrawal/refund risk, but the product will add more AI insight types later.
+- The user wants urgency visible in the conversation list, not only after opening a conversation.
+- If the customer calms down after the agent soothes them, the insight should clear automatically.
+- Otherwise the agent needs a manual clear flow with `忽略` and `已解决`.
+
+Changed files:
+
+- `public/app.js`
+- `public/styles.css`
+- `PROJECT_MEMORY.md`
+- `AI_HANDOFF.md`
+
+Implementation:
+
+- Added persistent local dismissal storage:
+  - `INSIGHT_DISMISS_STORAGE_KEY = "youchat.ai.insightDismissals"`
+  - `INSIGHT_DISMISS_TTL_MS = 3 days`
+  - `state.insightDismissals`
+- Added list-level insight cache:
+  - `state.contactInsights`
+  - Deep active-conversation scans write their result back into this cache.
+- Conversation list now computes a lightweight insight from contact `records`, or from `lastContent` when records are missing.
+- Conversation cards display urgency pills:
+  - `AI 稳`
+  - `AI 低`
+  - `AI 中`
+  - `AI 高`
+- Conversation card backgrounds use subtle full-card gradients from green to yellow/orange/red.
+
+Composer insight behavior:
+
+- Safe state has no buttons.
+- Clicking the safe strip no longer jumps to orders.
+- Risk state may show:
+  - `查订单` for withdrawal/refund block risks.
+  - `消除` for dismissible risks.
+- Clicking `消除` expands inline actions:
+  - `忽略`
+  - `已解决`
+- Dismissal lowers the active insight and list urgency to safe.
+- A later risk message with a timestamp after the dismissal can trigger the insight again.
+
+Automatic easing:
+
+- Added:
+  - `detectInsightResolution()`
+  - `isSoothingOutgoingMessage()`
+  - `isCustomerReliefMessage()`
+- If the agent/AI sends a soothing or checking message, and the customer later replies with understanding/thanks/OK, the insight becomes safe with `客户已回复理解，感知已缓和`.
+
+Verified:
+
+- `npm run check`
+- Browser probe:
+  - Safe insight has zero buttons.
+  - Risk insight buttons are `查订单`, `消除`, `忽略`, `已解决`.
+  - Desktop strip stays 520x30.
+  - Mobile 390px viewport has no horizontal overflow and composer remains inside the viewport.
+  - Conversation card can show `AI 高` with a red gradient.
+
+Do not regress:
+
+- Do not re-add a copy button to the safe insight state.
+- Do not make the safe text specific to one scenario.
+- Future insight types should reuse `contactInsights` and `insightDismissals` instead of creating separate list urgency systems.

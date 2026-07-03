@@ -243,9 +243,11 @@ const CLEARED_CONTACTS_STORAGE_KEY = "youchat.clearedContactState";
 const CONTACT_LIST_ACCOUNT_IDS_STORAGE_KEY = "youchat.contactListAccountIds";
 const CLIENT_PAUSED_STORAGE_KEY = "youchat.client.paused";
 const SEND_MODE_STORAGE_KEY = "youchat.composer.sendMode";
+const INSIGHT_DISMISS_STORAGE_KEY = "youchat.ai.insightDismissals";
 const READ_STATE_GRACE_MS = 30000;
 const CLEAR_LIST_GRACE_MS = 30000;
 const APPLIED_SUGGESTION_TTL_MS = 10 * 60 * 1000;
+const INSIGHT_DISMISS_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const WITHDRAW_REFUND_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
 const WITHDRAW_REFUND_MIN_COUNT = 3;
 const WITHDRAW_REFUND_SCAN_PAGE_SIZE = 50;
@@ -482,9 +484,12 @@ const state = {
     contactId: "",
     loading: false,
     signal: null,
+    dismissOpen: false,
     checkedAt: 0,
     error: ""
   },
+  contactInsights: {},
+  insightDismissals: loadInsightDismissals(),
   clientPaused: localStorage.getItem(CLIENT_PAUSED_STORAGE_KEY) === "true",
   clientOptions: null,
   clientOptionsLoading: false,
@@ -4351,8 +4356,10 @@ function renderContacts() {
     const avatar = renderContactAvatar(contact);
     const displayName = getContactDisplayName(contact);
     const detail = getContactListDetail(contact);
+    const insight = getContactInsight(contact);
+    const urgencyClass = getContactUrgencyClass(insight);
     return `
-      <div class="contact-card ${active ? "is-active" : ""} ${isPinned ? "is-pinned" : ""} ${unread ? "has-unread" : ""}" data-contact-id="${escapeAttr(contactId)}" role="button" tabindex="0">
+      <div class="contact-card ${active ? "is-active" : ""} ${isPinned ? "is-pinned" : ""} ${unread ? "has-unread" : ""} ${urgencyClass}" data-contact-id="${escapeAttr(contactId)}" role="button" tabindex="0">
         ${avatar}
         <span class="contact-main">
           <span class="contact-title-row">
@@ -4363,6 +4370,7 @@ function renderContacts() {
         </span>
         <span class="contact-side">
           <span>${escapeHtml(contact.time || "")}</span>
+          ${renderContactUrgencyPill(insight)}
           ${unread ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}
         </span>
         <span class="contact-last">${escapeHtml(contact.lastContent || "暂无最新消息")}</span>
@@ -4371,6 +4379,59 @@ function renderContacts() {
       </div>
     `;
   }).join("");
+}
+
+function getContactInsight(contact) {
+  const contactId = String(getContactId(contact) || "");
+  const cached = contactId ? state.contactInsights[contactId] : null;
+  if (cached) return applyInsightDismissal(cached, contact);
+  return buildContactInsightFromPreview(contact);
+}
+
+function buildContactInsightFromPreview(contact) {
+  const contactId = String(getContactId(contact) || "");
+  const messages = [];
+  if (Array.isArray(contact?.records)) messages.push(...contact.records);
+  if (!messages.length && contact?.lastContent) {
+    const content = String(contact.lastContent || "");
+    messages.push({
+      contactId,
+      id: `last-${contactId}`,
+      direction: isLikelySystemInsightText(content) ? "system" : "incoming",
+      isSystemNotice: isLikelySystemInsightText(content),
+      content,
+      sortTime: Number(contact.sortTime || Date.now()),
+      time: contact.time || ""
+    });
+  }
+  return applyInsightDismissal(buildWithdrawInsightSignal(messages, contact), contact);
+}
+
+function isLikelySystemInsightText(text) {
+  const normalized = normalizeWithdrawText(text);
+  return /(提现|提取)/.test(normalized) && /(退货|退款|换货|维权|售后)/.test(normalized);
+}
+
+function getContactUrgencyScore(insight) {
+  if (!insight || insight.kind === "safe" || insight.dismissed) return 0;
+  if (insight.kind === "withdraw_refund_block") return Math.max(66, Number(insight.probability || 0));
+  if (insight.kind === "customer_urgency") return Math.max(42, Number(insight.probability || insight.emotion?.score || 0));
+  return Number(insight.probability || 0);
+}
+
+function getContactUrgencyClass(insight) {
+  const score = getContactUrgencyScore(insight);
+  if (score >= 82) return "has-ai-urgency is-urgency-danger";
+  if (score >= 64) return "has-ai-urgency is-urgency-warn";
+  if (score >= 38) return "has-ai-urgency is-urgency-notice";
+  return "has-ai-urgency is-urgency-ok";
+}
+
+function renderContactUrgencyPill(insight) {
+  const score = getContactUrgencyScore(insight);
+  const text = score >= 82 ? "高" : score >= 64 ? "中" : score >= 38 ? "低" : "稳";
+  const title = getWithdrawRiskSignalText(insight);
+  return `<span class="contact-urgency-pill" title="${escapeAttr(title)}">AI ${escapeHtml(text)}</span>`;
 }
 
 function getContactHoverActions(contact, contactId = getContactId(contact)) {
@@ -4965,6 +5026,7 @@ function resetContactScopedState() {
     contactId: "",
     loading: false,
     signal: null,
+    dismissOpen: false,
     checkedAt: 0,
     error: ""
   };
@@ -10094,14 +10156,18 @@ async function runWithdrawRiskScan(options = {}) {
   const messages = await collectWithdrawRiskMessages(contact, options);
   if (token !== withdrawRiskScanToken) return;
   if (String(getContactId(state.activeContact) || "") !== contactId) return;
+  const signal = applyInsightDismissal(buildWithdrawInsightSignal(messages, contact), contact);
+  state.contactInsights[contactId] = signal;
   state.withdrawRisk = {
     contactId,
     loading: false,
-    signal: buildWithdrawInsightSignal(messages, contact),
+    signal,
+    dismissOpen: false,
     checkedAt: Date.now(),
     error: ""
   };
   renderWithdrawRiskSignal();
+  renderContacts();
 }
 
 async function collectWithdrawRiskMessages(contact, options = {}) {
@@ -10155,6 +10221,19 @@ function buildWithdrawInsightSignal(messages = [], contact = state.activeContact
   const failureCount = failures.length;
   const customerQuestions = windowMessages.filter(isWithdrawQuestionMessage);
   const emotion = analyzeCustomerUrgency(windowMessages);
+  const resolution = detectInsightResolution(windowMessages);
+  const latestSignalAt = Math.max(
+    failures.reduce((max, message) => Math.max(max, getMessageTimeValue(message)), 0),
+    customerQuestions.reduce((max, message) => Math.max(max, getMessageTimeValue(message)), 0),
+    emotion.lastAt || 0
+  );
+  if (resolution && latestSignalAt && resolution.time >= latestSignalAt) {
+    return buildWithdrawSafeSignal({
+      emotion: { score: 0, reasons: [] },
+      lastSuccessAt,
+      resolvedText: "客户已回复理解，感知已缓和"
+    });
+  }
 
   if (failureCount >= WITHDRAW_REFUND_MIN_COUNT) {
     const probability = calculateWithdrawRiskProbability({
@@ -10199,6 +10278,7 @@ function buildWithdrawInsightSignal(messages = [], contact = state.activeContact
       count: failureCount,
       questionCount: customerQuestions.length,
       emotion,
+      lastAt: emotion.lastAt || getMessageTimeValue(customerQuestions[customerQuestions.length - 1]),
       windowDays: 3,
       copyText: `客户可能有急躁追问，建议先安抚，再核实订单或提现状态。命中线索：${emotion.reasons.join("、") || "追问较多"}`
     };
@@ -10217,10 +10297,102 @@ function buildWithdrawSafeSignal(options = {}) {
     emotion: options.emotion || { score: 0, reasons: [] },
     lastSuccessAt: options.lastSuccessAt || 0,
     error: options.error || "",
+    resolvedText: options.resolvedText || "",
     copyText: options.error
       ? `AI感知扫描失败：${options.error}`
-      : "AI感知：暂无异常感知，按客户当前需求正常接待即可。"
+      : options.resolvedText || "AI感知：暂无异常感知，按客户当前需求正常接待即可。"
   };
+}
+
+function loadInsightDismissals() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(INSIGHT_DISMISS_STORAGE_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistInsightDismissals() {
+  const now = Date.now();
+  const entries = Object.entries(state.insightDismissals || {})
+    .filter(([, value]) => Number(value?.expiresAt || 0) > now)
+    .slice(-500);
+  state.insightDismissals = Object.fromEntries(entries);
+  localStorage.setItem(INSIGHT_DISMISS_STORAGE_KEY, JSON.stringify(state.insightDismissals));
+}
+
+function getInsightDismissKey(contact = state.activeContact) {
+  const contactId = getContactId(contact);
+  return contactId ? String(contactId) : "";
+}
+
+function getInsightSignalTime(signal) {
+  return Math.max(
+    Number(signal?.lastAt || 0),
+    Number(signal?.firstAt || 0),
+    Number(signal?.emotion?.lastAt || 0),
+    0
+  );
+}
+
+function applyInsightDismissal(signal, contact = state.activeContact) {
+  if (!signal || signal.kind === "safe") return signal;
+  const key = getInsightDismissKey(contact);
+  const dismissal = key ? state.insightDismissals[key] : null;
+  if (!dismissal) return signal;
+  if (Number(dismissal.expiresAt || 0) <= Date.now()) {
+    delete state.insightDismissals[key];
+    persistInsightDismissals();
+    return signal;
+  }
+  const signalTime = getInsightSignalTime(signal);
+  if (signalTime && signalTime > Number(dismissal.dismissedAt || 0)) return signal;
+  return buildDismissedInsightSignal(dismissal, signal);
+}
+
+function buildDismissedInsightSignal(dismissal = {}, original = null) {
+  const resolved = dismissal.action === "resolved";
+  return {
+    kind: "safe",
+    severity: "ok",
+    probability: 0,
+    count: 0,
+    questionCount: 0,
+    emotion: { score: 0, reasons: [] },
+    dismissed: true,
+    dismissedAction: dismissal.action || "",
+    originalKind: original?.kind || dismissal.kind || "",
+    resolvedText: resolved ? "本次感知已标记解决" : "本次感知已忽略",
+    copyText: resolved ? "AI感知：本次风险已标记解决。" : "AI感知：本次风险已忽略。"
+  };
+}
+
+function setActiveInsightDismissal(action) {
+  const contact = state.activeContact;
+  const contactId = getInsightDismissKey(contact);
+  const signal = state.withdrawRisk.signal;
+  if (!contactId || !signal || signal.kind === "safe") return;
+  const dismissedAt = Date.now();
+  state.insightDismissals[contactId] = {
+    action,
+    kind: signal.kind,
+    dismissedAt,
+    signalTime: getInsightSignalTime(signal),
+    expiresAt: dismissedAt + INSIGHT_DISMISS_TTL_MS
+  };
+  persistInsightDismissals();
+  const nextSignal = buildDismissedInsightSignal(state.insightDismissals[contactId], signal);
+  state.withdrawRisk = {
+    ...state.withdrawRisk,
+    signal: nextSignal,
+    dismissOpen: false,
+    checkedAt: Date.now()
+  };
+  state.contactInsights[contactId] = nextSignal;
+  renderWithdrawRiskSignal();
+  renderContacts();
+  toast(action === "resolved" ? "已标记为解决，紧急度已降低。" : "已忽略本次感知，紧急度已降低。");
 }
 
 function getLastWithdrawSuccessTime(messages = []) {
@@ -10256,37 +10428,78 @@ function isWithdrawQuestionMessage(message) {
 
 function analyzeCustomerUrgency(messages = []) {
   let score = 0;
+  let lastAt = 0;
   const reasons = new Set();
   const inbound = messages.filter((message) => message && message.direction === "incoming" && !message.isSystemNotice);
   inbound.forEach((message) => {
     const text = normalizeWithdrawText(message.content || "");
     if (!text) return;
+    let hit = false;
     if (/(急|赶紧|快点|马上|立刻|等不及|着急)/.test(text)) {
       score += 24;
       reasons.add("急躁催促");
+      hit = true;
     }
     if (/(怎么回事|什么情况|为啥|为什么|咋回事|咋还|到底|搞什么|无语)/.test(text)) {
       score += 18;
       reasons.add("疑问追问");
+      hit = true;
     }
     if (/(一直|又|多次|几天|好几天|反复|还不行|还是不行|还没好)/.test(text)) {
       score += 16;
       reasons.add("反复遇到");
+      hit = true;
     }
     if (/(投诉|生气|骗人|不处理|没人管)/.test(text)) {
       score += 30;
       reasons.add("投诉倾向");
+      hit = true;
     }
     if (/[?？]{2,}|[!！]{2,}/.test(String(message.content || ""))) {
       score += 12;
       reasons.add("连续标点");
+      hit = true;
     }
+    if (hit) lastAt = Math.max(lastAt, getMessageTimeValue(message));
   });
 
   return {
     score: Math.min(100, score),
+    lastAt,
     reasons: [...reasons].slice(0, 4)
   };
+}
+
+function detectInsightResolution(messages = []) {
+  const ordered = mergeMessages(messages).filter((message) => getMessageTimeValue(message) > 0);
+  let lastSoothingAt = 0;
+  for (const message of ordered) {
+    const time = getMessageTimeValue(message);
+    if (isSoothingOutgoingMessage(message)) {
+      lastSoothingAt = Math.max(lastSoothingAt, time);
+      continue;
+    }
+    if (lastSoothingAt && time >= lastSoothingAt && isCustomerReliefMessage(message)) {
+      return { time, message };
+    }
+  }
+  return null;
+}
+
+function isSoothingOutgoingMessage(message) {
+  if (!message || (message.direction !== "outgoing" && message.direction !== "ai")) return false;
+  const text = normalizeWithdrawText(message.content || "");
+  if (!text) return false;
+  return /(别急|别着急|不要着急|稍等|我帮|帮你|帮您|核实|处理|看一下|查一下|放心|理解|抱歉|不好意思|辛苦|给你看|给您看)/.test(text);
+}
+
+function isCustomerReliefMessage(message) {
+  if (!message || message.direction !== "incoming" || message.isSystemNotice) return false;
+  const text = normalizeWithdrawText(message.content || "");
+  if (!text) return false;
+  if (/(为什么|为啥|怎么|咋|什么情况|不行|不了|失败|还没|一直|\?|？|急|投诉|骗人)/.test(text)) return false;
+  return /^(好|好的|行|可以|嗯|恩|哦|OK|ok|知道了|明白了|理解|谢谢|感谢|辛苦了|麻烦了|收到|那行|可以的)$/.test(text)
+    || /(谢谢|感谢|辛苦|明白|理解|知道了|好的|可以了|行了)/.test(text);
 }
 
 function calculateWithdrawRiskProbability(input = {}) {
@@ -10354,12 +10567,19 @@ function renderWithdrawRiskSignal() {
   const severityClass = `is-${insight.severity || "ok"}`;
   const text = getWithdrawRiskSignalText(insight);
   const canOpenOrders = insight.kind === "withdraw_refund_block";
+  const canDismiss = insight.kind !== "safe" && !insight.dismissed;
   el.withdrawRiskSignal.className = `withdraw-risk-signal ${severityClass}`;
   el.withdrawRiskSignal.innerHTML = `
     <strong>AI感知</strong>
     <span title="${escapeAttr(text)}">${escapeHtml(text)}</span>
     ${canOpenOrders ? '<button type="button" data-withdraw-risk-action="orders">查订单</button>' : ""}
-    <button type="button" data-withdraw-risk-action="copy">复制</button>
+    ${canDismiss ? '<button type="button" data-withdraw-risk-action="dismiss-toggle">消除</button>' : ""}
+    ${canDismiss && state.withdrawRisk.dismissOpen ? `
+      <span class="withdraw-dismiss-actions">
+        <button type="button" data-withdraw-risk-action="dismiss-ignore">忽略</button>
+        <button type="button" data-withdraw-risk-action="dismiss-resolved">已解决</button>
+      </span>
+    ` : ""}
   `;
 }
 
@@ -10374,17 +10594,27 @@ function getWithdrawRiskSignalText(insight) {
     return `客户可能有急躁情绪，${reason}，建议先安抚再核实`;
   }
   if (insight.error) return `扫描失败：${insight.error}`;
+  if (insight.resolvedText) return insight.resolvedText;
   return "暂无异常感知，正常接待即可";
 }
 
 function handleWithdrawRiskSignalClick(event) {
   const actionTarget = event.target.closest("[data-withdraw-risk-action]");
   const action = actionTarget?.dataset.withdrawRiskAction || "";
-  if (action === "copy") {
-    copyToClipboard(state.withdrawRisk.signal?.copyText || getWithdrawRiskSignalText(state.withdrawRisk.signal));
+  if (action === "dismiss-toggle") {
+    state.withdrawRisk.dismissOpen = !state.withdrawRisk.dismissOpen;
+    renderWithdrawRiskSignal();
     return;
   }
-  if (action === "orders" || !action) {
+  if (action === "dismiss-ignore") {
+    setActiveInsightDismissal("ignored");
+    return;
+  }
+  if (action === "dismiss-resolved") {
+    setActiveInsightDismissal("resolved");
+    return;
+  }
+  if (action === "orders") {
     state.orderKeyword = "";
     setToolTab("order");
     loadOrders(1);
