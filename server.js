@@ -243,10 +243,32 @@ function summarizeUploadConfig(config = {}) {
   };
 }
 
+// 抓包日志脱敏：登录请求体(账号密码)与响应体(auth token)不能明文落盘。
+// 在写入前统一替换常见敏感字段的值，覆盖 JSON 与 form/query 两种形态。
+function redactSensitiveCaptureText(text) {
+  if (!text) return text;
+  const SENSITIVE = "password|passwd|pwd|token|access[_-]?token|refresh[_-]?token|api[_-]?key|apikey|secret|authorization|signature|sign";
+  let out = String(text);
+  // JSON: "field":"value"
+  out = out.replace(
+    new RegExp(`"(\\w*(?:${SENSITIVE})\\w*)"\\s*:\\s*"([^"]*)"`, "gi"),
+    (match, key) => `"${key}":"<redacted>"`
+  );
+  // form / query: field=value
+  out = out.replace(
+    new RegExp(`(\\b\\w*(?:${SENSITIVE})\\w*=)([^&\\s"]+)`, "gi"),
+    (match, key) => `${key}<redacted>`
+  );
+  return out;
+}
+
 function captureApi(entry) {
   try {
     ensureLogDir();
-    fs.appendFileSync(API_CAPTURE_FILE, `${JSON.stringify(entry)}\n`, "utf8");
+    const safeEntry = { ...entry };
+    if (typeof safeEntry.requestBody === "string") safeEntry.requestBody = redactSensitiveCaptureText(safeEntry.requestBody);
+    if (typeof safeEntry.responseBody === "string") safeEntry.responseBody = redactSensitiveCaptureText(safeEntry.responseBody);
+    fs.appendFileSync(API_CAPTURE_FILE, `${JSON.stringify(safeEntry)}\n`, "utf8");
   } catch (error) {
     console.warn(`Failed to write API capture log: ${error.message}`);
   }
@@ -420,7 +442,11 @@ function writeReplySkills(payload) {
     updatedAt: new Date().toISOString(),
     skills: Array.isArray(payload.skills) ? payload.skills : []
   };
-  fs.writeFileSync(REPLY_SKILLS_FILE, JSON.stringify(next, null, 2), "utf8");
+  // 原子写：先写临时文件再 rename，避免崩溃/断电产生半写损坏的 JSON
+  // （损坏后 readReplySkills 会把文件重置为默认，丢光已学习 skill）。
+  const tmpFile = `${REPLY_SKILLS_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(next, null, 2), "utf8");
+  fs.renameSync(tmpFile, REPLY_SKILLS_FILE);
   return next;
 }
 
@@ -2463,10 +2489,21 @@ function parseRequestPayload(buffer, req) {
   return Object.fromEntries(params.entries());
 }
 
+const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024; // 32MB 上限，防止超大 POST 撑爆内存
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > MAX_REQUEST_BODY_BYTES) {
+        reject(new Error("Request body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -2697,7 +2734,13 @@ async function handleMediaProxy(req, res) {
     if (contentLength) headers["Content-Length"] = contentLength;
     res.writeHead(200, headers);
     if (upstream.body) {
-      Readable.fromWeb(upstream.body).pipe(res);
+      const upstreamStream = Readable.fromWeb(upstream.body);
+      upstreamStream.on("error", (streamError) => {
+        console.warn(`Media proxy stream error: ${streamError.message}`);
+        res.destroy();
+      });
+      res.on("close", () => upstreamStream.destroy());
+      upstreamStream.pipe(res);
     } else {
       res.end(Buffer.from(await upstream.arrayBuffer()));
     }
@@ -3619,6 +3662,16 @@ server.listen(PORT, () => {
   console.log(`YouChat dev web: http://localhost:${PORT}`);
   console.log(`Proxy target: ${DEFAULT_API_BASE}`);
   startDatabaseGuard();
+});
+
+// 全局兜底：单个请求 handler 里未捕获的异常/拒绝不应该打崩整个服务，
+// 否则会导致全体在线客服同时掉线。这里只记录日志、保持进程存活。
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught exception (kept alive):", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection (kept alive):", reason);
 });
 
 process.on("SIGINT", () => {

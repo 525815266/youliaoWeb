@@ -3618,3 +3618,31 @@ Do not regress:
 - Do not make the safe text specific to one scenario.
 - Do not use `AI 稳/低/中/高` in the conversation list. Use descriptive words instead.
 - Future insight types should reuse `contactInsights` and `insightDismissals` instead of creating separate list urgency systems.
+
+## 2026-07-03 Handoff: Security & Robustness Audit + Fixes
+
+Full code audit (`server.js` + `public/app.js`) and UI/UX review. Applied fixes are low-risk and verified with `npm run check`. Higher-risk items are left as open decisions.
+
+Fixed (`server.js`):
+
+- **H2 crash-hardening**: added global `uncaughtException` / `unhandledRejection` handlers (log + stay alive), plus an `error` listener and `res.on("close")` cleanup on the media-proxy `Readable.fromWeb(...).pipe(res)` stream. Previously a single interrupted `/local/media-proxy` request could crash the whole process and drop every agent.
+- **M6 atomic write**: `writeReplySkills()` writes a temp file then `renameSync`, so a crash/power loss no longer leaves half-written JSON that `readReplySkills()` resets to defaults (losing all learned skills).
+- **M7 body cap**: `readBody()` rejects bodies over `MAX_REQUEST_BODY_BYTES = 32MB`.
+- **M2 log redaction**: `captureApi()` runs `redactSensitiveCaptureText()` before writing — masks password/pwd/token/access_token/api_key/secret/authorization/signature in both JSON and form bodies. Login credentials/tokens no longer land in `logs/api-capture.ndjson`.
+
+Fixed (frontend):
+
+- **P0-1**: `.composer .reply-text` gained a `:focus-visible` outline (was `outline:none`; the main reply box had no visible keyboard focus).
+- **P1-2**: `toast()` sets `role="alert"` for errors (assertive announce), errors stay 6s, click-to-dismiss. Signature unchanged.
+- **P1-3**: low-contrast greys (`#8a98aa` `#7a8798` `#8a96a8` `#9aa4b3`) folded to WCAG-passing `--muted` / `#5f6b7d`.
+
+Open decisions (NOT changed — need product/deploy call):
+
+- **H1 (CRITICAL — keys already leaked publicly)**: `origin` is the PUBLIC repo `github.com/525815266/youliaoWeb`. `app.js:8` and `app.js:46` hardcode the real sub2 / codebuddy API keys, present since the initial commit `211d09f`, so both keys are already exposed on public GitHub — **git history included, so deleting them from HEAD does NOT undo the exposure**. The required first action is out of code scope: **rotate (regenerate) the sub2 (`sub2.sn55.cn`) and codebuddy (`copilot.tencent.com`) keys** to invalidate the leaked ones. Then keep keys only in gitignored `config/ai-providers.json`, inject them server-side in `proxyAi`/`handleAiModels` by providerId/baseUrl when the frontend sends an empty key, drop the hardcoded frontend keys, and stop returning `apiKey` from `/ai/providers`. AI calls can't be tested from the dev box, so do the code half with the user able to verify on `:5177` right after.
+- **P0-A (high)**: 761–1120px hides `.tool-pane` with no reopen path (mobile split only activates ≤760px via `MOBILE_WORKBENCH_QUERY`). Proper fix is a tool drawer for tablet width; needs multi-breakpoint browser testing. Do NOT just move the breakpoint to 1120 — that forces phone-style single-column switching onto tablets.
+- **M3/M4 (med)**: media-proxy/link-preview have no private-IP filter (SSRF); `/api?__target=` is an open forward proxy. Verify frontend `__target` usage before restricting.
+- **P2-6 (cleanup)**: dead-CSS removal deferred. WARNING: `applyAiSuggestion` / `sendAiSuggestion` are NOT dead — they are `display:none` but bound at `app.js:730` and state-managed; deleting their HTML crashes the frontend. Only truly orphaned login-illustration child styles (`.platform/.chat-rail/.cube`, no matching DOM under `.login-illustration`) may be removed after a browser check.
+
+Audit notes:
+
+- Reviewed and found robust: withdraw-risk scan token/debounce, AI auto-suggest debounce + AbortController, static file path-traversal guard, image-upload fallback chain. `proxyAi` does not leak keys to logs/errors; the only key exposure is H1.

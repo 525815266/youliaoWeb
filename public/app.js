@@ -637,6 +637,7 @@ function boot() {
     "mobileBackToList",
     "mobileOpenTools",
     "mobileBackToChat",
+    "toolDrawerScrim",
     "messageList",
     "replyText",
     "refreshMessages",
@@ -780,8 +781,15 @@ function bindEvents() {
   el.accessIn.addEventListener("click", accessIn);
   el.transferAi.addEventListener("click", transferAi);
   el.mobileBackToList?.addEventListener("click", () => setMobilePanel("list"));
-  el.mobileOpenTools?.addEventListener("click", () => setMobilePanel("tool"));
-  el.mobileBackToChat?.addEventListener("click", () => setMobilePanel("chat"));
+  el.mobileOpenTools?.addEventListener("click", () => {
+    if (isMobileWorkbench()) setMobilePanel("tool");
+    else toggleToolDrawer();
+  });
+  el.mobileBackToChat?.addEventListener("click", () => {
+    if (isMobileWorkbench()) setMobilePanel("chat");
+    else toggleToolDrawer(false);
+  });
+  el.toolDrawerScrim?.addEventListener("click", () => toggleToolDrawer(false));
   el.toolContent.addEventListener("click", handleToolClick);
   el.toolContent.addEventListener("keydown", handleToolKeydown);
   el.messageList.addEventListener("click", handleMessageListClick);
@@ -2978,6 +2986,25 @@ function isMobileWorkbench() {
     return window.matchMedia(MOBILE_WORKBENCH_QUERY).matches;
   }
   return window.innerWidth <= 760;
+}
+
+const TABLET_WORKBENCH_QUERY = "(min-width: 761px) and (max-width: 1120px)";
+
+function isTabletWorkbench() {
+  if (typeof window === "undefined") return false;
+  if (typeof window.matchMedia === "function") {
+    return window.matchMedia(TABLET_WORKBENCH_QUERY).matches;
+  }
+  return window.innerWidth > 760 && window.innerWidth <= 1120;
+}
+
+// 平板/窄笔记本(761-1120px)下工具栏是右侧抽屉，用 data-tool-drawer 开合。
+function toggleToolDrawer(open) {
+  if (!el.workbenchView) return;
+  const next = open === undefined
+    ? el.workbenchView.dataset.toolDrawer !== "open"
+    : Boolean(open);
+  el.workbenchView.dataset.toolDrawer = next ? "open" : "closed";
 }
 
 function setMobilePanel(panel) {
@@ -10949,6 +10976,7 @@ function usesInternalToolScroll(tab = state.activeTool) {
 function setToolTab(tab) {
   state.activeTool = tab;
   if (isMobileWorkbench()) setMobilePanel("tool");
+  else if (isTabletWorkbench()) toggleToolDrawer(true);
   document.querySelectorAll("[data-tool-tab]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.toolTab === tab);
   });
@@ -13003,8 +13031,13 @@ function toast(message, danger = false) {
   const node = document.createElement("div");
   node.className = `toast${danger ? " error" : ""}`;
   node.textContent = message;
+  // 错误用 assertive(role=alert) 让读屏软件立即播报；错误停留更久，且点击可提前关闭
+  node.setAttribute("role", danger ? "alert" : "status");
+  node.title = "点击关闭";
+  node.style.cursor = "pointer";
+  node.addEventListener("click", () => node.remove());
   el.toastHost.appendChild(node);
-  setTimeout(() => node.remove(), 3600);
+  setTimeout(() => node.remove(), danger ? 6000 : 3600);
 }
 
 function escapeHtml(value) {

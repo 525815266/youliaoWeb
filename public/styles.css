@@ -620,7 +620,7 @@ textarea:focus-visible {
   justify-content: flex-end;
   gap: 5px;
   margin-top: 7px;
-  color: #9aa4b3;
+  color: #5f6b7d;
   font-size: 12px;
 }
 
@@ -1617,7 +1617,7 @@ textarea:focus-visible {
 }
 
 .message-system time {
-  color: #8a98aa;
+  color: #68758a;
   font-size: 11px;
 }
 
@@ -1843,7 +1843,7 @@ textarea:focus-visible {
 .link-card-copy span {
   display: block;
   margin-top: 7px;
-  color: #8a98aa;
+  color: #68758a;
   font-size: 11px;
   word-break: break-all;
 }
@@ -1939,7 +1939,7 @@ textarea:focus-visible {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: #7a8798;
+  color: #68758a;
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2052,7 +2052,7 @@ textarea:focus-visible {
   min-height: 28px;
   padding: 6px 10px;
   border-top: 1px solid #edf2f7;
-  color: #8a98aa;
+  color: #68758a;
   font-size: 11px;
   background: #fff;
 }
@@ -2646,6 +2646,11 @@ textarea:focus-visible {
   word-break: break-word;
 }
 
+.composer .reply-text:focus-visible {
+  outline: 2px solid rgba(22, 141, 242, 0.55);
+  outline-offset: -1px;
+}
+
 .composer .reply-text:empty::before {
   content: attr(placeholder);
   color: #9aa8bc;
@@ -2695,7 +2700,7 @@ textarea:focus-visible {
 .composer-status {
   min-width: 0;
   overflow: hidden;
-  color: #7a8798;
+  color: #68758a;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3849,7 +3854,7 @@ textarea:focus-visible {
 
 .order-pay {
   margin-bottom: 5px !important;
-  color: #8a96a8 !important;
+  color: #68758a !important;
 }
 
 .order-fields {
@@ -3858,7 +3863,7 @@ textarea:focus-visible {
   row-gap: 6px;
   column-gap: 4px;
   margin-top: 6px;
-  color: #8a96a8;
+  color: #68758a;
   font-size: 12px;
   line-height: 1.4;
 }
@@ -4906,7 +4911,7 @@ textarea:focus-visible {
 
 .confirm-input-wrap em {
   padding-right: 10px;
-  color: #7a8798;
+  color: #68758a;
   font-size: 12px;
   font-style: normal;
   white-space: nowrap;
@@ -5589,6 +5594,93 @@ textarea:focus-visible {
 
   .tool-pane {
     display: none;
+  }
+}
+
+/* 平板/窄笔记本宽度（761-1120px）：工具栏改为右侧滑出抽屉，
+   保持会话+聊天两栏并排，避免像 <=760px 那样退化成全屏单栏切换。 */
+@media (min-width: 761px) and (max-width: 1120px) {
+  #mobileOpenTools {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid #cfe0f2;
+    border-radius: 6px;
+    color: #0d63c7;
+    background: #f5fbff;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  #mobileOpenTools:hover {
+    background: #e9f4ff;
+  }
+
+  .tool-pane {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 46px;
+    right: 0;
+    bottom: 0;
+    width: min(382px, 84vw);
+    min-width: 0;
+    z-index: 25;
+    background: #f8fbff;
+    border-left: 1px solid var(--line);
+    box-shadow: -14px 0 34px rgba(13, 39, 75, 0.18);
+    transform: translateX(101%);
+    transition: transform 200ms ease;
+    overflow: hidden;
+  }
+
+  .workbench-view[data-tool-drawer="open"] .tool-pane {
+    transform: translateX(0);
+  }
+
+  .mobile-tool-head {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 10px;
+    height: 46px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--line);
+    background: #fff;
+  }
+
+  .mobile-tool-head strong {
+    font-size: 14px;
+    color: #172033;
+  }
+
+  #mobileBackToChat {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid #cfe0f2;
+    border-radius: 6px;
+    color: #0d63c7;
+    background: #f5fbff;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .tool-drawer-scrim {
+    display: none;
+    position: fixed;
+    inset: 46px 0 0 0;
+    z-index: 24;
+    background: rgba(13, 39, 75, 0.28);
+  }
+
+  .workbench-view[data-tool-drawer="open"] .tool-drawer-scrim {
+    display: block;
   }
 }
 

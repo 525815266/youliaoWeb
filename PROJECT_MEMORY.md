@@ -6450,3 +6450,29 @@ AI 感知条行为：
 - 安全态文案继续保持通用，不要特指某一个业务场景。
 - 手动消除只压制当前已发生的风险，后续新消息时间晚于消除时间时仍应重新触发。
 - 会话列表紧急度用描述词，不再使用 `AI 稳/低/中/高` 这种调试感较强的标签。
+
+## 2026-07-03 安全与健壮性审计及修复
+
+本次对 `server.js` + `public/app.js` 做了完整代码审计，并复查了 UI/UX。已应用的是低风险、经 `npm run check` 验证的修复；高风险项列为待决策，未擅自改。
+
+已修复（`server.js`）：
+
+- H2 防崩溃：新增全局 `uncaughtException`/`unhandledRejection` 兜底（记录日志、保持进程存活），并给 media-proxy 的 `Readable.fromWeb(...).pipe(res)` 流加 `error` 监听 + `res.on("close")` 清理。此前一个中断的 `/local/media-proxy` 请求就能崩掉整个进程、让全体客服掉线。
+- M6 原子写：`writeReplySkills()` 改为先写临时文件再 `renameSync`，崩溃/断电不再产生半写损坏的 JSON（否则 `readReplySkills()` 会把文件重置为默认，丢光已学习 skill）。
+- M7 请求体上限：`readBody()` 超过 `MAX_REQUEST_BODY_BYTES = 32MB` 拒绝，防超大 POST 撑爆内存。
+- M2 日志脱敏：`captureApi()` 写入前经 `redactSensitiveCaptureText()`，对 JSON 与 form 两种形态的 password/pwd/token/access_token/api_key/secret/authorization/signature 脱敏。登录账号密码与 auth token 不再明文落入 `logs/api-capture.ndjson`。
+
+已修复（前端）：
+
+- P0-1：`.composer .reply-text` 加 `:focus-visible` 焦点环（原为 `outline:none`，主回复框键盘聚焦无可见焦点）。
+- P1-2：`toast()` 错误态设 `role="alert"`（读屏立即播报），错误停留延长到 6 秒，点击可关闭；签名不变，全项目调用不受影响。
+- P1-3：低对比度灰字（`#8a98aa` `#7a8798` `#8a96a8` `#9aa4b3`）收敛到达标的 `--muted`/`#5f6b7d`。
+
+待决策（未改，需产品/部署确认）：
+
+- H1（严重——密钥已公网泄露）：`origin` 是**公开**仓库 `github.com/525815266/youliaoWeb`。`app.js:8`、`app.js:46` 从初始提交 `211d09f` 起就硬编码了真实的 sub2 / codebuddy key，所以两个付费 key 早已暴露在公开 GitHub 上——**含 git 历史，从 HEAD 删掉也无法消除历史暴露**。第一步必须做、且超出代码范围：**在 sub2（`sub2.sn55.cn`）和 codebuddy（`copilot.tencent.com`）后台轮换（重新生成）key**，作废已泄露的旧 key。之后 key 只保留在 gitignore 的 `config/ai-providers.json`，由 `proxyAi`/`handleAiModels` 在前端传空 key 时按 providerId/baseUrl 注入，删掉前端硬编码 key，`/ai/providers` 不再返回 apiKey。AI 调用在开发机无法实测，代码这半部分要配合用户在 `:5177` 部署后立即验证。
+- P0-A（高）：761–1120px 隐藏 `.tool-pane` 且无重新打开入口（移动分栏仅 ≤760px 由 `MOBILE_WORKBENCH_QUERY` 启用）。正确做法是给平板宽度做工具栏抽屉，需多断点浏览器实测。不要简单把断点移到 1120，否则会把手机式单栏切换强加给平板。
+- M3/M4（中）：media-proxy/link-preview 无内网 IP 过滤（SSRF）；`/api?__target=` 是开放转发代理。收紧前需先确认前端对 `__target` 的依赖。
+- P2-6（清理）：死 CSS 清理暂缓。警告：`applyAiSuggestion`/`sendAiSuggestion` 不是死代码——它们 `display:none` 但在 `app.js:730` 有事件绑定并被状态管理，删 HTML 会崩前端。只有确实无 DOM 的登录插画子样式（`.platform/.chat-rail/.cube`）可在浏览器复核后删除。
+
+审计确认健壮的区域：撤回风险扫描的 token/防抖、AI 自动建议防抖 + AbortController、静态文件路径穿越防护、图片上传兜底链。`proxyAi` 不会把密钥泄到日志/错误，唯一密钥暴露是 H1。
