@@ -1226,9 +1226,9 @@ textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 34px;
+  min-width: 38px;
   height: 17px;
-  padding: 0 5px;
+  padding: 0 6px;
   border: 1px solid #b8dfc7;
   border-radius: 999px;
   color: #177245;

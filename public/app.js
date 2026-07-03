@@ -4429,9 +4429,9 @@ function getContactUrgencyClass(insight) {
 
 function renderContactUrgencyPill(insight) {
   const score = getContactUrgencyScore(insight);
-  const text = score >= 82 ? "高" : score >= 64 ? "中" : score >= 38 ? "低" : "稳";
+  const text = score >= 82 ? "紧急" : score >= 64 ? "紧张" : score >= 38 ? "关注" : "平稳";
   const title = getWithdrawRiskSignalText(insight);
-  return `<span class="contact-urgency-pill" title="${escapeAttr(title)}">AI ${escapeHtml(text)}</span>`;
+  return `<span class="contact-urgency-pill" title="${escapeAttr(title)}">${escapeHtml(text)}</span>`;
 }
 
 function getContactHoverActions(contact, contactId = getContactId(contact)) {

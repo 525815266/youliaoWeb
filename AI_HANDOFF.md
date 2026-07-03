@@ -3575,10 +3575,10 @@ Implementation:
   - Deep active-conversation scans write their result back into this cache.
 - Conversation list now computes a lightweight insight from contact `records`, or from `lastContent` when records are missing.
 - Conversation cards display urgency pills:
-  - `AI 稳`
-  - `AI 低`
-  - `AI 中`
-  - `AI 高`
+  - `平稳`
+  - `关注`
+  - `紧张`
+  - `紧急`
 - Conversation card backgrounds use subtle full-card gradients from green to yellow/orange/red.
 
 Composer insight behavior:
@@ -3610,10 +3610,11 @@ Verified:
   - Risk insight buttons are `查订单`, `消除`, `忽略`, `已解决`.
   - Desktop strip stays 520x30.
   - Mobile 390px viewport has no horizontal overflow and composer remains inside the viewport.
-  - Conversation card can show `AI 高` with a red gradient.
+  - Conversation card can show `紧急` with a red gradient.
 
 Do not regress:
 
 - Do not re-add a copy button to the safe insight state.
 - Do not make the safe text specific to one scenario.
+- Do not use `AI 稳/低/中/高` in the conversation list. Use descriptive words instead.
 - Future insight types should reuse `contactInsights` and `insightDismissals` instead of creating separate list urgency systems.
