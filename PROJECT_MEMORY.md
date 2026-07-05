@@ -6563,6 +6563,37 @@ AI 感知条行为：
 - 后端服务自身重启时也会自愈，不依赖 Web 页面打开。
 - 如果更换飞牛服务目录，需要同步调整 Web `.env` 的 `FNOS_YOUCHAT_SERVICE_DIR`。
 
+## 2026-07-05 会话列表 AI 状态与未读气泡共存修复
+
+问题：
+
+- 会话列表右侧同时显示时间、AI 感知状态（如“平稳/关注”）和未读气泡时，状态和红色未读数视觉上挤在一起。
+- 消息摘要此前跨到右侧状态列，容易让未读气泡看起来压在摘要文字上。
+
+修复：
+
+- `renderContacts()` 中把右侧状态拆成：
+  - `.contact-time`
+  - `.contact-status-stack`
+  - `.contact-urgency-pill`
+  - `.unread-badge`
+- `.contact-card` 改为命名 grid 区域：
+  - `avatar`
+  - `main`
+  - `last`
+  - `side`
+- `.contact-last` 只占正文列，不再横跨右侧状态列。
+- 右侧状态列固定为 `64px`，保证 `07/05 20:51` 这类时间完整显示。
+- AI 状态和未读气泡在右侧列纵向排列，紧凑但互不覆盖。
+
+验证：
+
+- `npm run check` 通过。
+- 使用 Chrome headless + 真实 `public/styles.css` 生成会话卡片样例截图：
+  - 时间完整显示。
+  - `平稳/关注` 与 `1/99+` 未读气泡上下分离。
+  - 摘要文字不会进入右侧状态列。
+
 ## 2026-07-05 收尾安全审计遗留项 H1 / M3-M4 / P2-6
 
 承接 2026-07-03 审计。三个开放代码项已全部完成，并用一次性端到端脚本验证（跑完即删）。`npm run check` 通过。改动文件：`public/app.js`、`public/index.html`、`public/styles.css`、`server.js`。

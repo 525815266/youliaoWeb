@@ -808,11 +808,17 @@ textarea:focus-visible {
 .contact-card {
   position: relative;
   display: grid;
-  grid-template-columns: 42px 1fr auto;
-  gap: 9px;
+  grid-template-columns: 42px minmax(0, 1fr) 64px;
+  grid-template-areas:
+    "avatar main side"
+    "avatar last side";
+  column-gap: 9px;
+  row-gap: 4px;
+  align-items: start;
   width: 100%;
   border: 0;
-  padding: 12px;
+  min-height: 78px;
+  padding: 12px 12px 10px;
   border-bottom: 1px solid #e7edf5;
   color: inherit;
   text-align: left;
@@ -945,6 +951,7 @@ textarea:focus-visible {
 .contact-avatar,
 .contact-photo {
   display: grid;
+  grid-area: avatar;
   width: 38px;
   height: 38px;
   place-items: center;
@@ -962,6 +969,7 @@ textarea:focus-visible {
 }
 
 .contact-main {
+  grid-area: main;
   min-width: 0;
 }
 
@@ -1028,29 +1036,58 @@ textarea:focus-visible {
 }
 
 .contact-last {
-  grid-column: 2 / 4;
-  margin-top: -2px;
+  grid-area: last;
+  min-width: 0;
+  padding-right: 4px;
   color: #4d5b6d;
   font-size: 12px;
 }
 
 .contact-side {
-  display: grid;
-  align-content: start;
-  justify-items: end;
-  gap: 5px;
+  grid-area: side;
+  display: flex;
+  min-width: 64px;
+  height: 100%;
+  align-items: flex-end;
+  justify-content: flex-start;
+  flex-direction: column;
+  gap: 6px;
   color: var(--muted);
   font-size: 11px;
+  line-height: 1;
+}
+
+.contact-time {
+  display: block;
+  max-width: 64px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-status-stack {
+  display: flex;
+  min-height: 39px;
+  align-items: flex-end;
+  justify-content: flex-start;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .unread-badge {
+  display: inline-flex;
   min-width: 18px;
   height: 18px;
+  align-items: center;
+  justify-content: center;
   padding: 0 5px;
   border-radius: 999px;
   color: #fff;
   text-align: center;
-  line-height: 18px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
   background: #ef4444;
 }
 
@@ -1059,6 +1096,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   min-width: 38px;
+  max-width: 64px;
   height: 17px;
   padding: 0 6px;
   border: 1px solid #b8dfc7;
@@ -1068,6 +1106,8 @@ textarea:focus-visible {
   font-size: 10px;
   font-weight: 700;
   line-height: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -5788,7 +5828,7 @@ textarea:focus-visible {
   }
 
   .contact-card {
-    grid-template-columns: 42px minmax(0, 1fr) auto;
+    grid-template-columns: 42px minmax(0, 1fr) 64px;
     padding: 12px 11px;
   }
 

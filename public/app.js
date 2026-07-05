@@ -4420,9 +4420,11 @@ function renderContacts() {
           <span class="contact-detail">${escapeHtml(detail)}</span>
         </span>
         <span class="contact-side">
-          <span>${escapeHtml(contact.time || "")}</span>
-          ${renderContactUrgencyPill(insight)}
-          ${unread ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}
+          <span class="contact-time">${escapeHtml(contact.time || "")}</span>
+          <span class="contact-status-stack">
+            ${renderContactUrgencyPill(insight)}
+            ${unread ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}
+          </span>
         </span>
         <span class="contact-last">${escapeHtml(contact.lastContent || "暂无最新消息")}</span>
         ${isPinned ? '<span class="pin-corner" title="待办置顶"></span>' : ""}

@@ -3744,6 +3744,30 @@ Operational shortcut:
 - If `:18080` is offline again, call `POST /local/fnos/restore-mysql` from Web first. It now handles both online SQLite regression and offline empty-config recovery.
 - Backend restarts also self-heal without Web being open.
 
+## 2026-07-05 Handoff: Conversation List Status Column Fix
+
+Issue:
+
+- In the left conversation list, the AI insight pill (`平稳`, `关注`, etc.) and unread badge could visually collide.
+- The latest-message line spanned into the right status column, so the unread badge looked like it was sitting on top of message text.
+
+Fix:
+
+- `renderContacts()` now renders a structured right-side status column:
+  - `.contact-time`
+  - `.contact-status-stack`
+  - `.contact-urgency-pill`
+  - `.unread-badge`
+- `.contact-card` uses named grid areas: `avatar`, `main`, `last`, `side`.
+- `.contact-last` is constrained to the body column only.
+- The side column is fixed at `64px`, enough for `07/05 20:51`.
+- AI status and unread badge stack vertically in the side column.
+
+Verified:
+
+- `npm run check`.
+- Chrome headless screenshot using the real `public/styles.css` showed full time text and clean vertical separation between AI status and unread badges.
+
 ## 2026-07-05 Handoff: Closed audit open items H1 / M3-M4 / P2-6
 
 Followed up the 2026-07-03 audit. All three open code items are done and verified with disposable end-to-end harnesses (deleted after running). `npm run check` passes.
