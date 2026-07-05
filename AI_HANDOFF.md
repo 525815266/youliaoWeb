@@ -3646,3 +3646,38 @@ Open decisions (NOT changed — need product/deploy call):
 Audit notes:
 
 - Reviewed and found robust: withdraw-risk scan token/debounce, AI auto-suggest debounce + AbortController, static file path-traversal guard, image-upload fallback chain. `proxyAi` does not leak keys to logs/errors; the only key exposure is H1.
+
+## 2026-07-05 Handoff: FnOS YouChat Backend 18080 Offline Recovery
+
+Incident:
+
+- Web login stayed on `连接中`.
+- Official Windows client showed `网络错误，请检查服务端是否在线`.
+- `5177` Web container and `5700` Qinglong were reachable; `18080` backend was the failing path.
+
+Root cause:
+
+- `youchat-service` container was `Up` and still mapped `18080 -> 8080`, but the app process crashed immediately on startup.
+- Logs repeated `Newtonsoft.Json.JsonReaderException: Error reading JObject from JsonReader. Path '', line 0, position 0`.
+- The backend config file `/vol1/1000/Docker/youchat/\悠聊数据库\config\YouChatConfig.json` was `0 bytes`.
+- Important Linux path detail: this is a filename containing backslashes under `/vol1/1000/Docker/youchat`, not a normal nested `/悠聊数据库/config/` directory. Use `find` to locate it instead of hand-typing the path.
+
+Recovery performed:
+
+- Backed up the empty config under `docker-control/config-backups/empty-json-<timestamp>/YouChatConfig.json.empty`.
+- Restored from `/vol1/1000/Docker/youchat/docker-control/config-backups/manual-mysql-switch-20260609-152800/YouChatConfig.json.after`.
+- That backup has `DatabaseType=0` and a MySQL connection string.
+- Restarted only `youchat-service`.
+
+Verification:
+
+- Remote FnOS POST `/api/System/GetOptions` returned `200`.
+- Local Windows `Test-NetConnection 192.168.9.83 -Port 18080` returned `TcpTestSucceeded=True`.
+- Local Windows POST `http://192.168.9.83:18080/api/System/GetOptions` returned `success=True` and `databaseType=0`.
+- `http://192.168.9.83:5177/health` remained healthy with `apiBase=http://host.docker.internal:18080/api`.
+
+Future diagnostic shortcut:
+
+- If the official client says backend offline while Docker says `youchat-service Up`, inspect `docker logs youchat-service` first.
+- If `JsonReaderException` appears, check the config size with `find /vol1/1000/Docker/youchat -maxdepth 1 -type f -name '*YouChatConfig.json' -printf '%s %p\n'`.
+- Do not restart or reset MySQL for this failure mode; restore the config and restart `youchat-service`.

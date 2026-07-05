@@ -6476,3 +6476,39 @@ AI 感知条行为：
 - P2-6（清理）：死 CSS 清理暂缓。警告：`applyAiSuggestion`/`sendAiSuggestion` 不是死代码——它们 `display:none` 但在 `app.js:730` 有事件绑定并被状态管理，删 HTML 会崩前端。只有确实无 DOM 的登录插画子样式（`.platform/.chat-rail/.cube`）可在浏览器复核后删除。
 
 审计确认健壮的区域：撤回风险扫描的 token/防抖、AI 自动建议防抖 + AbortController、静态文件路径穿越防护、图片上传兜底链。`proxyAi` 不会把密钥泄到日志/错误，唯一密钥暴露是 H1。
+
+## 2026-07-05 飞牛悠聊服务端 18080 离线恢复
+
+现象：
+
+- Web 登录页一直卡在“连接中”。
+- 官方 Windows 客户端提示“网络错误，请检查服务端是否在线”。
+- 本地探测：`192.168.9.83:5177` 正常，`192.168.9.83:5700` 正常，`192.168.9.83:18080` 初始不通。
+
+根因：
+
+- `youchat-service` 容器显示 `Up`，端口映射仍是 `18080 -> 8080`，但服务进程启动后反复崩溃。
+- `docker logs youchat-service` 反复出现 `Newtonsoft.Json.JsonReaderException: Error reading JObject from JsonReader. Path '', line 0, position 0`。
+- 服务端实际读取的配置文件是 `/vol1/1000/Docker/youchat/\悠聊数据库\config\YouChatConfig.json`。
+- 该文件在 Linux 上是带反斜杠的文件名，不是正常目录层级；本次检查时大小为 `0 bytes`，导致 `ConfigHelper.InitConfig()` 解析空 JSON 直接崩。
+
+恢复动作：
+
+- 使用远端 `find` 自动定位 `*YouChatConfig.json`，避免手写中文 + 反斜杠路径。
+- 先把 0 字节文件备份到 `docker-control/config-backups/empty-json-<timestamp>/YouChatConfig.json.empty`。
+- 从既有 MySQL 备份恢复：`/vol1/1000/Docker/youchat/docker-control/config-backups/manual-mysql-switch-20260609-152800/YouChatConfig.json.after`。
+- 该备份 `DatabaseType=0`，连接字符串为 MySQL 模式。
+- 重启 `youchat-service`，不重启 MySQL。
+
+验证：
+
+- 飞牛本机 `POST http://127.0.0.1:18080/api/System/GetOptions` 返回 `200`。
+- Windows 本机 `Test-NetConnection 192.168.9.83 -Port 18080` 返回 `TcpTestSucceeded=True`。
+- Windows 本机 `POST http://192.168.9.83:18080/api/System/GetOptions` 返回 `success=True`、`databaseType=0`。
+- `http://192.168.9.83:5177/health` 正常，Web 容器默认 API 仍是 `http://host.docker.internal:18080/api`。
+
+后续注意：
+
+- 如果官方客户端提示服务端不在线，但 Docker 里 `youchat-service` 仍显示 `Up`，第一步看日志是否有 `JsonReaderException`，不要只看容器状态。
+- 对这个特殊配置文件不要写成普通 Linux 子目录路径；优先用 `find /vol1/1000/Docker/youchat -maxdepth 1 -type f -name '*YouChatConfig.json'` 定位。
+- 修复时不要重置 MySQL 容器；只恢复配置并重启 `youchat-service`。
