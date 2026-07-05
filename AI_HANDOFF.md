@@ -3768,6 +3768,43 @@ Verified:
 - `npm run check`.
 - Chrome headless screenshot using the real `public/styles.css` showed full time text and clean vertical separation between AI status and unread badges.
 
+## 2026-07-05 Handoff: Mobile Workbench Adaptation
+
+Goal:
+
+- Make the Web客服工作台 usable on phones without squeezing the desktop three-column layout into one viewport.
+- Keep real-data behavior unchanged. This change is layout-only.
+
+Changed:
+
+- `public/index.html`
+  - Viewport now includes `maximum-scale=1, user-scalable=no, viewport-fit=cover` to prevent accidental double-tap zoom inside the phone workflow.
+- `public/styles.css`
+  - Added a final `@media (max-width: 760px)` mobile hardening layer.
+  - Topbar becomes two rows: brand/status/AI on row 1, native client shortcut icons on row 2.
+  - Chat header becomes two rows: back + contact identity on row 1, action buttons on row 2.
+  - Messages, outgoing bubbles, link cards, mini-program cards, and file cards now clamp to phone width.
+  - AI/skill suggestion strip is shorter and no longer pushes the composer as aggressively.
+  - Composer toolbar becomes two stable rows: icon tools and quick panel buttons, each horizontally scrollable.
+  - Tool pane remains a dedicated mobile panel with internal scrolling. Quick replies, skill, history, order, and detail tools get mobile-specific scroll/layout treatment.
+  - Order filters/cards are compacted for touch. Account detail tables become card-like rows on mobile.
+  - Link/image preview panels occupy the available phone viewport so close/actions stay reachable.
+
+Verified:
+
+- `npm run check` passed.
+- Chrome headless at `390x844` checked `list`, `chat`, and `tool` panels.
+- Measurements:
+  - `documentElement.scrollWidth=390`
+  - `body.scrollWidth=390`
+  - visible mobile panels match viewport width.
+- QA screenshots saved under `reports/_uicheck/` and intentionally left untracked.
+
+Notes:
+
+- `client-layout.scrollWidth` may report `406` during measurement because hidden absolute panels keep the existing slide transition offset. The document/body do not overflow, so the phone viewport is not widened.
+- Future mobile changes should respect the single-panel flow controlled by `workbenchView[data-mobile-panel="list|chat|tool"]`.
+
 ## 2026-07-05 Handoff: Closed audit open items H1 / M3-M4 / P2-6
 
 Followed up the 2026-07-03 audit. All three open code items are done and verified with disposable end-to-end harnesses (deleted after running). `npm run check` passes.
