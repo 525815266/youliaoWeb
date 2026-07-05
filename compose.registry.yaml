@@ -15,12 +15,15 @@ services:
       YOUCHAT_DATABASE_GUARD_ENABLED: ${YOUCHAT_DATABASE_GUARD_ENABLED:-1}
       YOUCHAT_DATABASE_GUARD_INTERVAL_MS: ${YOUCHAT_DATABASE_GUARD_INTERVAL_MS:-300000}
       YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT: ${YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT:-1000}
+      YOUCHAT_SERVICE_DIR: ${YOUCHAT_SERVICE_DIR:-/youchat-service}
+      YOUCHAT_CONFIG_REPAIR_WAIT_MS: ${YOUCHAT_CONFIG_REPAIR_WAIT_MS:-45000}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config:/app/config
+      - ${FNOS_YOUCHAT_SERVICE_DIR:-/vol1/1000/Docker/youchat}:${YOUCHAT_SERVICE_DIR:-/youchat-service}
     healthcheck:
       test:
         - CMD

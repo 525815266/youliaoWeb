@@ -163,6 +163,7 @@ textarea:focus-visible {
 }
 
 .login-window {
+  min-height: 100vh;
   min-height: 100dvh;
   overflow: hidden;
   background: #eef6ff url("/assets/login_bg.png") center / cover no-repeat;
@@ -256,6 +257,7 @@ textarea:focus-visible {
   justify-content: center;
   gap: 74px;
   width: min(1040px, calc(100vw - 64px));
+  min-height: calc(100vh - 54px);
   min-height: calc(100dvh - 54px);
   margin: 0 auto;
   padding: 18px 0 96px;
@@ -272,178 +274,6 @@ textarea:focus-visible {
   display: block;
   width: 100%;
   height: auto;
-}
-
-.platform {
-  position: absolute;
-  left: 8%;
-  right: 8%;
-  bottom: 10%;
-  height: 34%;
-  transform: skewY(-8deg);
-  border: 2px solid rgba(255, 255, 255, 0.94);
-  border-radius: 12px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.76), rgba(208, 227, 255, 0.62));
-  box-shadow:
-    inset 0 0 0 1px rgba(170, 202, 249, 0.34),
-    0 18px 35px rgba(47, 96, 166, 0.1);
-}
-
-.chat-rail {
-  position: absolute;
-  left: 36%;
-  bottom: 25%;
-  width: 22%;
-  height: 58%;
-  border-radius: 20px 20px 26px 26px;
-  background: linear-gradient(160deg, #0f54c5 0%, #1d7bfb 46%, #69a8ff 100%);
-  box-shadow: inset 7px 0 0 rgba(255, 255, 255, 0.16);
-}
-
-.chat-rail span {
-  position: absolute;
-  left: 12%;
-  width: 76%;
-  height: 30%;
-  border-radius: 6px;
-  background: rgba(213, 232, 255, 0.86);
-  box-shadow: 0 10px 18px rgba(23, 81, 173, 0.18);
-}
-
-.chat-rail span:first-child {
-  top: 16%;
-}
-
-.chat-rail span:last-child {
-  top: 52%;
-}
-
-.bubble {
-  position: absolute;
-  width: 28%;
-  height: 23%;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #d6e9ff, #f7fbff);
-  box-shadow: 0 12px 28px rgba(34, 96, 184, 0.14);
-}
-
-.bubble-one {
-  left: 42%;
-  top: 22%;
-}
-
-.bubble-two {
-  left: 41%;
-  top: 48%;
-}
-
-.bubble i {
-  position: absolute;
-  right: 12%;
-  top: 17%;
-  width: 27px;
-  height: 27px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 50% 36%, #80b6ff 0 23%, transparent 24%),
-    radial-gradient(circle at 50% 82%, #80b6ff 0 34%, transparent 35%),
-    #c7ddff;
-}
-
-.bubble strong,
-.bubble small,
-.document-card em {
-  position: absolute;
-  left: 12%;
-  height: 4px;
-  border-radius: 999px;
-  background: #91bef8;
-}
-
-.bubble strong {
-  top: 27%;
-  width: 44%;
-}
-
-.bubble small {
-  top: 47%;
-  width: 34%;
-}
-
-.document-card {
-  position: absolute;
-  right: 5%;
-  top: 27%;
-  width: 23%;
-  height: 43%;
-  transform: skewY(9deg);
-  border-radius: 5px;
-  background: linear-gradient(90deg, #f8fbff, #dcecff);
-  box-shadow: -12px 20px 28px rgba(69, 120, 194, 0.13);
-}
-
-.document-card .mini-logo {
-  position: absolute;
-  left: 14%;
-  bottom: 24%;
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: 6px 6px 11px 11px;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 800;
-  background: var(--you-blue);
-}
-
-.document-card b {
-  position: absolute;
-  right: 17%;
-  bottom: 28%;
-  color: #3b8ef1;
-  font-style: normal;
-  font-size: 17px;
-}
-
-.document-card em {
-  left: 14%;
-  width: 66%;
-  transform: skewY(0);
-}
-
-.document-card em:nth-of-type(1) {
-  top: 19%;
-}
-
-.document-card em:nth-of-type(2) {
-  top: 31%;
-}
-
-.document-card em:nth-of-type(3) {
-  top: 43%;
-  width: 52%;
-}
-
-.cube {
-  position: absolute;
-  width: 25px;
-  height: 25px;
-  transform: skewY(-12deg);
-  border-radius: 3px;
-  background: linear-gradient(135deg, #9ec9ff, #d8ebff);
-  box-shadow: 0 12px 22px rgba(34, 96, 184, 0.14);
-}
-
-.cube-left {
-  left: 9%;
-  bottom: 13%;
-}
-
-.cube-right {
-  left: 61%;
-  top: 45%;
 }
 
 .login-card {
@@ -632,6 +462,7 @@ textarea:focus-visible {
 }
 
 .workbench-view {
+  min-height: 100vh; /* fallback for browsers that ignore dvh */
   min-height: 100dvh;
   background: #edf3fa;
 }
@@ -829,6 +660,7 @@ textarea:focus-visible {
 .client-layout {
   display: grid;
   grid-template-columns: 306px minmax(460px, 1fr) 382px;
+  height: calc(100vh - 46px); /* fallback for browsers that ignore dvh */
   height: calc(100dvh - 46px);
   min-height: 560px;
 }
@@ -2179,6 +2011,7 @@ textarea:focus-visible {
   grid-template-rows: auto auto minmax(76px, 1fr) auto;
   gap: 6px;
   min-height: 176px;
+  max-height: min(292px, 36vh);
   max-height: min(292px, 36dvh);
   padding: 8px 12px 9px;
   border-top: 1px solid var(--line);
@@ -2190,6 +2023,7 @@ textarea:focus-visible {
 .composer:has(.draft-image-tray:not(.is-hidden)) {
   grid-template-rows: auto auto minmax(92px, 1fr) auto;
   min-height: 206px;
+  max-height: min(306px, 38vh);
   max-height: min(306px, 38dvh);
 }
 
@@ -2368,6 +2202,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 8px;
   min-height: 46px;
+  max-height: min(122px, 18vh);
   max-height: min(122px, 18dvh);
   margin: 0;
   padding: 7px 12px;
@@ -2445,6 +2280,7 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: 1fr;
   min-width: 0;
+  max-height: calc(min(122px, 18vh) - 14px);
   max-height: calc(min(122px, 18dvh) - 14px);
   align-content: start;
   gap: 5px;
@@ -4106,6 +3942,7 @@ textarea:focus-visible {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(386px, calc(100vw - 28px));
+  max-height: min(520px, calc(100vh - 68px));
   max-height: min(520px, calc(100dvh - 68px));
   border: 1px solid #c7d6e8;
   border-radius: var(--radius);
@@ -4294,6 +4131,7 @@ textarea:focus-visible {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   width: min(960px, calc(100vw - 44px));
+  height: min(720px, calc(100vh - 44px));
   height: min(720px, calc(100dvh - 44px));
   max-width: calc(100vw - 44px);
   overflow: hidden;
@@ -4305,6 +4143,7 @@ textarea:focus-visible {
 
 .link-preview-panel.is-image-preview {
   width: min(920px, calc(100vw - 44px));
+  height: min(760px, calc(100vh - 44px));
   height: min(760px, calc(100dvh - 44px));
   background: #f8fbff;
 }
@@ -4435,6 +4274,7 @@ textarea:focus-visible {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   width: min(1180px, calc(100vw - 48px));
+  height: min(680px, calc(100vh - 48px));
   height: min(680px, calc(100dvh - 48px));
   border-radius: 7px;
   background: #fff;
@@ -4608,6 +4448,7 @@ textarea:focus-visible {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(430px, calc(100vw - 36px));
+  max-height: min(560px, calc(100vh - 36px));
   max-height: min(560px, calc(100dvh - 36px));
   border: 1px solid #c7d6e8;
   border-radius: var(--radius);
@@ -4626,11 +4467,13 @@ textarea:focus-visible {
 
 .tool-modal-xl {
   width: min(1120px, calc(100vw - 36px));
+  max-height: min(720px, calc(100vh - 36px));
   max-height: min(720px, calc(100dvh - 36px));
 }
 
 .tool-modal-settings {
   width: min(486px, calc(100vw - 38px));
+  max-height: min(632px, calc(100vh - 48px));
   max-height: min(632px, calc(100dvh - 48px));
   border-radius: 8px;
 }
@@ -5784,6 +5627,7 @@ textarea:focus-visible {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     width: 100%;
+    height: 100vh;
     height: 100dvh;
     min-height: 0;
     overflow: hidden;
@@ -6084,6 +5928,7 @@ textarea:focus-visible {
     grid-template-rows: auto auto minmax(92px, 1fr) auto;
     gap: 6px;
     min-height: 182px;
+    max-height: min(360px, 46vh);
     max-height: min(360px, 46dvh);
     padding: 7px max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
   }
@@ -6092,6 +5937,7 @@ textarea:focus-visible {
   .composer:has(.draft-image-tray:not(.is-hidden)) {
     grid-template-rows: auto auto minmax(104px, 1fr) auto;
     min-height: 212px;
+    max-height: min(380px, 50vh);
     max-height: min(380px, 50dvh);
   }
 
@@ -6244,6 +6090,7 @@ textarea:focus-visible {
     left: max(8px, env(safe-area-inset-left)) !important;
     right: max(8px, env(safe-area-inset-right));
     width: auto;
+    max-height: min(320px, 42vh);
     max-height: min(320px, 42dvh);
   }
 
@@ -6251,6 +6098,7 @@ textarea:focus-visible {
   .tool-modal,
   .link-preview-panel {
     width: min(100vw - 20px, 560px);
+    max-height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px);
     max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px);
   }
 }

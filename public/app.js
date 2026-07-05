@@ -5,7 +5,10 @@ const LEGACY_DEFAULT_API_BASES = new Set([
   "http://localhost:8080/api"
 ]);
 const DEFAULT_AI_BASE_URL = "https://sub2.sn55.cn/";
-const DEFAULT_AI_API_KEY = "sk-b9d9c696d71c86d875a0379dcbc0eca8e5863884022405bb031d95341951485b";
+// AI keys never live in frontend source (this repo is public). The real keys
+// stay in gitignored config/ai-providers.json and are injected server-side by
+// proxyAi/handleAiModels when the browser sends an empty key. Leave blank.
+const DEFAULT_AI_API_KEY = "";
 const DEFAULT_AI_MODEL = "gpt-5.4-mini";
 const DEFAULT_AI_TEMPERATURE = 0.35;
 const DEFAULT_AI_AUTH_TYPE = "bearer";
@@ -43,7 +46,7 @@ const AI_PRESETS = {
   codebuddy: {
     label: "CodeBuddy",
     baseUrl: "https://copilot.tencent.com/v2",
-    apiKey: "ck_foknyust454w.9e9umAeuAKEGdz0QlSEtyCl8U4AsQUVEp3OUnARhXw0",
+    apiKey: "",
     model: "deepseek-v3.1",
     authType: "x-api-key",
     temperature: DEFAULT_AI_TEMPERATURE,
@@ -390,6 +393,7 @@ const state = {
   aiEnabled: localStorage.getItem("youchat.ai.enabled") !== "false",
   aiProvider: normalizeAiProviderId(localStorage.getItem(AI_PROVIDER_STORAGE_KEY) || DEFAULT_AI_PROVIDER),
   aiProvidersConfig: loadAiProviderSettings(),
+  aiServerKeyProviders: {},
   aiBaseUrl: "",
   aiApiKey: "",
   aiModel: "",
@@ -2377,13 +2381,18 @@ async function loadAiProviderPresetsFromServer() {
     }
     const providers = payload?.providers;
     if (providers && typeof providers === "object") {
+      const serverKeyFlags = {};
       Object.entries(providers).forEach(([providerId, preset]) => {
         if (!AI_PRESETS[providerId] || !preset || typeof preset !== "object") return;
+        // Never take a key from the wire; only learn whether the server has one.
+        const { hasKey, apiKey, ...presetRest } = preset;
+        serverKeyFlags[providerId] = Boolean(hasKey);
         AI_PRESETS[providerId] = {
           ...AI_PRESETS[providerId],
-          ...preset
+          ...presetRest
         };
       });
+      state.aiServerKeyProviders = serverKeyFlags;
       state.aiProvidersConfig = hydrateAiProviderConfigMap(state.aiProvidersConfig || {});
       state.aiProvider = normalizeAiProviderId(payload?.defaultProvider || state.aiProvider);
       applyAiProviderState(state.aiProvider);
@@ -2402,6 +2411,20 @@ function normalizeAiBaseUrl(value) {
 function normalizeAiProviderId(value) {
   const key = String(value || DEFAULT_AI_PROVIDER).trim().toLowerCase();
   return AI_PRESETS[key] ? key : DEFAULT_AI_PROVIDER;
+}
+
+// True when the server has a key configured for this provider (learned from
+// /ai/providers hasKey flags). Lets AI run without the browser ever holding
+// the key: proxyAi injects it server-side when we send an empty apiKey.
+function aiProviderHasServerKey(providerId = state.aiProvider) {
+  const key = normalizeAiProviderId(providerId);
+  return Boolean(state.aiServerKeyProviders && state.aiServerKeyProviders[key]);
+}
+
+// AI is usable when the agent typed a key OR the server holds one for the
+// active provider. Guards call this instead of checking state.aiApiKey.
+function hasUsableAiKey() {
+  return Boolean(String(state.aiApiKey || "").trim()) || aiProviderHasServerKey(state.aiProvider);
 }
 
 function normalizeAiModel(value) {
@@ -2618,6 +2641,7 @@ async function fetchAiModelsForActiveProvider() {
 
 function getAiRelayBasePayload(temperature = state.aiTemperature) {
   return {
+    providerId: state.aiProvider,
     baseUrl: state.aiBaseUrl,
     apiKey: state.aiApiKey,
     model: state.aiModel,
@@ -8299,7 +8323,7 @@ async function requestAiRelaySuggestions(options = {}) {
     return;
   }
 
-  if (!state.aiApiKey) {
+  if (!hasUsableAiKey()) {
     if (!silent) {
       showAiSettings();
       toast("请先填写 AI API 密钥。", true);
@@ -8409,7 +8433,7 @@ function getSuggestionTone(index = state.aiSuggestionToneIndex) {
 
 async function requestAiChatReplies({ systemLines, userContent, temperature, signal } = {}) {
   if (!state.aiEnabled) throw new Error("AI 推荐已关闭，请在右上角 AI 设置中启用。");
-  if (!state.aiApiKey) throw new Error("请先填写 AI API 密钥。");
+  if (!hasUsableAiKey()) throw new Error("请先填写 AI API 密钥。");
   const response = await fetch("/ai/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -8497,7 +8521,7 @@ async function refreshAiSuggestion() {
 
 function scheduleAutoAiSuggestion(options = {}) {
   if (state.aiAutoSuggestTimer) window.clearTimeout(state.aiAutoSuggestTimer);
-  if (!state.aiEnabled || !state.aiApiKey || !getContactId(state.activeContact)) return;
+  if (!state.aiEnabled || !hasUsableAiKey() || !getContactId(state.activeContact)) return;
   const latest = getLatestAutoSuggestionMessage();
   if (!latest) return;
   const key = buildAutoSuggestionKey(latest);
@@ -8621,7 +8645,7 @@ function triggerDraftAiOptimize() {
 
 async function optimizeDraftReply() {
   const draftText = getReplyTextContent().trim();
-  if (!draftText || draftText.length < 4 || !state.aiEnabled || !state.aiApiKey) return;
+  if (!draftText || draftText.length < 4 || !state.aiEnabled || !hasUsableAiKey()) return;
   const latest = getLatestActionableInboundMessage();
   const key = [
     getContactId(state.activeContact),
@@ -12489,7 +12513,7 @@ async function optimizeSkillById(id) {
     toast("AI 推荐已关闭，请在右上角 AI 设置中启用。", true);
     return;
   }
-  if (!state.aiApiKey) {
+  if (!hasUsableAiKey()) {
     showAiSettings();
     toast("请先填写 AI API 密钥。", true);
     return;
@@ -13135,7 +13159,7 @@ async function requestAiRelaySuggestions(options = {}) {
     if (!silent) toast("AI recommendation is disabled.", true);
     return;
   }
-  if (!state.aiApiKey) {
+  if (!hasUsableAiKey()) {
     if (!silent) {
       showAiSettings();
       toast("Please fill in the AI API key first.", true);

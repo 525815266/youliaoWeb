@@ -11,6 +11,7 @@
     "client:audit:compare": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/compare-client-audits.ps1",
     "fnos:health": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-fnos-youchat-health.ps1",
     "fnos:restore:mysql": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/restore-fnos-mysql-mode.ps1",
+    "fnos:install:service-guard": "python scripts/install-fnos-youchat-service-guard.py",
     "fnos:deploy:promptworks": "python scripts/deploy-fnos-promptworks.py"
   },
   "dependencies": {

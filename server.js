@@ -2,6 +2,8 @@ const http = require("http");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const dns = require("dns").promises;
+const net = require("net");
 const { Readable } = require("stream");
 const { URL } = require("url");
 const signalR = require("@microsoft/signalr");
@@ -35,8 +37,42 @@ const DATABASE_GUARD_MIN_HISTORY_COUNT = Number(process.env.YOUCHAT_DATABASE_GUA
 const CONTAINER_API_BASE = String(process.env.YOUCHAT_CONTAINER_API_BASE || "").trim();
 const CONTAINER_HOST_GATEWAY = String(process.env.YOUCHAT_CONTAINER_HOST_GATEWAY || "host.docker.internal").trim();
 const IS_CONTAINER_RUNTIME = fs.existsSync("/.dockerenv") || process.env.YOUCHAT_CONTAINER_NETWORK === "1";
+const FNOS_YOUCHAT_SERVICE_DIR = String(process.env.YOUCHAT_SERVICE_DIR || process.env.FNOS_YOUCHAT_SERVICE_DIR || (IS_CONTAINER_RUNTIME ? "/youchat-service" : "")).trim();
+const FNOS_CONFIG_REPAIR_WAIT_MS = Math.max(5000, Number(process.env.YOUCHAT_CONFIG_REPAIR_WAIT_MS || 45000));
 const PROMPTWORKS_API_BASE = process.env.PROMPTWORKS_API_BASE || (IS_CONTAINER_RUNTIME ? "http://host.docker.internal:5188/api/v1" : "http://192.168.9.83:5188/api/v1");
 const DIRECT_VIDEO_EXTENSIONS = /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8)(?:$|\?)/i;
+
+// SSRF allowlists. Host derived from the trusted backend so any backend-served
+// media/preview and the /api?__target= forward proxy keep working, while every
+// other internal/reserved address is blocked. Extend via env for other setups.
+function hostFromBaseSafe(value) {
+  try {
+    return new URL(String(value || "")).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+function hostnameFromBaseSafe(value) {
+  try {
+    return new URL(String(value || "")).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+function parseHostList(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+// Hostnames whose resolved-to-private IPs are tolerated for media/link-preview.
+const MEDIA_PROXY_ALLOW_HOSTS = new Set(
+  [hostnameFromBaseSafe(DEFAULT_API_BASE), ...parseHostList(process.env.YOUCHAT_MEDIA_ALLOW_HOSTS)].filter(Boolean)
+);
+// host:port values accepted for the /api?__target= forward proxy.
+const API_TARGET_ALLOW_HOSTS = new Set(
+  [hostFromBaseSafe(DEFAULT_API_BASE), ...parseHostList(process.env.YOUCHAT_ALLOWED_API_HOSTS)].filter(Boolean)
+);
 const signalRHubConnections = new Map();
 const databaseGuardState = {
   enabled: DATABASE_GUARD_ENABLED,
@@ -1517,6 +1553,279 @@ function getYouChatDatabaseMode(databaseType) {
   return "unknown";
 }
 
+function isDirectorySafe(dir) {
+  try {
+    return Boolean(dir) && fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function parseEnvFile(content) {
+  const result = {};
+  String(content || "").split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) return;
+    const index = trimmed.indexOf("=");
+    const key = trimmed.slice(0, index).trim();
+    let value = trimmed.slice(index + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (key) result[key] = value;
+  });
+  return result;
+}
+
+function readFnOSServiceEnv() {
+  if (!isDirectorySafe(FNOS_YOUCHAT_SERVICE_DIR)) return {};
+  try {
+    return parseEnvFile(fs.readFileSync(path.join(FNOS_YOUCHAT_SERVICE_DIR, ".env"), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function buildMySQLConnectionStringFromEnv(env = {}) {
+  const direct = String(env.YOUCHAT_DB_CONNECTION_STRING || "").trim();
+  if (direct) return direct;
+  const host = String(env.YOUCHAT_DB_HOST || "mysql").trim();
+  const port = String(env.YOUCHAT_DB_PORT || "3306").trim();
+  const database = String(env.YOUCHAT_DB_NAME || "1556504756803862529").trim();
+  const user = String(env.YOUCHAT_DB_USERNAME || "yz").trim();
+  const password = String(env.YOUCHAT_DB_PASSWORD || env.MYSQL_YZ_PASSWORD || "").trim();
+  const sslMode = String(env.YOUCHAT_DB_SSL_MODE || "None").trim();
+  if (!host || !database || !user || !password) return "";
+  if ([host, port, database, user, password, sslMode].some((item) => item.includes(";"))) return "";
+  return `Server=${host};Port=${port};Database=${database};User ID=${user};Password=${password};CharSet=utf8mb4;SslMode=${sslMode};AllowPublicKeyRetrieval=True;Allow User Variables=true;`;
+}
+
+function getConfigSection(config, upperName, lowerName) {
+  const section = config?.[upperName] || config?.[lowerName];
+  return section && typeof section === "object" && !Array.isArray(section) ? section : {};
+}
+
+function getConfigValue(section, upperName, lowerName) {
+  return firstNonEmpty(section?.[upperName], section?.[lowerName]);
+}
+
+function normalizeYouChatConfigForMySQL(source = {}, connectionString = "") {
+  const dataBaseOptions = getConfigSection(source, "DataBaseOptions", "dataBaseOptions");
+  const commonOptions = getConfigSection(source, "CommonOptions", "commonOptions");
+  const jobOptions = getConfigSection(source, "JobOptions", "jobOptions");
+  const aiOptions = getConfigSection(source, "AiOptions", "aiOptions");
+  const resolvedConnection = String(
+    connectionString ||
+    getConfigValue(dataBaseOptions, "ConnectionString", "connectionString") ||
+    FNOS_MYSQL_CONNECTION_STRING
+  ).trim();
+
+  return {
+    DataBaseOptions: {
+      ...dataBaseOptions,
+      DatabaseType: 0,
+      ConnectionString: resolvedConnection
+    },
+    CommonOptions: {
+      AudioNotice: false,
+      AlertSysNotice: false,
+      ContactNameFilter: "c",
+      SwitchType: 0,
+      ...commonOptions
+    },
+    JobOptions: {
+      RunTimeoutCheckJob: true,
+      Timeout: 5,
+      TimeoutNotice: true,
+      CloseTime: 20,
+      AutoScoreTime: 30,
+      IgnorRobotReply: true,
+      AutoInviteScore: false,
+      AutoLeaveMsg: false,
+      GetMsgByDate: 2,
+      ...jobOptions,
+      AutoShutDown: false
+    },
+    AiOptions: {
+      IsOpen: false,
+      ConfigType: null,
+      ConfigValue: null,
+      Token: null,
+      ...aiOptions
+    }
+  };
+}
+
+function parseYouChatConfigFile(filePath) {
+  const summary = {
+    path: filePath || "",
+    exists: false,
+    size: 0,
+    validJson: false,
+    databaseType: null,
+    databaseMode: "unknown",
+    connectionStringPresent: false,
+    autoShutDown: null,
+    ok: false,
+    error: ""
+  };
+  if (!filePath) {
+    summary.error = "YouChatConfig.json not found";
+    return summary;
+  }
+  try {
+    const stat = fs.statSync(filePath);
+    summary.exists = stat.isFile();
+    summary.size = stat.size;
+    if (!summary.exists || summary.size <= 0) {
+      summary.error = "config file is empty";
+      return summary;
+    }
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    summary.validJson = true;
+    const dataBaseOptions = getConfigSection(parsed, "DataBaseOptions", "dataBaseOptions");
+    const jobOptions = getConfigSection(parsed, "JobOptions", "jobOptions");
+    summary.databaseType = Number(getConfigValue(dataBaseOptions, "DatabaseType", "databaseType"));
+    summary.databaseMode = getYouChatDatabaseMode(summary.databaseType);
+    summary.connectionStringPresent = Boolean(String(getConfigValue(dataBaseOptions, "ConnectionString", "connectionString") || "").trim());
+    summary.autoShutDown = normalizeBoolean(getConfigValue(jobOptions, "AutoShutDown", "autoShutDown"), false);
+    summary.ok = summary.validJson && summary.databaseType === 0 && summary.connectionStringPresent && summary.autoShutDown === false;
+    if (!summary.ok) {
+      summary.error = `config is not safe mysql mode: databaseType=${summary.databaseType}, autoShutDown=${summary.autoShutDown}`;
+    }
+  } catch (error) {
+    summary.error = error.message || String(error);
+  }
+  return summary;
+}
+
+function findFnOSYouChatConfigFile() {
+  if (!isDirectorySafe(FNOS_YOUCHAT_SERVICE_DIR)) return "";
+  try {
+    const direct = fs.readdirSync(FNOS_YOUCHAT_SERVICE_DIR)
+      .find((name) => /YouChatConfig\.json$/i.test(name));
+    if (direct) return path.join(FNOS_YOUCHAT_SERVICE_DIR, direct);
+  } catch {
+    return "";
+  }
+  return path.join(FNOS_YOUCHAT_SERVICE_DIR, "\\悠聊数据库\\config\\YouChatConfig.json");
+}
+
+function collectConfigBackupCandidates(root, maxDepth = 5, depth = 0, results = []) {
+  if (!root || depth > maxDepth) return results;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      collectConfigBackupCandidates(fullPath, maxDepth, depth + 1, results);
+    } else if (/YouChatConfig\.json(\.after|\.before)?$/i.test(entry.name)) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
+
+function findBestFnOSConfigBackup() {
+  if (!isDirectorySafe(FNOS_YOUCHAT_SERVICE_DIR)) return null;
+  const backupsRoot = path.join(FNOS_YOUCHAT_SERVICE_DIR, "docker-control", "config-backups");
+  const candidates = collectConfigBackupCandidates(backupsRoot)
+    .map((filePath) => {
+      try {
+        return { filePath, stat: fs.statSync(filePath), summary: parseYouChatConfigFile(filePath) };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .filter((item) => item.summary.validJson && item.summary.databaseType === 0 && item.summary.connectionStringPresent)
+    .sort((a, b) => {
+      const aAfter = /\.after$/i.test(a.filePath) ? 1 : 0;
+      const bAfter = /\.after$/i.test(b.filePath) ? 1 : 0;
+      if (aAfter !== bAfter) return bAfter - aAfter;
+      return b.stat.mtimeMs - a.stat.mtimeMs;
+    });
+  return candidates[0] || null;
+}
+
+function writeFileAtomic(filePath, content) {
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, content, "utf8");
+  fs.renameSync(tmp, filePath);
+}
+
+function backupFnOSConfigFile(configPath, reason) {
+  if (!configPath || !fs.existsSync(configPath)) return "";
+  const stamp = new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14);
+  const backupDir = path.join(FNOS_YOUCHAT_SERVICE_DIR, "docker-control", "config-backups", `${reason}-${stamp}`);
+  fs.mkdirSync(backupDir, { recursive: true });
+  const backupPath = path.join(backupDir, "YouChatConfig.json.before");
+  fs.copyFileSync(configPath, backupPath);
+  return backupPath;
+}
+
+function requestFnOSYouChatRestart(reason = "config repair") {
+  if (!isDirectorySafe(FNOS_YOUCHAT_SERVICE_DIR)) return null;
+  const controlDir = path.join(FNOS_YOUCHAT_SERVICE_DIR, "docker-control");
+  fs.mkdirSync(controlDir, { recursive: true });
+  const requestId = `web-config-repair-${Date.now()}`;
+  fs.writeFileSync(path.join(controlDir, "restart.request"), `${requestId}\n`, "utf8");
+  fs.writeFileSync(path.join(controlDir, "restart-reason"), `${reason}\n`, "utf8");
+  return requestId;
+}
+
+function inspectFnOSConfigFile() {
+  const configPath = findFnOSYouChatConfigFile();
+  const summary = parseYouChatConfigFile(configPath);
+  return {
+    available: isDirectorySafe(FNOS_YOUCHAT_SERVICE_DIR),
+    serviceDir: FNOS_YOUCHAT_SERVICE_DIR,
+    ...summary
+  };
+}
+
+function repairFnOSConfigFile(options = {}) {
+  if (!isDirectorySafe(FNOS_YOUCHAT_SERVICE_DIR)) {
+    throw new Error("FnOS YouChat service directory is not mounted into the Web container.");
+  }
+  const configPath = findFnOSYouChatConfigFile();
+  if (!configPath) throw new Error("YouChatConfig.json not found.");
+  const before = parseYouChatConfigFile(configPath);
+  const env = readFnOSServiceEnv();
+  const envConnectionString = buildMySQLConnectionStringFromEnv(env);
+  const backup = findBestFnOSConfigBackup();
+  let source = {};
+  let sourcePath = "";
+  if (backup?.filePath) {
+    sourcePath = backup.filePath;
+    source = JSON.parse(fs.readFileSync(backup.filePath, "utf8"));
+  } else if (before.validJson && before.exists && before.size > 0) {
+    sourcePath = configPath;
+    source = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  }
+  const connectionString = String(options.connectionString || envConnectionString || FNOS_MYSQL_CONNECTION_STRING || "").trim();
+  if (!connectionString) throw new Error("MySQL connection string is missing; cannot repair YouChatConfig.json.");
+  const next = normalizeYouChatConfigForMySQL(source, connectionString);
+  const backupPath = backupFnOSConfigFile(configPath, "web-config-repair");
+  writeFileAtomic(configPath, JSON.stringify(next, null, 2) + "\n");
+  const after = parseYouChatConfigFile(configPath);
+  if (!after.ok) throw new Error(after.error || "YouChatConfig.json repair did not produce safe MySQL config.");
+  const restartRequestId = requestFnOSYouChatRestart("config repair");
+  return {
+    repaired: true,
+    before,
+    after,
+    backupPath,
+    sourcePath,
+    restartRequestId,
+    repairedAt: new Date().toISOString()
+  };
+}
+
 async function getYouChatContactCount(body = {}, apiBase = DEFAULT_API_BASE) {
   const payload = await postYouChatApi("/Contact/GetContactList", body, apiBase);
   const data = getPayloadData(payload);
@@ -1537,6 +1846,8 @@ async function getFnOSDatabaseHealth(options = {}) {
     databaseType: null,
     databaseMode: "unknown",
     connectionStringPresent: false,
+    serviceConfig: null,
+    offlineRepairAvailable: isDirectorySafe(FNOS_YOUCHAT_SERVICE_DIR),
     totalContacts: 0,
     historyContacts: 0,
     guestbookContacts: 0,
@@ -1551,86 +1862,123 @@ async function getFnOSDatabaseHealth(options = {}) {
     summary.databaseType = Number(databaseOptions.databaseType);
     summary.databaseMode = getYouChatDatabaseMode(summary.databaseType);
     summary.connectionStringPresent = Boolean(String(databaseOptions.connectionString || "").trim());
+    summary.serviceConfig = inspectFnOSConfigFile();
     if (summary.databaseType !== 0) {
       summary.ok = false;
-      summary.errors.push("FnOS 服务端当前不是 MySQL 模式。");
+      summary.errors.push("FnOS service is not using MySQL mode.");
     }
   } catch (error) {
     summary.ok = false;
-    summary.errors.push(`System/GetOptions 失败：${error.message}`);
+    summary.serviceConfig = inspectFnOSConfigFile();
+    summary.errors.push("System/GetOptions failed: " + error.message);
   }
 
   try {
     summary.totalContacts = await getYouChatContactCount({ pageIndex: 1, pageSize: 20 }, apiBase);
     if (summary.totalContacts <= 0) {
       summary.ok = false;
-      summary.errors.push("联系人总数为空。");
+      summary.errors.push("Contact total is empty.");
     }
   } catch (error) {
     summary.ok = false;
-    summary.errors.push(`联系人总数检查失败：${error.message}`);
+    summary.errors.push("Contact total check failed: " + error.message);
   }
 
   try {
     summary.historyContacts = await getYouChatContactCount({ pageIndex: 1, pageSize: 20, isHistory: "true" }, apiBase);
     if (summary.historyContacts < minHistoryCount) {
       summary.ok = false;
-      summary.errors.push(`历史联系人数量异常：${summary.historyContacts}`);
+      summary.errors.push("History contact count looks abnormal: " + summary.historyContacts);
     }
   } catch (error) {
     summary.ok = false;
-    summary.errors.push(`历史联系人检查失败：${error.message}`);
+    summary.errors.push("History contact check failed: " + error.message);
   }
 
   try {
     summary.guestbookContacts = await getYouChatContactCount({ pageIndex: 1, pageSize: 20, isGuestbook: "true" }, apiBase);
   } catch (error) {
-    summary.errors.push(`留言联系人检查失败：${error.message}`);
+    summary.errors.push("Guestbook contact check failed: " + error.message);
   }
 
   try {
     summary.currentAccount2 = await getYouChatContactCount({ pageIndex: 1, pageSize: 20, accountId: 2 }, apiBase);
   } catch (error) {
-    summary.errors.push(`当前账号探测失败：${error.message}`);
+    summary.errors.push("Current account probe failed: " + error.message);
   }
 
   return summary;
 }
 
+async function waitForFnOSYouChatApi(apiBase, timeoutMs = FNOS_CONFIG_REPAIR_WAIT_MS) {
+  const startedAt = Date.now();
+  let lastError = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      return await postYouChatApi("/System/GetOptions", {}, apiBase);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+  }
+  throw new Error("YouChat API did not recover after config repair: " + (lastError?.message || "timeout"));
+}
+
 async function restoreFnOSDatabaseToMySQL(options = {}) {
   const apiBase = options.apiBase || DEFAULT_API_BASE;
-  const connectionString = String(options.connectionString || FNOS_MYSQL_CONNECTION_STRING).trim();
-  if (!connectionString) throw new Error("MySQL 连接串为空");
+  const serviceEnv = readFnOSServiceEnv();
+  const connectionString = String(
+    options.connectionString ||
+    buildMySQLConnectionStringFromEnv(serviceEnv) ||
+    FNOS_MYSQL_CONNECTION_STRING
+  ).trim();
+  if (!connectionString) throw new Error("MySQL connection string is empty.");
 
-  const before = await getFnOSDatabaseHealth({ apiBase, minHistoryCount: options.minHistoryCount });
-  const connectResult = await postYouChatApi("/System/ConnectDatabase", {
-    type: 0,
-    connectionString
-  }, apiBase);
-  if (!connectResult?.data) throw new Error(connectResult?.message || "ConnectDatabase 失败");
+  try {
+    const before = await getFnOSDatabaseHealth({ apiBase, minHistoryCount: options.minHistoryCount });
+    const connectResult = await postYouChatApi("/System/ConnectDatabase", {
+      type: 0,
+      connectionString
+    }, apiBase);
+    if (!connectResult?.data) throw new Error(connectResult?.message || "ConnectDatabase failed");
 
-  const saveResult = await postYouChatApi("/System/SetConnectionString", {
-    type: 0,
-    connectionString
-  }, apiBase);
-  if (!saveResult?.data) throw new Error(saveResult?.message || "SetConnectionString 失败");
+    const saveResult = await postYouChatApi("/System/SetConnectionString", {
+      type: 0,
+      connectionString
+    }, apiBase);
+    if (!saveResult?.data) throw new Error(saveResult?.message || "SetConnectionString failed");
 
-  const persisted = await postYouChatApi("/System/GetConnectionString", {}, apiBase);
-  const persistedType = Number(persisted?.data?.databaseType);
-  const persistedConnection = String(persisted?.data?.connectionString || "");
-  if (persistedType !== 0 || !/^Server=mysql/i.test(persistedConnection)) {
-    throw new Error(`连接串保存后仍异常：databaseType=${persistedType}`);
+    const persisted = await postYouChatApi("/System/GetConnectionString", {}, apiBase);
+    const persistedType = Number(persisted?.data?.databaseType);
+    const persistedConnection = String(persisted?.data?.connectionString || "");
+    if (persistedType !== 0 || !/^Server=mysql/i.test(persistedConnection)) {
+      throw new Error("Saved connection string is still abnormal: databaseType=" + persistedType);
+    }
+
+    const after = await getFnOSDatabaseHealth({ apiBase, minHistoryCount: options.minHistoryCount });
+    if (after.databaseType !== 0) throw new Error("Backend is still not in MySQL mode after repair.");
+
+    return {
+      method: "api",
+      before,
+      after,
+      persistedDatabaseType: persistedType,
+      restoredAt: new Date().toISOString()
+    };
+  } catch (apiError) {
+    const fileRepair = repairFnOSConfigFile({ connectionString });
+    await waitForFnOSYouChatApi(apiBase);
+    const after = await getFnOSDatabaseHealth({ apiBase, minHistoryCount: options.minHistoryCount });
+    if (after.databaseType !== 0) throw new Error("Backend is still not in MySQL mode after config-file repair.");
+    return {
+      method: "config-file",
+      before: fileRepair.before,
+      after,
+      fileRepair,
+      apiError: apiError.message || String(apiError),
+      restoredAt: new Date().toISOString()
+    };
   }
-
-  const after = await getFnOSDatabaseHealth({ apiBase, minHistoryCount: options.minHistoryCount });
-  if (after.databaseType !== 0) throw new Error("修复后服务端仍未切到 MySQL");
-
-  return {
-    before,
-    after,
-    persistedDatabaseType: persistedType,
-    restoredAt: new Date().toISOString()
-  };
 }
 
 async function saveClientOptionsSafely(payload = {}) {
@@ -1665,10 +2013,10 @@ async function saveClientOptionsSafely(payload = {}) {
   const savedAutoShutDown = normalizeBoolean(savedOptions?.jobOptions?.autoShutDown, true);
   const savedDatabaseType = Number(savedOptions?.dataBaseOptions?.databaseType);
   if (savedDatabaseType !== 0) {
-    throw new Error(`系统设置保存后数据库模式异常：databaseType=${savedDatabaseType}`);
+    throw new Error("Client settings save left database in an abnormal mode: databaseType=" + savedDatabaseType);
   }
   if (savedAutoShutDown !== false) {
-    throw new Error("系统设置保存后自动关闭会话仍为开启，已阻止误报保存成功");
+    throw new Error("Client settings save left auto-close enabled; the unsafe save was blocked.");
   }
 
   return {
@@ -1716,7 +2064,7 @@ async function runDatabaseGuardCheck(reason = "timer") {
 }
 
 async function handleFnOSDatabase(req, res) {
-  const url = new URL(req.url, `http://localhost:${PORT}`);
+  const url = new URL(req.url, "http://localhost:" + PORT);
   try {
     if (url.pathname === "/local/fnos/health") {
       const health = await getFnOSDatabaseHealth({
@@ -1754,7 +2102,7 @@ async function handleFnOSDatabase(req, res) {
       databaseGuardState.repairCount += 1;
       sendJson(res, 200, {
         success: true,
-        message: "FnOS 数据库已切回 MySQL",
+        message: result.method === "config-file" ? "FnOS backend config was repaired and MySQL mode is back." : "FnOS database mode is MySQL.",
         result,
         guard: summarizeDatabaseGuardState()
       });
@@ -1763,7 +2111,7 @@ async function handleFnOSDatabase(req, res) {
 
     sendJson(res, 404, { success: false, message: "Unknown FnOS database endpoint" });
   } catch (error) {
-    sendJson(res, 400, { success: false, message: error.message || "FnOS 数据库操作失败" });
+    sendJson(res, 400, { success: false, message: error.message || "FnOS database operation failed" });
   }
 }
 
@@ -1778,7 +2126,7 @@ async function handleClientOptionsSave(req, res) {
     const result = await saveClientOptionsSafely(payload);
     sendJson(res, 200, {
       success: true,
-      message: result.repaired ? "系统设置已保存，并已切回 MySQL" : "系统设置已保存",
+      message: result.repaired ? "Client settings were saved and MySQL mode was restored." : "Client settings were saved.",
       options: result.options,
       health: result.health,
       repaired: result.repaired,
@@ -1787,7 +2135,7 @@ async function handleClientOptionsSave(req, res) {
   } catch (error) {
     sendJson(res, 400, {
       success: false,
-      message: error.message || "系统设置保存失败"
+      message: error.message || "Client settings save failed"
     });
   }
 }
@@ -2546,6 +2894,86 @@ function absolutizeUrl(baseUrl, value) {
   }
 }
 
+// True for loopback / private / link-local / CGNAT / multicast / reserved IPs —
+// the addresses an SSRF payload would use to reach internal services or the
+// cloud metadata endpoint (169.254.169.254).
+function isPrivateOrReservedIp(ip) {
+  let addr = String(ip || "").trim().toLowerCase();
+  if (!addr) return true;
+  const mapped = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (mapped) addr = mapped[1];
+  if (net.isIPv4(addr)) {
+    const p = addr.split(".").map(Number);
+    if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+    const [a, b] = p;
+    if (a === 0 || a === 10 || a === 127) return true;          // this-host / private / loopback
+    if (a === 169 && b === 254) return true;                    // link-local incl. metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;           // private
+    if (a === 192 && b === 168) return true;                    // private
+    if (a === 100 && b >= 64 && b <= 127) return true;          // CGNAT
+    if (a >= 224) return true;                                  // multicast + reserved
+    return false;
+  }
+  if (net.isIPv6(addr)) {
+    if (addr === "::1" || addr === "::") return true;           // loopback / unspecified
+    if (/^f[cd]/.test(addr)) return true;                       // unique-local fc00::/7
+    if (/^fe[89ab]/.test(addr)) return true;                    // link-local fe80::/10
+    return false;
+  }
+  return true; // not a recognizable IP literal -> treat as unsafe
+}
+
+// Reject a fetch target that points at an internal address before we ever
+// connect. Resolves DNS names so `http://name-that-resolves-to-127.0.0.1/`
+// is caught too. Allowlisted hosts (trusted backend) bypass the IP check.
+async function assertSafeExternalTarget(rawUrl) {
+  const parsed = new URL(rawUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Blocked non-http(s) target: ${parsed.protocol}`);
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (MEDIA_PROXY_ALLOW_HOSTS.has(host)) return parsed;
+  let addresses;
+  if (net.isIP(host)) {
+    addresses = [host];
+  } else {
+    let looked;
+    try {
+      looked = await dns.lookup(host, { all: true });
+    } catch {
+      throw new Error(`DNS resolution failed for ${host}`);
+    }
+    addresses = looked.map((entry) => entry.address);
+  }
+  if (!addresses.length) throw new Error(`No address resolved for ${host}`);
+  for (const address of addresses) {
+    if (isPrivateOrReservedIp(address)) {
+      throw new Error(`Blocked internal address: ${host} -> ${address}`);
+    }
+  }
+  return parsed;
+}
+
+// Fetch that validates every hop against SSRF rules. Redirects are followed
+// manually so a public URL cannot 30x-bounce us onto an internal address.
+async function safeSsrfFetch(rawUrl, options = {}, timeoutMs = MEDIA_PROXY_TIMEOUT_MS, label = "safe fetch", maxRedirects = 5) {
+  let currentUrl = String(rawUrl);
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    await assertSafeExternalTarget(currentUrl);
+    const response = await fetchWithTimeout(currentUrl, { ...options, redirect: "manual" }, timeoutMs, label);
+    if (response.status >= 300 && response.status < 400 && response.headers.get("location")) {
+      const next = new URL(response.headers.get("location"), currentUrl).toString();
+      if (response.body && typeof response.body.cancel === "function") {
+        try { await response.body.cancel(); } catch { /* ignore */ }
+      }
+      currentUrl = next;
+      continue;
+    }
+    return response;
+  }
+  throw new Error("Too many redirects");
+}
+
 function normalizePreviewUrl(value) {
   const text = String(value || "").trim();
   if (!/^https?:\/\//i.test(text)) return "";
@@ -2601,15 +3029,13 @@ async function handleLinkPreview(req, res) {
   }
 
   try {
-    const upstream = await fetch(url, {
+    const upstream = await safeSsrfFetch(url, {
       method: "GET",
-      redirect: "follow",
       headers: {
         "User-Agent": "Mozilla/5.0 YouChat-Web-LinkPreview/1.0",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      },
-      signal: AbortSignal.timeout(8000)
-    });
+      }
+    }, 8000, "link preview");
     const contentType = upstream.headers.get("content-type") || "";
     if (isVideoContentType(contentType) || isVideoFileUrl(upstream.url || url)) {
       const finalUrl = upstream.url || url;
@@ -2696,9 +3122,8 @@ async function handleMediaProxy(req, res) {
   }
 
   try {
-    const upstream = await fetchWithTimeout(url, {
+    const upstream = await safeSsrfFetch(url, {
       method: "GET",
-      redirect: "follow",
       headers: {
         "User-Agent": "Mozilla/5.0 YouChat-Web-MediaProxy/1.0",
         Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8"
@@ -2961,10 +3386,28 @@ async function handleSignalRConsume(req, res) {
   });
 }
 
+function isAllowedApiTarget(value) {
+  try {
+    return API_TARGET_ALLOW_HOSTS.has(new URL(normalizeApiBase(value)).host.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function getTargetBase(reqUrl) {
   const parsed = new URL(reqUrl, `http://localhost:${PORT}`);
-  const base = parsed.searchParams.get("__target") || DEFAULT_API_BASE;
+  const requested = parsed.searchParams.get("__target");
   parsed.searchParams.delete("__target");
+  // The client only ever sends its own configured apiBase here; anything not on
+  // the allowlist is a forged forward-proxy attempt, so fall back to the default.
+  let base = DEFAULT_API_BASE;
+  if (requested) {
+    if (isAllowedApiTarget(requested)) {
+      base = requested;
+    } else {
+      console.warn(`Rejected /api __target not on allowlist: ${requested}`);
+    }
+  }
   return { base: base.replace(/\/+$/, ""), search: parsed.search };
 }
 
@@ -3127,11 +3570,55 @@ function extractModelIds(payload) {
   return ids;
 }
 
+function safeUrlHost(value) {
+  try {
+    return new URL(String(value || "")).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+// Resolve a server-configured AI provider that actually has a key, first by
+// providerId, then by matching the requested baseUrl host. Returns null when
+// no configured provider holds a key. The key lives only in gitignored
+// config/ai-providers.json and is injected here so it never ships to browsers.
+function resolveServerAiProvider(providerId, baseUrl) {
+  const pick = (preset) => {
+    if (!preset || typeof preset !== "object") return null;
+    const key = String(preset.apiKey || "").trim();
+    if (!key) return null;
+    return { apiKey: key, baseUrl: String(preset.baseUrl || "").trim(), authType: preset.authType };
+  };
+  const id = String(providerId || "").trim();
+  if (id && AI_PROVIDER_PRESETS[id]) {
+    const direct = pick(AI_PROVIDER_PRESETS[id]);
+    if (direct) return direct;
+  }
+  const wantHost = safeUrlHost(baseUrl);
+  if (wantHost) {
+    for (const preset of Object.values(AI_PROVIDER_PRESETS)) {
+      if (safeUrlHost(preset && preset.baseUrl) === wantHost) {
+        const matched = pick(preset);
+        if (matched) return matched;
+      }
+    }
+  }
+  return null;
+}
+
 function handleAiProvidersConfig(_req, res) {
+  // Strip the key before it leaves the process; expose only whether one exists
+  // so the browser can enable AI without ever holding the secret.
+  const providers = {};
+  for (const [id, preset] of Object.entries(AI_PROVIDER_PRESETS)) {
+    if (!preset || typeof preset !== "object") continue;
+    const { apiKey, ...rest } = preset;
+    providers[id] = { ...rest, hasKey: Boolean(String(apiKey || "").trim()) };
+  }
   sendJson(res, 200, {
     success: true,
     defaultProvider: DEFAULT_AI_PROVIDER,
-    providers: AI_PROVIDER_PRESETS
+    providers
   });
 }
 
@@ -3300,7 +3787,20 @@ async function proxyAi(req, res) {
     return;
   }
 
-  const apiKey = String(incoming.apiKey || "").trim();
+  let apiKey = String(incoming.apiKey || "").trim();
+  // When the browser sends no key, inject the server-configured one. Force the
+  // provider's own baseUrl/authType too, so a tampered baseUrl can't redirect
+  // the injected key to an attacker endpoint.
+  let resolvedBaseUrl = incoming.baseUrl;
+  let resolvedAuthType = incoming.authType;
+  if (!apiKey) {
+    const injected = resolveServerAiProvider(incoming.providerId, incoming.baseUrl);
+    if (injected) {
+      apiKey = injected.apiKey;
+      resolvedBaseUrl = injected.baseUrl || incoming.baseUrl;
+      resolvedAuthType = injected.authType || incoming.authType;
+    }
+  }
   const messages = Array.isArray(incoming.messages) ? incoming.messages : [];
   if (!apiKey) {
     sendJson(res, 400, {
@@ -3319,7 +3819,7 @@ async function proxyAi(req, res) {
 
   let targetUrl;
   try {
-    targetUrl = getAiChatCompletionsUrl(incoming.baseUrl);
+    targetUrl = getAiChatCompletionsUrl(resolvedBaseUrl);
   } catch (error) {
     sendJson(res, 400, {
       success: false,
@@ -3342,7 +3842,7 @@ async function proxyAi(req, res) {
   if (isCodeBuddyTarget(targetUrl.toString())) payload.stream = true;
 
   try {
-    const authHeaders = getAiAuthHeaders(apiKey, incoming.authType, targetUrl.toString());
+    const authHeaders = getAiAuthHeaders(apiKey, resolvedAuthType, targetUrl.toString());
     const upstream = await fetchWithTimeout(targetUrl, {
       method: "POST",
       headers: {
@@ -3406,9 +3906,19 @@ async function handleAiModels(req, res) {
   }
 
   const providerId = String(incoming.providerId || "").trim();
-  const apiKey = String(incoming.apiKey || "").trim();
-  const baseUrl = String(incoming.baseUrl || "").trim();
-  const authType = normalizeAiAuthType(incoming.authType, baseUrl);
+  let apiKey = String(incoming.apiKey || "").trim();
+  let baseUrl = String(incoming.baseUrl || "").trim();
+  let authType = normalizeAiAuthType(incoming.authType, baseUrl);
+  // Inject the server key (and its own endpoint) when the browser sends none,
+  // so the model list can be probed without the key living in the frontend.
+  if (!apiKey) {
+    const injected = resolveServerAiProvider(providerId, baseUrl);
+    if (injected) {
+      apiKey = injected.apiKey;
+      baseUrl = String(injected.baseUrl || baseUrl).trim();
+      authType = normalizeAiAuthType(injected.authType, baseUrl);
+    }
+  }
   const fallbackModels = getFallbackAiModels({ providerId, baseUrl });
 
   if (!apiKey) {

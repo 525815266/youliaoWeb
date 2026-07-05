@@ -3681,3 +3681,89 @@ Future diagnostic shortcut:
 - If the official client says backend offline while Docker says `youchat-service Up`, inspect `docker logs youchat-service` first.
 - If `JsonReaderException` appears, check the config size with `find /vol1/1000/Docker/youchat -maxdepth 1 -type f -name '*YouChatConfig.json' -printf '%s %p\n'`.
 - Do not restart or reset MySQL for this failure mode; restore the config and restart `youchat-service`.
+
+## 2026-07-05 Handoff: Self-Healing Backend Config Guard
+
+Goal:
+
+- Prevent recurrence of the 0-byte `YouChatConfig.json` outage.
+- Let Web repair the backend even when `:18080` is offline.
+- Let the original backend self-heal before every `YouChatService` start, independent of Web.
+
+Implemented locally:
+
+- `compose.yaml` / `compose.registry.yaml` now mount the original backend directory:
+  - host: `${FNOS_YOUCHAT_SERVICE_DIR:-/vol1/1000/Docker/youchat}`
+  - container: `${YOUCHAT_SERVICE_DIR:-/youchat-service}`
+- `.env.example` documents:
+  - `FNOS_YOUCHAT_SERVICE_DIR`
+  - `YOUCHAT_SERVICE_DIR`
+  - `YOUCHAT_CONFIG_REPAIR_WAIT_MS`
+- `server.js` now has an offline repair path:
+  - locates the special backslash filename `*YouChatConfig.json` under the mounted backend directory
+  - validates size, JSON parse, MySQL mode, connection string, and `AutoShutDown=false`
+  - backs up the old file under `docker-control/config-backups/web-config-repair-<timestamp>/`
+  - writes a safe MySQL config atomically
+  - writes `docker-control/restart.request`
+  - waits for `/System/GetOptions` to recover
+- `restoreFnOSDatabaseToMySQL()` now tries the official API first and falls back to config-file repair when the API is unavailable.
+- New backend guard template:
+  - `ops/fnos-youchat-service/config-guard.sh`
+- New installer:
+  - `scripts/install-fnos-youchat-service-guard.py`
+  - npm command: `npm run fnos:install:service-guard`
+
+Applied on FnOS:
+
+- Installed `config-guard.sh` to `/vol1/1000/Docker/youchat/docker/config-guard.sh`.
+- Patched `/vol1/1000/Docker/youchat/docker/run-youchat.sh` to call `/app/docker/config-guard.sh` before launching `/app/YouChatService`.
+- Restarted `youchat-service`.
+- Logs showed `[config-guard] disabled AutoShutDown in existing config`.
+
+Verified:
+
+- Backend API:
+  - `POST http://192.168.9.83:18080/api/System/GetOptions`
+  - `databaseType=0`
+  - `autoShutDown=False`
+- Web health:
+  - `GET http://192.168.9.83:5177/health` ok
+- Web FnOS health:
+  - `GET http://192.168.9.83:5177/local/fnos/health`
+  - `databaseMode=mysql`
+  - `offlineRepairAvailable=True`
+  - `serviceConfig.ok=True`
+  - `serviceConfig.autoShutDown=False`
+- Sandbox guard test:
+  - Created a 0-byte `YouChatConfig.json` in `/tmp`.
+  - Ran `config-guard.sh` with `YOUCHAT_APP_DIR=/tmp/youchat-guard-test`.
+  - It generated a MySQL config, set `AutoShutDown=false`, and created a backup.
+
+Operational shortcut:
+
+- If `:18080` is offline again, call `POST /local/fnos/restore-mysql` from Web first. It now handles both online SQLite regression and offline empty-config recovery.
+- Backend restarts also self-heal without Web being open.
+
+## 2026-07-05 Handoff: Closed audit open items H1 / M3-M4 / P2-6
+
+Followed up the 2026-07-03 audit. All three open code items are done and verified with disposable end-to-end harnesses (deleted after running). `npm run check` passes.
+
+**H1 — frontend key leak (code half done; USER STILL MUST ROTATE KEYS)**
+
+- Removed the hardcoded sub2/codebuddy keys from `public/app.js` (`DEFAULT_AI_API_KEY` and the codebuddy preset are now `""`).
+- `/ai/providers` (`handleAiProvidersConfig`) no longer returns `apiKey`; it returns `hasKey: boolean` per provider. Frontend learns which providers have a server key into `state.aiServerKeyProviders`.
+- `proxyAi` + `handleAiModels` inject the key from gitignored `config/ai-providers.json` when the browser sends an empty key, matched by `providerId` (then baseUrl host). `getAiRelayBasePayload()` now sends `providerId`.
+- **SECURITY**: when a server key is injected, the provider's own configured `baseUrl`/`authType` are forced — a tampered `baseUrl` (e.g. `providerId=sub2` + `baseUrl=evil.com`) can NOT exfiltrate the key. Verified.
+- Frontend AI guards changed from `!state.aiApiKey` to `!hasUsableAiKey()` (typed key OR server has one). 6 sites, both `requestAiRelaySuggestions` copies included.
+- `index.html` key field gained placeholder "留空则使用服务端已配置的密钥".
+- STILL REQUIRED OF USER: the old keys leaked in the public repo history are still valid — **rotate/regenerate the sub2 (`sub2.sn55.cn`) and codebuddy (`copilot.tencent.com`) keys**, update `config/ai-providers.json`, then verify AI on `:5177` (AI can't be exercised from the dev box).
+
+**M3/M4 — SSRF + open forward proxy (done)**
+
+- New `assertSafeExternalTarget()` resolves the host (DNS included) and blocks loopback/private/link-local/CGNAT/multicast/reserved IPs, incl. `169.254.169.254`. `safeSsrfFetch()` follows redirects manually and re-checks every hop (no 30x bounce to internal). Wired into `handleMediaProxy` + `handleLinkPreview`.
+- Allowlist `MEDIA_PROXY_ALLOW_HOSTS` = backend host from `DEFAULT_API_BASE` + env `YOUCHAT_MEDIA_ALLOW_HOSTS`, so backend-served media still works. Real chat media is on public CDNs (qiniu/wx.qlogo/yzimage/alicdn/pddpic), confirmed from the capture log, so blocking private IPs doesn't regress display.
+- `/api?__target=` restricted: `getTargetBase()` only honors `__target` whose host is in `API_TARGET_ALLOW_HOSTS` (`DEFAULT_API_BASE` host + env `YOUCHAT_ALLOWED_API_HOSTS`); otherwise falls back to `DEFAULT_API_BASE`. Verified the frontend only ever sends `state.apiBase`, so this is safe. If you deploy a non-default backend, add its host via env.
+
+**P2-6 — dead CSS (done, narrowly)**
+
+- Removed only the orphaned login-illustration internals (`.platform`, `.chat-rail*`, `.bubble*`, `.document-card*`, `.cube*` — 172 lines) whose DOM was replaced by a single `<img src="/assets/login_img.png">`. Confirmed zero references in HTML/JS. Kept `.login-illustration`, `.login-illustration img`, `.login-card`. `applyAiSuggestion`/`sendAiSuggestion` left untouched (still bound).

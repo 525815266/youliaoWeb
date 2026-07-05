@@ -6512,3 +6512,77 @@ AI 感知条行为：
 - 如果官方客户端提示服务端不在线，但 Docker 里 `youchat-service` 仍显示 `Up`，第一步看日志是否有 `JsonReaderException`，不要只看容器状态。
 - 对这个特殊配置文件不要写成普通 Linux 子目录路径；优先用 `find /vol1/1000/Docker/youchat -maxdepth 1 -type f -name '*YouChatConfig.json'` 定位。
 - 修复时不要重置 MySQL 容器；只恢复配置并重启 `youchat-service`。
+
+## 2026-07-05 飞牛服务端配置自愈版本
+
+目标：
+
+- 彻底收敛 `YouChatConfig.json` 变成 0 字节、服务端反复崩、客户端卡“连接中”的问题。
+- 解决之前 Web 守护只能在 `18080` API 活着时修复，服务端自己起不来时无能为力的问题。
+
+本次新增：
+
+- Web Docker 挂载原悠聊服务目录：
+  - `FNOS_YOUCHAT_SERVICE_DIR=/vol1/1000/Docker/youchat`
+  - 容器内路径：`YOUCHAT_SERVICE_DIR=/youchat-service`
+- `server.js` 新增离线配置修复链路：
+  - 定位 `/youchat-service/\悠聊数据库\config\YouChatConfig.json`。
+  - 检查是否空文件、非法 JSON、非 MySQL、缺连接串、`AutoShutDown=true`。
+  - 优先从服务目录 `.env` 生成 MySQL 连接串。
+  - 写入前备份到 `docker-control/config-backups/web-config-repair-<timestamp>/YouChatConfig.json.before`。
+  - 原子写回安全配置，并写入 `docker-control/restart.request` 触发 `youchat-service` 重启。
+  - `/local/fnos/restore-mysql` 现在先尝试官方接口修复；如果官方接口不可达，自动 fallback 到配置文件离线修复。
+- 新增后端启动守护模板：
+  - `ops/fnos-youchat-service/config-guard.sh`
+  - 已安装到飞牛 `/vol1/1000/Docker/youchat/docker/config-guard.sh`。
+  - `docker/run-youchat.sh` 已插入启动前调用。
+  - 每次 `YouChatService` 启动前都会检查配置，空文件/SQLite/自动关闭会话开启都会被修回。
+- 新增安装器：
+  - `scripts/install-fnos-youchat-service-guard.py`
+  - npm 脚本：`npm run fnos:install:service-guard`
+
+已部署并验证：
+
+- 已执行安装器并重启 `youchat-service`。
+- `docker logs youchat-service` 出现 `[config-guard] disabled AutoShutDown in existing config`。
+- `POST http://192.168.9.83:18080/api/System/GetOptions` 返回：
+  - `databaseType=0`
+  - `autoShutDown=False`
+- Web 已重新部署到飞牛。
+- `GET http://192.168.9.83:5177/local/fnos/health` 返回：
+  - `ok=True`
+  - `databaseMode=mysql`
+  - `offlineRepairAvailable=True`
+  - `serviceConfig.ok=True`
+  - `serviceConfig.autoShutDown=False`
+- 沙盒演练通过：在 `/tmp` 创建 0 字节 `YouChatConfig.json` 后运行 `config-guard.sh`，结果生成 MySQL 配置，`AutoShutDown=false`，并产生备份。
+
+后续注意：
+
+- 以后再遇到 `18080` 离线，优先点 Web 的数据库修复按钮或调用 `POST /local/fnos/restore-mysql`；它已经能处理 API 离线场景。
+- 后端服务自身重启时也会自愈，不依赖 Web 页面打开。
+- 如果更换飞牛服务目录，需要同步调整 Web `.env` 的 `FNOS_YOUCHAT_SERVICE_DIR`。
+
+## 2026-07-05 收尾安全审计遗留项 H1 / M3-M4 / P2-6
+
+承接 2026-07-03 审计。三个开放代码项已全部完成，并用一次性端到端脚本验证（跑完即删）。`npm run check` 通过。改动文件：`public/app.js`、`public/index.html`、`public/styles.css`、`server.js`。
+
+### H1 — 前端密钥泄露（代码侧已完成；**用户仍须轮换旧 key**）
+
+- `public/app.js` 删除硬编码的 sub2/codebuddy key（`DEFAULT_AI_API_KEY` 与 codebuddy preset 现为 `""`）。
+- `/ai/providers`（`handleAiProvidersConfig`）不再返回 `apiKey`，改为每个渠道返回 `hasKey: boolean`；前端把"哪些渠道服务端有 key"学到 `state.aiServerKeyProviders`。
+- `proxyAi` + `handleAiModels`：前端传空 key 时，从 gitignore 的 `config/ai-providers.json` 按 `providerId`（再退回 baseUrl 主机）注入真实 key。`getAiRelayBasePayload()` 现在带上 `providerId`。
+- **安全关键**：注入服务端 key 时，强制使用该渠道自己配置的 `baseUrl`/`authType`——被篡改的 `baseUrl`（如 `providerId=sub2` + `baseUrl=evil.com`）无法把 key 外泄到攻击者地址。已验证。
+- 前端 6 处 AI 守卫从 `!state.aiApiKey` 改为 `!hasUsableAiKey()`（本地填了 key 或服务端有 key），两个 `requestAiRelaySuggestions` 副本都改到。
+- `index.html` 密钥框加 placeholder「留空则使用服务端已配置的密钥」。
+- **仍需用户做**：公开仓库历史里泄露的旧 key 依然有效——**去 sub2（`sub2.sn55.cn`）和 codebuddy（`copilot.tencent.com`）后台轮换/重置 key**，更新 `config/ai-providers.json`，然后在 `:5177` 实测 AI（开发机无法实际调 AI）。
+
+### M3/M4 — SSRF + 开放转发代理（已完成）
+
+- 新增 `assertSafeExternalTarget()`：解析主机（含 DNS）后拦截 loopback/私网/link-local/CGNAT/组播/保留 IP，含 `169.254.169.254`。`safeSsrfFetch()` 手动逐跳跟随重定向并每跳复检（防 30x 跳转到内网）。接入 `handleMediaProxy` + `handleLinkPreview`。
+- 白名单 `MEDIA_PROXY_ALLOW_HOSTS` = `DEFAULT_API_BASE` 的后端主机 + 环境变量 `YOUCHAT_MEDIA_ALLOW_HOSTS`，保证后端托管的媒体仍可代理。真实聊天媒体都在公网 CDN（qiniu/wx.qlogo/yzimage/alicdn/pddpic，抓包日志证实），所以拦内网 IP 不影响图片显示。
+- `/api?__target=` 收紧：`getTargetBase()` 只接受主机在 `API_TARGET_ALLOW_HOSTS`（`DEFAULT_API_BASE` 主机 + 环境变量 `YOUCHAT_ALLOWED_API_HOSTS`）里的 `__target`，否则回退 `DEFAULT_API_BASE`。已确认前端只会传 `state.apiBase`，所以安全。若部署非默认后端，用环境变量加它的主机。
+
+### P2-6 — 死 CSS（小范围完成）
+
+- 只删了登录插画的孤立内部样式（`.platform`、`.chat-rail*`、`.bubble*`、`.document-card*`、`.cube*`，共 172 行）——它们的 DOM 早已被单个 `<img src="/assets/login_img.png">` 取代，HTML/JS 里零引用。保留 `.login-illustration`、`.login-illustration img`、`.login-card`。`applyAiSuggestion`/`sendAiSuggestion` 未动（仍有事件绑定）。

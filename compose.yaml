@@ -17,6 +17,8 @@ services:
       YOUCHAT_DATABASE_GUARD_ENABLED: ${YOUCHAT_DATABASE_GUARD_ENABLED:-1}
       YOUCHAT_DATABASE_GUARD_INTERVAL_MS: ${YOUCHAT_DATABASE_GUARD_INTERVAL_MS:-300000}
       YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT: ${YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT:-1000}
+      YOUCHAT_SERVICE_DIR: ${YOUCHAT_SERVICE_DIR:-/youchat-service}
+      YOUCHAT_CONFIG_REPAIR_WAIT_MS: ${YOUCHAT_CONFIG_REPAIR_WAIT_MS:-45000}
       PROMPTWORKS_API_BASE: ${PROMPTWORKS_API_BASE:-http://host.docker.internal:5188/api/v1}
       PROMPTWORKS_TIMEOUT_MS: ${PROMPTWORKS_TIMEOUT_MS:-60000}
     extra_hosts:
@@ -25,6 +27,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config:/app/config
+      - ${FNOS_YOUCHAT_SERVICE_DIR:-/vol1/1000/Docker/youchat}:${YOUCHAT_SERVICE_DIR:-/youchat-service}
     healthcheck:
       test:
         - CMD
