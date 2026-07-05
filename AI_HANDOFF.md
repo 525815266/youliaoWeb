@@ -3805,6 +3805,37 @@ Notes:
 - `client-layout.scrollWidth` may report `406` during measurement because hidden absolute panels keep the existing slide transition offset. The document/body do not overflow, so the phone viewport is not widened.
 - Future mobile changes should respect the single-panel flow controlled by `workbenchView[data-mobile-panel="list|chat|tool"]`.
 
+## 2026-07-06 Handoff: Mobile Message Bubble Fix
+
+Issue:
+
+- On phones, short incoming customer messages could render as one Chinese character per line.
+- Message avatars could appear visually detached from their text bubbles.
+- Chat bubble text looked oversized on mobile because it inherited the browser/body default.
+
+Root cause:
+
+- The previous mobile hardening layer used `.message { width: fit-content; }`. In a grid, short CJK text can collapse to its min-content width, which is effectively one character.
+- `.contact-avatar` is shared with the conversation list and carries `grid-area: avatar`; inside chat message grids this needed an explicit override.
+
+Changed:
+
+- In `public/styles.css`, mobile `.message` now spans the message list width. The bubble controls its own width with `width: max-content`, `min-width`, and `max-width`.
+- Mobile incoming/outgoing messages now use fixed 32px avatar columns and a bounded message body width of `min(78vw, 336px)`.
+- `.message .contact-avatar, .message .contact-photo` now set `grid-area: auto` and fixed 30px size.
+- Mobile `.message-content` now uses a stable 14px font size and 1.5 line-height.
+- Rich cards override the text-bubble width behavior so link/miniprogram/file cards remain responsive.
+
+Verified:
+
+- `npm run check` passed.
+- Chrome headless at `390x844` with fixture messages:
+  - `documentElement.scrollWidth=390`
+  - `body.scrollWidth=390`
+  - short messages (`提现`, `好的`) stayed horizontal, about `45x39`.
+  - avatar top was within 2px of the bubble top.
+- QA screenshot: `reports/_uicheck/mobile-message-fit-390x844.png` (left untracked).
+
 ## 2026-07-05 Handoff: Closed audit open items H1 / M3-M4 / P2-6
 
 Followed up the 2026-07-03 audit. All three open code items are done and verified with disposable end-to-end harnesses (deleted after running). `npm run check` passes.

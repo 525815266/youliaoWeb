@@ -6635,6 +6635,38 @@ AI 感知条行为：
 - 手机端不是桌面三栏缩放，而是 `data-mobile-panel=list/chat/tool` 的单面板流转。
 - 后续新增按钮或工具页时，要先确认在 `max-width: 760px` 下是否需要单独收缩、横滑或卡片化。
 
+## 2026-07-06 手机端聊天气泡与头像错位修复
+
+问题：
+
+- 手机端客户发来的短消息（例如“提现”“好的”）会被压成一行一个字。
+- 聊天消息头像和文字气泡在窄屏下出现错位，尤其是客户头像会飘到不该出现的位置。
+- 手机端聊天气泡继承默认字号，长文本显得过大，容易挤压内容。
+
+原因：
+
+- 上一轮移动端兜底样式里把 `.message` 设置成 `width: fit-content`，CSS Grid 会按最小内容宽度计算中文短文本，导致 CJK 字符按单字折行。
+- `.contact-avatar` 同时被会话列表和聊天消息复用，而会话列表样式里有 `grid-area: avatar`；在聊天消息网格里没有覆盖时，会干扰头像定位。
+
+修复：
+
+- 手机端 `.message` 改成占满消息列表宽度，气泡自身用 `width: max-content; max-width: 100%` 控制内容宽度。
+- 客户/客服消息分别固定 32px 头像列，消息正文限制在 `min(78vw, 336px)` 内。
+- `.message .contact-avatar, .message .contact-photo` 增加 `grid-area: auto`，避免继承会话列表的命名 grid 区域。
+- 手机端 `.message-content` 设为 14px / 1.5 行高，短消息保留横排，长消息按气泡最大宽度自然换行。
+- 富卡片消息（链接、小程序、文件）单独保持 `width:auto; min-width:0; max-width:100%`，避免受文字气泡 `max-content` 影响。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless `390x844` 手机视口验证：
+  - `documentElement.scrollWidth=390`
+  - `body.scrollWidth=390`
+  - “提现”“好的”短消息气泡宽约 45px、高约 39px，没有竖排。
+  - 头像 top 与气泡 top 约差 2px，位置稳定。
+- QA 截图：
+  - `reports/_uicheck/mobile-message-fit-390x844.png`
+
 ## 2026-07-05 收尾安全审计遗留项 H1 / M3-M4 / P2-6
 
 承接 2026-07-03 审计。三个开放代码项已全部完成，并用一次性端到端脚本验证（跑完即删）。`npm run check` 通过。改动文件：`public/app.js`、`public/index.html`、`public/styles.css`、`server.js`。
