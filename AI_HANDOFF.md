@@ -4060,3 +4060,66 @@ Do not regress:
 - Do not move it into the composer.
 - Do not switch it back to absolute positioning.
 - Preserve row-level apply/send buttons for each candidate.
+
+## 2026-07-06 Handoff: Long Skill Copy Tray Clamp
+
+User complaint:
+
+- Real skill replies are much longer than the earlier fixture. With `width: fit-content`, the first candidate stretched into a very long horizontal strip and the apply/send buttons drifted far to the right.
+
+Changed:
+
+- `public/styles.css`
+  - `.ai-suggestion-card` no longer uses content-driven width. It is capped at `min(920px, calc(100% - 28px))`.
+  - Left control rail is fixed at `176px` so `换一换` does not wrap.
+  - Candidate rows use `width: 100%` and `minmax(0, 1fr)` so long copy wraps inside the tray.
+  - Active candidate shows up to 2 lines; inactive candidates preview 1 line.
+  - Refresh button has `white-space: nowrap`.
+
+Verified:
+
+- `npm run check` passed.
+- Chrome headless wide fixture `1802x564`:
+  - tray `920x96`, centered;
+  - first candidate `682x42`;
+  - no horizontal overflow.
+- Screenshots:
+  - `reports/_uicheck/ai-suggestion-tray-long-desktop-v4.png`
+  - `reports/_uicheck/ai-suggestion-tray-long-mobile-v3.png`
+
+Do not regress:
+
+- Do not use `width: fit-content` for the tray or candidate rows when rendering real skill copy.
+- Keep long skill replies clamped inside the candidate row. Do not expand all steps horizontally.
+
+## 2026-07-06 Handoff: Translucent Suggestion Tray
+
+User request:
+
+- Make the suggestion bubble semi-transparent so it feels lighter and does not visually block the chat area as much.
+
+Changed:
+
+- `public/styles.css`
+  - Outer tray uses semi-transparent blue-white background, about `rgba(247, 251, 255, 0.62)`.
+  - Added purposeful `backdrop-filter: blur(8px) saturate(145%)` for a softer translucent material.
+  - Header pill, refresh button, and candidate rows use lower-alpha backgrounds.
+  - Active candidate remains more solid, about `rgba(255, 255, 255, 0.86)`, to keep copy readable.
+  - Hover/focus-within makes the tray more solid for accurate apply/send actions.
+  - Added state-specific hover/focus rules for `is-optimize` and `is-no-reply`.
+
+Verified:
+
+- `npm run check` passed.
+- Chrome headless wide long-copy fixture:
+  - tray remains `920x96`;
+  - no horizontal overflow;
+  - computed tray background `rgba(247, 251, 255, 0.62)`;
+  - active candidate text remains readable.
+- Screenshot:
+  - `reports/_uicheck/ai-suggestion-tray-translucent-v1.png`
+
+Do not regress:
+
+- Do not set opacity on the entire tray because it fades text and buttons too.
+- Use translucent backgrounds while keeping text/button opacity intact.

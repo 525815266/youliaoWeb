@@ -6889,3 +6889,67 @@ AI 感知条行为：
 - 不要把 `#aiSuggestionCard` 改回绝对定位，不要恢复 `ResizeObserver` 和 `--composer-height`。
 - AI/skill 推荐应该保持“提示队列”形态：轻量、可关闭、可换一换、每条候选有自己的采用/发送按钮。
 - 如果以后要显示图片候选，应该加在候选行内部的缩略图位，不要把整个托盘改成大卡片。
+
+## 2026-07-06 AI 浮动提示框长话术收口
+
+问题：
+
+- 用户用真实 skill 长话术验证后，推荐托盘仍然丑：第一条候选被拉成一条横向长蛇，按钮跑到屏幕最右边，视觉上像横向拼接出来的条，不像客服工作台组件。
+- 根因是上一版用了 `width: fit-content`，短话术看起来灵活，但一遇到长话术就按内容最大宽度撑开。
+
+修复：
+
+- `public/styles.css`
+  - `.ai-suggestion-card` 从动态内容宽度改成固定最大宽度队列卡：`width/max-width: min(920px, calc(100% - 28px))`。
+  - 左侧控制区固定 `176px`，避免“换一换”被挤成两行。
+  - 候选项改为 `width: 100%`，内部 grid 使用 `minmax(0, 1fr)`，强制长文案在卡片内换行，不再横向撑爆。
+  - 主候选 `.is-active` 最多两行，其他候选一行预览，保持队列紧凑。
+  - “换一换”按钮增加 `white-space: nowrap`。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless 按用户截图宽屏尺寸 `1802x564` 注入超长 skill 文案：
+  - 托盘 `920x96`，居中，不再铺满宽屏。
+  - 第一条候选 `682x42`，文案区域 `552x33`，长文本正常夹在卡片内。
+  - 页面横向溢出为 `0`。
+- 手机 `390x780` 仍无横向溢出。
+- QA 截图：
+  - `reports/_uicheck/ai-suggestion-tray-long-desktop-v4.png`
+  - `reports/_uicheck/ai-suggestion-tray-long-mobile-v3.png`
+
+后续注意：
+
+- 不要再给 `.ai-suggestion-card` 或 `.ai-suggestion-option` 使用 `width: fit-content` 承载真实长话术。
+- 长 skill 回复必须先在候选行内收住，图片/步骤只作为预览，不要把完整多步骤内容横向展开。
+
+## 2026-07-06 AI 浮动提示框半透明减遮挡
+
+需求：
+
+- 用户希望输入框上方的提示气泡可以做成半透明状态，不要像实心面板一样遮挡聊天区域。
+
+修复：
+
+- `public/styles.css`
+  - `.ai-suggestion-card` 外层改为半透明蓝白玻璃感：背景主 alpha 约 `0.62`，边框透明度降低，阴影变轻。
+  - 增加 `backdrop-filter: blur(8px) saturate(145%)`，让半透明层更柔和。
+  - `.ai-suggestion-head`、`换一换`、候选行背景同步降低不透明度。
+  - 主候选保留更高不透明度 `0.86`，确保客服仍能快速阅读。
+  - hover/focus-within 时自动变实一点，方便鼠标移上去后准确点击“采用/发送”。
+  - `is-optimize`、`is-no-reply` 单独补了 hover/focus 半透明状态，避免后写样式覆盖普通 hover。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless 宽屏长话术场景：
+  - 托盘仍为 `920x96`，无横向溢出。
+  - 外层计算背景为 `rgba(247, 251, 255, 0.62)`。
+  - 主候选计算背景为 `rgba(255, 255, 255, 0.86)`，文字可读。
+- QA 截图：
+  - `reports/_uicheck/ai-suggestion-tray-translucent-v1.png`
+
+后续注意：
+
+- 不要直接给整个 `.ai-suggestion-card` 设置 `opacity`，否则文字和按钮也会一起变淡。
+- 应继续用半透明背景 + 可读文字的方式减轻遮挡。

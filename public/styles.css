@@ -2259,32 +2259,46 @@ textarea:focus-visible {
 
 .ai-suggestion-card {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: 176px minmax(0, 1fr);
   align-items: center;
   justify-self: center;
   gap: 8px;
-  width: fit-content;
-  min-width: min(460px, calc(100% - 28px));
-  max-width: calc(100% - 28px);
+  width: min(920px, calc(100% - 28px));
+  min-width: 0;
+  max-width: min(920px, calc(100% - 28px));
   min-height: 0;
-  max-height: min(112px, 16vh);
-  max-height: min(112px, 16dvh);
+  max-height: min(118px, 17vh);
+  max-height: min(118px, 17dvh);
   margin: 7px 14px 6px;
   padding: 6px;
   overflow: hidden;
-  border: 1px solid rgba(173, 205, 242, 0.92);
+  border: 1px solid rgba(142, 190, 241, 0.58);
   border-radius: 13px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(242, 248, 255, 0.98)),
-    #f7fbff;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(238, 247, 255, 0.64)),
+    rgba(247, 251, 255, 0.62);
+  backdrop-filter: blur(8px) saturate(145%);
+  -webkit-backdrop-filter: blur(8px) saturate(145%);
   box-shadow:
-    0 -8px 24px rgba(24, 78, 134, 0.08),
-    0 1px 0 rgba(255, 255, 255, 0.86) inset;
+    0 -6px 18px rgba(24, 78, 134, 0.055),
+    0 1px 0 rgba(255, 255, 255, 0.7) inset;
   animation: ai-suggestion-rise 150ms ease-out;
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .ai-suggestion-card.is-hidden {
   display: none !important;
+}
+
+.ai-suggestion-card:hover,
+.ai-suggestion-card:focus-within {
+  border-color: rgba(142, 190, 241, 0.86);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(240, 248, 255, 0.84)),
+    rgba(247, 251, 255, 0.84);
+  box-shadow:
+    0 -8px 24px rgba(24, 78, 134, 0.08),
+    0 1px 0 rgba(255, 255, 255, 0.82) inset;
 }
 
 .ai-suggestion-head,
@@ -2298,15 +2312,16 @@ textarea:focus-visible {
   flex: 0 0 auto;
   flex-direction: row;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: 4px;
+  width: 100%;
   min-width: 0;
   min-height: 30px;
-  padding: 2px 4px 2px 7px;
-  border: 1px solid #cfe3fa;
+  padding: 2px 5px 2px 8px;
+  border: 1px solid rgba(187, 217, 249, 0.72);
   border-radius: 999px;
-  background: #f7fbff;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.92) inset;
+  background: rgba(247, 251, 255, 0.58);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset;
 }
 
 .ai-suggestion-head .mini-action {
@@ -2329,7 +2344,7 @@ textarea:focus-visible {
 
 .ai-suggestion-head .suggestion-refresh {
   width: auto;
-  min-width: 52px;
+  min-width: 48px;
   height: 26px;
   margin: 0;
   padding: 0 8px;
@@ -2338,11 +2353,12 @@ textarea:focus-visible {
   color: #0d63c7;
   font-size: 12px;
   font-weight: 600;
-  background: #fff;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.7);
 }
 
 .ai-suggestion-head .suggestion-refresh:hover {
-  background: #edf6ff;
+  background: rgba(237, 246, 255, 0.92);
 }
 
 .ai-suggestion-actions {
@@ -2355,8 +2371,8 @@ textarea:focus-visible {
   align-items: flex-start;
   min-width: 0;
   width: 100%;
-  max-height: calc(min(112px, 16vh) - 12px);
-  max-height: calc(min(112px, 16dvh) - 12px);
+  max-height: calc(min(118px, 17vh) - 12px);
+  max-height: calc(min(118px, 17dvh) - 12px);
   gap: 4px;
   overflow-x: hidden;
   overflow-y: auto;
@@ -2365,20 +2381,20 @@ textarea:focus-visible {
 }
 
 .ai-suggestion-option {
-  display: inline-grid;
-  grid-template-columns: 22px minmax(140px, 1fr) auto;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
-  width: fit-content;
-  min-width: min(360px, 100%);
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
-  min-height: 30px;
+  min-height: 29px;
   padding: 4px 5px;
-  border: 1px solid rgba(198, 221, 247, 0.96);
+  border: 1px solid rgba(176, 210, 247, 0.62);
   border-radius: 10px;
   color: #1f2937;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 4px 12px rgba(27, 73, 126, 0.055);
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: 0 4px 12px rgba(27, 73, 126, 0.035);
   transition:
     transform 140ms ease,
     border-color 140ms ease,
@@ -2395,16 +2411,17 @@ textarea:focus-visible {
 .ai-suggestion-option:hover {
   transform: translateY(-1px);
   border-color: #aed3fb;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 6px 16px rgba(22, 91, 160, 0.09);
 }
 
 .ai-suggestion-option.is-active {
+  min-height: 42px;
   border-color: #96c8fb;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.86);
   box-shadow:
     0 0 0 1px rgba(22, 141, 242, 0.12),
-    0 6px 16px rgba(22, 91, 160, 0.1);
+    0 6px 16px rgba(22, 91, 160, 0.075);
 }
 
 .ai-suggestion-index {
@@ -2433,10 +2450,14 @@ textarea:focus-visible {
   font-size: 12px;
   line-height: 1.38;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.ai-suggestion-option.is-active p {
+  -webkit-line-clamp: 2;
 }
 
 .ai-suggestion-card.is-single {
@@ -2480,15 +2501,28 @@ textarea:focus-visible {
 }
 
 .ai-suggestion-card.is-no-reply {
-  border-color: #d5dee9;
-  background: rgba(248, 250, 252, 0.98);
+  border-color: rgba(213, 222, 233, 0.72);
+  background: rgba(248, 250, 252, 0.68);
+}
+
+.ai-suggestion-card.is-no-reply:hover,
+.ai-suggestion-card.is-no-reply:focus-within {
+  background: rgba(248, 250, 252, 0.86);
 }
 
 .ai-suggestion-card.is-optimize {
-  border-color: #abd4fb;
+  border-color: rgba(147, 201, 251, 0.68);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(241, 248, 255, 0.98)),
-    #f8fcff;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(239, 248, 255, 0.64)),
+    rgba(248, 252, 255, 0.62);
+}
+
+.ai-suggestion-card.is-optimize:hover,
+.ai-suggestion-card.is-optimize:focus-within {
+  border-color: rgba(147, 201, 251, 0.9);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(239, 248, 255, 0.84)),
+    rgba(248, 252, 255, 0.84);
 }
 
 .ai-suggestion-card strong {
