@@ -657,6 +657,8 @@ function boot() {
     "sendText",
     "useAi",
     "aiSuggest",
+    "optimizeDraft",
+    "optimizeDraftInline",
     "emojiTool",
     "superCommandTool",
     "imageTool",
@@ -739,6 +741,8 @@ function bindEvents() {
   el.aiSuggestionCard.addEventListener("click", handleAiSuggestionClick);
   el.draftImageTray.addEventListener("click", handleDraftImageClick);
   el.aiSuggest.addEventListener("click", generateAiWithRelay);
+  el.optimizeDraft?.addEventListener("click", requestDraftOptimizeFromComposer);
+  el.optimizeDraftInline?.addEventListener("click", requestDraftOptimizeFromComposer);
   el.withdrawRiskSignal?.addEventListener("click", handleWithdrawRiskSignalClick);
   el.replyText.addEventListener("input", handleReplyInput);
   el.replyText.addEventListener("keydown", handleReplyKeydown);
@@ -2670,6 +2674,11 @@ function updateAiButtonState() {
     el.aiSuggest.textContent = state.aiGenerating ? "AI 生成中" : "AI 推荐";
     el.aiSuggest.title = state.aiEnabled ? "" : "AI 推荐已在设置中关闭";
   }
+  [el.optimizeDraft, el.optimizeDraftInline].filter(Boolean).forEach((button) => {
+    button.disabled = state.aiGenerating || !state.aiEnabled || !hasUsableAiKey();
+    button.textContent = state.aiGenerating ? "优化中" : "优化文案";
+    button.title = state.aiEnabled ? "把当前输入优化成更贴心、耐心、容易理解的回复" : "AI 已在设置中关闭";
+  });
   if (el.fetchAiModels) {
     el.fetchAiModels.disabled = state.aiFetchingModels;
     el.fetchAiModels.textContent = state.aiFetchingModels ? "获取中" : "获取模型";
@@ -8649,17 +8658,42 @@ function triggerDraftAiOptimize() {
   }), 900);
 }
 
-async function optimizeDraftReply() {
+function requestDraftOptimizeFromComposer() {
+  const draftText = getReplyTextContent().trim();
+  if (!draftText) {
+    toast("先输入要优化的回复内容。", true);
+    el.replyText?.focus();
+    return;
+  }
+  if (draftText.length < 4) {
+    toast("内容太短，稍微多写一点再优化会更准。", true);
+    el.replyText?.focus();
+    return;
+  }
+  if (!state.aiEnabled) {
+    toast("AI 推荐已关闭，请先在右上角 AI 设置中开启。", true);
+    return;
+  }
+  if (!hasUsableAiKey()) {
+    toast("AI 密钥未配置，无法优化文案。", true);
+    return;
+  }
+  optimizeDraftReply({ manual: true, force: true }).catch((error) => {
+    toast(`文案优化失败：${error.message}`, true);
+  });
+}
+
+async function optimizeDraftReply(options = {}) {
   const draftText = getReplyTextContent().trim();
   if (!draftText || draftText.length < 4 || !state.aiEnabled || !hasUsableAiKey()) return;
   const latest = getLatestActionableInboundMessage();
   const key = [
     getContactId(state.activeContact),
-    getMessageKey(latest, 0),
+    latest ? getMessageKey(latest, 0) : "",
     draftText,
     state.draftImages.map((image) => image.name).join("|")
   ].join("::");
-  if (key === state.aiOptimizeKey || state.aiGenerating) return;
+  if (!options.force && (key === state.aiOptimizeKey || state.aiGenerating)) return;
   state.aiOptimizeKey = key;
 
   if (state.aiOptimizeAbort) state.aiOptimizeAbort.abort();
@@ -8667,6 +8701,20 @@ async function optimizeDraftReply() {
 
   const context = buildDraftOptimizeContext(draftText);
   state.aiGenerating = true;
+  if (options.manual) {
+    state.aiSuggestion = {
+      type: "optimize",
+      title: "文字优化",
+      label: "正在优化",
+      content: "正在把当前输入优化成更贴心、耐心、容易理解的回复...",
+      loading: true,
+      steps: [{ type: "text", content: "正在把当前输入优化成更贴心、耐心、容易理解的回复..." }],
+      keepDraftImages: true
+    };
+    state.aiSuggestions = [state.aiSuggestion];
+    state.lastSuggestionUsed = false;
+    renderAiSuggestionCard();
+  }
   updateAiButtonState();
 
   try {
@@ -8677,7 +8725,8 @@ async function optimizeDraftReply() {
           role: "system",
           content: [
             "你是客服输入优化助手。只优化客服已经输入的文字，不处理图片，不新增未确认的订单/返利/后台事实。",
-            "输出 1 到 3 条可直接发送的中文候选，语气自然、简短、安抚；不要输出分析过程。",
+            "输出 1 到 3 条可直接发送的中文候选，语气贴心、耐心、安抚、让普通人容易听懂；不要情绪过激，不要责备客户，不要输出分析过程。",
+            "如果原文里有生硬、催促、责怪、容易误解的表达，要改成更温和但不拖泥带水的说法。",
             "如原文已经合适，也给出轻微润色版本。"
           ].join("\n")
         },
@@ -8705,13 +8754,18 @@ async function optimizeDraftReply() {
     appendAiSuggestions(fallbackSuggestions.map((reply, index) => ({
       type: "optimize",
       title: "文字优化",
-      label: index === 0 ? "可优化为" : `可优化为 ${index + 1}`,
+      label: index === 0 ? "贴心优化" : `贴心优化 ${index + 1}`,
       content: reply,
       steps: [{ type: "text", content: reply }],
       keepDraftImages: true
-    })).slice(0, 3), { silent: true });
+    })).slice(0, 3), { silent: !options.manual });
+    if (options.manual) toast("已生成优化文案，可选择采用或发送。");
   } catch (error) {
     if (error.name !== "AbortError") log("draft optimize failed", { error: error.message });
+    if (options.manual && error.name !== "AbortError") {
+      clearAiSuggestion();
+      throw error;
+    }
   } finally {
     state.aiGenerating = false;
     updateAiButtonState();
@@ -10078,6 +10132,10 @@ function useAiSuggestion(suggestion = state.aiSuggestion) {
     toast("这条推荐判断为无需回复。", true);
     return;
   }
+  if (suggestion.loading) {
+    toast("文案还在优化中，稍等一下。", true);
+    return;
+  }
   const text = getSuggestionTextForComposer(suggestion);
   setReplyTextContent(escapeHtml(text.replace(/^建议回复：?/, "")));
   state.lastSuggestionUsed = true;
@@ -10110,6 +10168,10 @@ async function sendCurrentSuggestion() {
     toast("这条消息识别为无需回复，不会自动发送。", true);
     return;
   }
+  if (suggestion.loading) {
+    toast("文案还在优化中，稍等一下。", true);
+    return;
+  }
   if (suggestion.keepDraftImages) {
     useAiSuggestion(suggestion);
     await sendText();
@@ -10123,9 +10185,13 @@ function renderAiSuggestionCard() {
   const shouldKeepMessageBottom = isNearBottom(el.messageList);
   const suggestions = state.aiSuggestions.length ? state.aiSuggestions : state.aiSuggestion ? [state.aiSuggestion] : [];
   const hasSuggestion = Boolean(suggestions.length);
-  const sendDisabled = state.sendingMessage || !hasSuggestion || Boolean(state.aiSuggestion?.noReply);
+  const sendDisabled = state.sendingMessage || !hasSuggestion || Boolean(state.aiSuggestion?.noReply) || Boolean(state.aiSuggestion?.loading);
   el.aiSuggestionCard.classList.toggle("is-hidden", !hasSuggestion);
+  el.aiSuggestionCard.classList.toggle("is-single", suggestions.length === 1);
+  el.aiSuggestionCard.classList.toggle("is-multiple", suggestions.length > 1);
   el.aiSuggestionCard.classList.toggle("is-no-reply", Boolean(state.aiSuggestion?.noReply));
+  el.aiSuggestionCard.classList.toggle("is-optimize", state.aiSuggestion?.type === "optimize");
+  el.aiSuggestionCard.classList.toggle("is-loading", Boolean(state.aiSuggestion?.loading));
   el.useAi.disabled = !hasSuggestion;
   el.sendAiSuggestion.disabled = sendDisabled;
   el.applyAiSuggestion.disabled = sendDisabled;
@@ -10134,19 +10200,21 @@ function renderAiSuggestionCard() {
     el.refreshAiSuggestion.textContent = state.aiGenerating ? "生成中" : "换一换";
   }
   if (hasSuggestion) {
-    const disabled = state.sendingMessage || Boolean(state.aiSuggestion.noReply);
+    const disabled = state.sendingMessage || Boolean(state.aiSuggestion.noReply) || Boolean(state.aiSuggestion.loading);
     el.useAi.disabled = disabled;
     el.sendAiSuggestion.disabled = disabled;
     el.applyAiSuggestion.disabled = disabled;
     el.aiSuggestionTitle.textContent = getSuggestionPanelTitle(state.aiSuggestion);
     el.aiSuggestionText.innerHTML = suggestions.map((suggestion, index) => `
-      <article class="ai-suggestion-option ${suggestion === state.aiSuggestion ? "is-active" : ""} ${suggestion.noReply ? "is-no-reply" : ""}" data-suggestion-index="${index}">
-        <span class="ai-suggestion-index">${index + 1}.</span>
-        <p>${escapeHtml(formatSuggestionText(suggestion))}</p>
+      <article class="ai-suggestion-option ${suggestion === state.aiSuggestion ? "is-active" : ""} ${suggestion.noReply ? "is-no-reply" : ""} ${suggestion.loading ? "is-loading" : ""}" data-suggestion-index="${index}">
+        <span class="ai-suggestion-index">${index + 1}</span>
+        <div class="ai-suggestion-copy">
+          <p>${escapeHtml(formatSuggestionText(suggestion))}</p>
+        </div>
         <div class="ai-suggestion-row-actions">
           ${suggestion.type === "optimize" && suggestion.skillId ? `<button class="mini-action primary" type="button" data-suggestion-action="update-skill" data-suggestion-index="${index}">更新skill</button>` : ""}
-          <button class="mini-action" type="button" data-suggestion-action="apply" data-suggestion-index="${index}" ${suggestion.noReply ? "disabled" : ""}>采用</button>
-          <button class="mini-action" type="button" data-suggestion-action="send" data-suggestion-index="${index}" ${suggestion.noReply ? "disabled" : ""}>发送</button>
+          <button class="mini-action" type="button" data-suggestion-action="apply" data-suggestion-index="${index}" ${suggestion.noReply || suggestion.loading ? "disabled" : ""}>采用</button>
+          <button class="mini-action" type="button" data-suggestion-action="send" data-suggestion-index="${index}" ${suggestion.noReply || suggestion.loading ? "disabled" : ""}>发送</button>
         </div>
       </article>
     `).join("");

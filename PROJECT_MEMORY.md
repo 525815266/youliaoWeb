@@ -6802,3 +6802,90 @@ AI 感知条行为：
 
 - 右键菜单新增操作项时不需要手工调高度，定位逻辑会用实际 `getBoundingClientRect()` 结果计算。
 - 如果以后把会话列表底部分类栏改成浮层或 sticky，需要继续保证 `#contactList.getBoundingClientRect().bottom` 代表菜单能使用的真实底部。
+
+## 2026-07-06 AI 优化文案入口与推荐托盘重做
+
+需求：
+
+- 客服手动输入回复后，可以点“优化文案”，让 AI 从贴心、耐心、安抚、普通人容易理解的角度重写。
+- 点击优化后，普通 AI 推荐/skill 推荐不应继续混在一起，默认替换成优化候选。
+- 输入框上方的浮动推荐条原本太像临时拼接的长条，标题、换一换、关闭、内容和按钮挤在一起，需要重新设计。
+
+修复：
+
+- `public/index.html`
+  - 工具快捷区新增 `优化文案` 按钮。
+  - 发送按钮旁新增 `优化文案` 按钮，方便客服写完草稿后直接点。
+- `public/app.js`
+  - 新增 `requestDraftOptimizeFromComposer()`：校验草稿、AI 开关、服务端密钥后手动触发优化。
+  - `optimizeDraftReply(options)` 支持 `{ manual: true, force: true }`：
+    - 手动点击时先用“正在优化”候选替换当前推荐条。
+    - AI 返回后只展示 `type=optimize` 的 1-3 条候选。
+    - 保留草稿图片，优化只处理文字。
+    - 修复空会话/没有最新客户消息时 `latest=null` 导致 `getMessageKey()` 报错的问题。
+  - 优化提示词强化：避免责备客户、避免情绪过激、把生硬/催促表达改成温和但不拖泥带水的说法。
+  - loading 候选禁止“采用/发送”，避免点到半成品。
+- `public/styles.css`
+  - 重做 `.ai-suggestion-card` 推荐托盘：左侧控制区 + 右侧候选列表。
+  - 候选条改成紧凑任务行：编号圆点、最多两行文本、右侧采用/发送按钮。
+  - 推荐托盘高度上限压到 `108px`，3 条候选时内部滚动，不再继续向下挤输入框。
+  - `优化文案` 按钮使用蓝白轻量态，AI 关闭/生成中时有禁用态。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless 桌面 `1366x768` 注入 3 条优化候选：
+  - 推荐托盘高度 `108px`。
+  - 3 条候选内部滚动，输入框不被挤出。
+  - QA 截图：`reports/_uicheck/ai-suggestion-tray-polished-after.png`。
+- Chrome headless 手机视口：
+  - 页面无横向溢出。
+  - 推荐托盘约 `112px`，发送区按钮可横向滚动。
+  - QA 截图：`reports/_uicheck/ai-suggestion-tray-mobile.png`。
+- 功能模拟测试：
+  - 先放入普通 AI 推荐 `OLD_SHOULD_GO`。
+  - 模拟 `/ai/chat/completions` 返回两条优化文案。
+  - 调用 `optimizeDraftReply({ manual:true, force:true })` 后，`state.aiSuggestions` 只剩优化候选，`hasOld=false`。
+
+后续注意：
+
+- 推荐托盘不能再做成大卡片面板，最多是紧凑提示条；多条候选用内部滚动消化。
+- 优化文案只改文字，不处理图片，不编造订单/返利/后台事实。
+- 如果后续要加“更正式/更口语/更安抚”等语气选项，可以复用当前 `type=optimize` 候选和 `refreshAiSuggestion()` 的换一换逻辑。
+
+## 2026-07-06 AI 浮动提示框二次收口
+
+问题：
+
+- 用户反馈输入框上方的 AI/skill 浮动提示框仍然很丑，像一根临时拼接的长胶囊，标题、换一换、关闭、候选文案、采用/发送全部挤在一起。
+- 上一版虽然已经把提示条压缩到独立 grid 行，但候选项仍偏满宽，短文案也显得像被硬塞进大框里。
+- 不能回退到旧的 `ResizeObserver + 绝对定位 + --composer-height` 方案；项目前面已经证明那套方案会让输入框、工具栏、图片托盘和 AI 推荐互相挤压。
+
+修复：
+
+- `public/app.js`
+  - `renderAiSuggestionCard()` 给推荐托盘补充 `is-single / is-multiple` 状态，方便单条、多条候选走不同高度策略。
+  - 候选结构改成 `编号圆点 + .ai-suggestion-copy + 行内操作按钮`，序号从 `1.` 改成干净的圆形 `1`。
+- `public/styles.css`
+  - `.ai-suggestion-card` 从贴边长条改成居中的轻浮层托盘：`width: fit-content`、最大宽度受聊天区约束，短内容不会硬撑满整行。
+  - 外层高度二次压缩到 `112px`，单条候选压到 `88px`，多条候选继续用内部纵向滚动。
+  - 左侧控制区垂直居中，避免标题胶囊顶在上方、下方一大片空白。
+  - 候选行压缩到 30px 级别，采用/发送按钮仍保持可点。
+  - 增加进入和 loading 动效，并用 `prefers-reduced-motion` 关闭动画。
+  - 860px / 760px / 480px 断点同步收口，手机端不横向溢出。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless 使用本机 Chrome 截图：
+  - 桌面 `1440x860`：托盘 `724x112`，composer 仍在下方稳定位置，无横向溢出。
+  - 手机 `390x780`：托盘 `362x112`，composer 仍在下方稳定位置，无横向溢出。
+- QA 截图：
+  - `reports/_uicheck/ai-suggestion-tray-redesign-desktop-v2.png`
+  - `reports/_uicheck/ai-suggestion-tray-redesign-mobile-v2.png`
+
+后续注意：
+
+- 不要把 `#aiSuggestionCard` 改回绝对定位，不要恢复 `ResizeObserver` 和 `--composer-height`。
+- AI/skill 推荐应该保持“提示队列”形态：轻量、可关闭、可换一换、每条候选有自己的采用/发送按钮。
+- 如果以后要显示图片候选，应该加在候选行内部的缩略图位，不要把整个托盘改成大卡片。

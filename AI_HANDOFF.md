@@ -3959,3 +3959,104 @@ Do not regress:
 
 - Do not position context menus directly from `event.clientY` without post-render measurement.
 - If the bottom conversation tabs become sticky/overlay later, keep `#contactList` as the vertical boundary or update the boundary source accordingly.
+
+## 2026-07-06 Handoff: Manual Draft Optimization + Suggestion Tray Redesign
+
+Goal:
+
+- Add an explicit “优化文案” flow for customer-service operators who type a rough reply and want AI to rewrite it into a warmer, patient, easy-to-understand answer.
+- When this manual optimization runs, it must replace normal AI/skill recommendations instead of mixing with them.
+- Make the floating suggestion tray look like a compact workbench control, not an ad-hoc long strip.
+
+Changed:
+
+- `public/index.html`
+  - Added `#optimizeDraft` in the composer shortcut row.
+  - Added `#optimizeDraftInline` next to `采用推荐 / 发送`.
+- `public/app.js`
+  - Added `requestDraftOptimizeFromComposer()`.
+  - `optimizeDraftReply(options = {})` now supports manual/forced optimization:
+    - validates draft text, AI enabled state, and usable server/local key;
+    - replaces current suggestions with a loading `type:"optimize"` item;
+    - then replaces that with 1-3 optimize candidates;
+    - keeps draft images but optimizes only text;
+    - fixed null latest-message handling by using `latest ? getMessageKey(latest, 0) : ""`.
+  - Optimize prompt now explicitly asks for warmer, patient, calming, normal-person-readable replies and avoids blaming the customer or adding unverified order/rebate/backend facts.
+  - Loading suggestions disable apply/send.
+  - `renderAiSuggestionCard()` marks `is-optimize` and `is-loading` states.
+- `public/styles.css`
+  - Redesigned `.ai-suggestion-card` as a compact tray:
+    - left control cluster;
+    - right candidate rows;
+    - numbered circular index;
+    - max 2 text lines per candidate;
+    - apply/send buttons on each row.
+  - Tray max height is capped at `108px`; multiple candidates scroll internally.
+  - Added styles for optimize buttons and disabled `tool-button` state.
+
+Verified:
+
+- `npm run check` passed.
+- Desktop fixture `1366x768` with 3 optimize candidates:
+  - tray height capped at `108px`;
+  - candidates scroll internally;
+  - composer remains visible.
+  - Screenshot: `reports/_uicheck/ai-suggestion-tray-polished-after.png`.
+- Mobile fixture:
+  - no horizontal page overflow;
+  - tray about `112px`;
+  - send row remains horizontally usable.
+  - Screenshot: `reports/_uicheck/ai-suggestion-tray-mobile.png`.
+- Functional mock:
+  - seeded normal suggestion `OLD_SHOULD_GO`;
+  - mocked `/ai/chat/completions` to return `A_OPTIMIZED_REPLY/B_OPTIMIZED_REPLY`;
+  - after `optimizeDraftReply({ manual:true, force:true })`, `state.aiSuggestions` contained only optimized replies and `hasOld=false`.
+
+Do not regress:
+
+- Manual optimization should replace existing recommendation content.
+- Keep optimization text-only; preserve draft images as attachments.
+- Do not let the suggestion tray grow into a large panel. Use internal scrolling for multiple candidates.
+
+## 2026-07-06 Handoff: Suggestion Tray Visual Cleanup Pass
+
+User complaint:
+
+- The floating AI/skill suggestion tray still looked ugly and assembled, closer to a long stuffed pill than a polished workbench control.
+- The user explicitly preferred something closer to Codex task guidance: compact, readable, not pushing the input box down, and not visually blocking the chat.
+
+Important constraint:
+
+- Do not restore the older absolute-positioning implementation. Project memory already documents that `ResizeObserver + --composer-height` caused composer/tool/image-tray collisions.
+- Keep `#aiSuggestionCard` as the independent grid row between `#messageList` and `footer.composer`.
+
+Changed:
+
+- `public/app.js`
+  - `renderAiSuggestionCard()` now toggles `is-single` and `is-multiple`.
+  - Candidate markup now wraps text in `.ai-suggestion-copy`.
+  - The candidate index changed from `1.` text to a clean circular `1`.
+- `public/styles.css`
+  - The tray is now centered with `width: fit-content`, constrained by chat width instead of stretching as a full long strip.
+  - Max tray height is reduced to `112px`; single candidate height is capped at `88px`.
+  - Candidate rows are 30px-class compact rows with number, text, and row-level apply/send buttons.
+  - Left controls are vertically centered to remove the empty lower-left patch.
+  - Desktop/tablet/mobile breakpoints were tightened.
+  - Added reduced-motion fallback for tray entrance/loading animations.
+
+Verified:
+
+- `npm run check` passed.
+- Chrome headless with local Chrome:
+  - Desktop `1440x860`: tray `724x112`, composer remains stable, no horizontal overflow.
+  - Mobile `390x780`: tray `362x112`, composer remains stable, no horizontal overflow.
+- Screenshots:
+  - `reports/_uicheck/ai-suggestion-tray-redesign-desktop-v2.png`
+  - `reports/_uicheck/ai-suggestion-tray-redesign-mobile-v2.png`
+
+Do not regress:
+
+- Do not make the suggestion tray a large panel.
+- Do not move it into the composer.
+- Do not switch it back to absolute positioning.
+- Preserve row-level apply/send buttons for each candidate.
