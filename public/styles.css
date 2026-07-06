@@ -3927,11 +3927,14 @@ textarea:focus-visible {
   position: fixed;
   z-index: 40;
   min-width: 148px;
+  max-width: min(220px, calc(100vw - 16px));
   padding: 5px;
   border: 1px solid #cbd7e6;
   border-radius: 5px;
   background: #fff;
   box-shadow: 0 12px 28px rgba(21, 45, 76, 0.18);
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .context-menu button {

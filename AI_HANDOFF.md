@@ -3926,3 +3926,36 @@ Do not regress:
 - Do not change `.message-content` back to `fit-content`.
 - Keep the `.message .contact-avatar { grid-area: auto; }` scoped override.
 - Put phone-only sizing under the `max-width: 760px` media layer instead of moving it into the desktop base rules.
+
+## 2026-07-06 Handoff: Contact Context Menu Boundary Fix
+
+Issue:
+
+- Right-clicking a conversation near the bottom of the left list opened the context menu downward, so it was visually clipped/covered by the bottom `当前 / 留言 / 历史` tabs.
+- The long current-conversation menu was most affected.
+
+Changed:
+
+- `public/app.js`
+  - `renderContextMenu()` now appends the menu hidden, then calls `positionContextMenu(menu)`.
+  - `positionContextMenu()` measures the menu and constrains it to both viewport bounds and the visible `#contactList` rectangle.
+  - If there is not enough room below the cursor and there is more space above, the menu flips upward (`data-placement="top"`).
+  - If the menu is too tall for the available area, it gets `maxHeight` and internal vertical scrolling.
+  - Left position clamps to the viewport right edge.
+  - Contact-list scroll and window resize close the context menu to avoid detached menus.
+- `public/styles.css`
+  - `.context-menu` gets viewport-safe `max-width`, contained overscroll, and thin scrollbar.
+
+Verified:
+
+- `npm run check` passed.
+- Chrome headless `1366x768`, 18-contact fixture, right-clicking the last visible item:
+  - menu flipped upward with `placement=top`;
+  - menu bottom `613`, contact-list bottom `629`, so it did not overlap the bottom tabs;
+  - scrolling the contact list closed the menu.
+- QA screenshot: `reports/_uicheck/context-menu-bottom-after.png`.
+
+Do not regress:
+
+- Do not position context menus directly from `event.clientY` without post-render measurement.
+- If the bottom conversation tabs become sticky/overlay later, keep `#contactList` as the vertical boundary or update the boundary source accordingly.

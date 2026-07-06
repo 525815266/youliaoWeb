@@ -6764,3 +6764,41 @@ AI 感知条行为：
 - 后续不要把 `.message` 改回 `width: fit-content`，否则中文短句很容易再次变成一字一行。
 - 会话列表头像和聊天消息头像虽然共用 `.contact-avatar`，但聊天区必须保留 `.message .contact-avatar { grid-area: auto; }` 这类作用域覆盖。
 - 移动端消息宽度应该在 `@media (max-width: 760px)` 中单独收缩，不要把手机端的视口宽度规则直接搬到基础桌面层。
+
+## 2026-07-06 会话列表右键菜单边界定位修复
+
+问题：
+
+- 当选中靠近会话列表底部的会话并右键时，菜单仍按鼠标位置向下展开，会被底部“当前 / 留言 / 历史”分类栏挡住。
+- 长菜单（当前会话 8 项操作）比短菜单更容易被裁切，导致“清空列表”“全部已读”等底部操作看不全。
+
+原因：
+
+- 右键菜单是 `position: fixed` 挂到 `body` 上的，但原逻辑只使用 `event.clientX/Y` 直接写 `left/top`。
+- 没有在菜单渲染后测量实际高度，也没有把会话列表可视区域底部作为定位边界。
+
+修复：
+
+- `public/app.js`
+  - 新增 `positionContextMenu(menu)`：菜单先隐藏渲染、测量尺寸，再按视口和 `#contactList` 可视区域重新定位。
+  - 默认向下弹出；如果下方空间不足且上方空间更多，则自动改为向上弹出。
+  - 极端小窗口或菜单过长时限制 `max-height` 并启用菜单内部纵向滚动。
+  - 横向位置也会贴合视口右边界，避免菜单伸出屏幕。
+  - 会话列表滚动、窗口 resize 时自动关闭右键菜单，避免菜单停留在旧位置。
+- `public/styles.css`
+  - `.context-menu` 增加 `max-width`、`overscroll-behavior: contain` 和细滚动条。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless `1366x768` 注入 18 条会话，滚动到底部后模拟右键最后一条：
+  - 菜单 `placement=top`。
+  - 菜单底部 `613`，会话列表底部 `629`，未压到下方分类栏。
+  - 会话列表滚动后菜单自动关闭。
+- QA 截图：
+  - `reports/_uicheck/context-menu-bottom-after.png`
+
+后续注意：
+
+- 右键菜单新增操作项时不需要手工调高度，定位逻辑会用实际 `getBoundingClientRect()` 结果计算。
+- 如果以后把会话列表底部分类栏改成浮层或 sticky，需要继续保证 `#contactList.getBoundingClientRect().bottom` 代表菜单能使用的真实底部。

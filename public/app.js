@@ -807,13 +807,17 @@ function bindEvents() {
   el.contactList.addEventListener("click", handleContactListClick);
   el.contactList.addEventListener("keydown", handleContactListKeydown);
   el.contactList.addEventListener("contextmenu", handleContactContextMenu);
-  el.contactList.addEventListener("scroll", handleContactListScroll);
+  el.contactList.addEventListener("scroll", () => {
+    closeContextMenu();
+    handleContactListScroll();
+  });
   document.addEventListener("error", handleAvatarImageError, true);
   document.addEventListener("click", closeContextMenu);
   document.addEventListener("click", handleContactListFocusOutside);
   document.addEventListener("click", closeClientSettingsMenuOnOutside);
   document.addEventListener("click", closeEmojiOnOutside);
   window.addEventListener("resize", () => {
+    closeContextMenu();
     closeEmojiPopover();
     updateMobilePanelState();
   });
@@ -12705,8 +12709,9 @@ function renderContextMenu() {
 
   const menu = document.createElement("div");
   menu.className = "context-menu";
-  menu.style.left = `${state.contextMenu.x}px`;
-  menu.style.top = `${state.contextMenu.y}px`;
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  menu.style.visibility = "hidden";
 
   const items = getContextMenuItems(contact);
   menu.innerHTML = items.map((item) => `
@@ -12724,6 +12729,67 @@ function renderContextMenu() {
   });
 
   document.body.appendChild(menu);
+  positionContextMenu(menu);
+}
+
+function positionContextMenu(menu) {
+  if (!menu || !state.contextMenu) return;
+  const edgeGap = 8;
+  const pointerGap = 6;
+  const minScrollableHeight = 96;
+  const viewportBounds = {
+    left: edgeGap,
+    top: edgeGap,
+    right: window.innerWidth - edgeGap,
+    bottom: window.innerHeight - edgeGap
+  };
+  const listRect = el.contactList?.getBoundingClientRect();
+  const verticalBounds = listRect
+    ? {
+        top: Math.max(viewportBounds.top, listRect.top + 4),
+        bottom: Math.min(viewportBounds.bottom, listRect.bottom - 4)
+      }
+    : viewportBounds;
+  if (verticalBounds.bottom - verticalBounds.top < minScrollableHeight) {
+    verticalBounds.top = viewportBounds.top;
+    verticalBounds.bottom = viewportBounds.bottom;
+  }
+
+  menu.style.maxHeight = "";
+  menu.style.overflowY = "";
+  const measuredRect = menu.getBoundingClientRect();
+  const menuWidth = Math.ceil(measuredRect.width);
+  let menuHeight = Math.ceil(measuredRect.height);
+  const x = Number(state.contextMenu.x) || 0;
+  const y = Number(state.contextMenu.y) || 0;
+  let left = x;
+  if (left + menuWidth > viewportBounds.right) left = viewportBounds.right - menuWidth;
+  left = Math.max(viewportBounds.left, left);
+
+  const spaceBelow = verticalBounds.bottom - y - pointerGap;
+  const spaceAbove = y - verticalBounds.top - pointerGap;
+  let top = y + pointerGap;
+  let placement = "bottom";
+
+  if (menuHeight > spaceBelow && spaceAbove > spaceBelow) {
+    placement = "top";
+    top = y - menuHeight - pointerGap;
+  }
+
+  const maxAvailableHeight = Math.max(spaceAbove, spaceBelow, minScrollableHeight);
+  if (menuHeight > maxAvailableHeight) {
+    menuHeight = Math.max(minScrollableHeight, Math.floor(maxAvailableHeight));
+    menu.style.maxHeight = `${menuHeight}px`;
+    menu.style.overflowY = "auto";
+    if (placement === "top") top = y - menuHeight - pointerGap;
+  }
+
+  top = Math.min(top, verticalBounds.bottom - menuHeight);
+  top = Math.max(verticalBounds.top, top);
+  menu.dataset.placement = placement;
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(top)}px`;
+  menu.style.visibility = "";
 }
 
 function getContextMenuItems(contact) {
