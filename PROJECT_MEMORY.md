@@ -6719,3 +6719,48 @@ AI 感知条行为：
 ### P2-6 — 死 CSS（小范围完成）
 
 - 只删了登录插画的孤立内部样式（`.platform`、`.chat-rail*`、`.bubble*`、`.document-card*`、`.cube*`，共 172 行）——它们的 DOM 早已被单个 `<img src="/assets/login_img.png">` 取代，HTML/JS 里零引用。保留 `.login-illustration`、`.login-illustration img`、`.login-card`。`applyAiSuggestion`/`sendAiSuggestion` 未动（仍有事件绑定）。
+
+## 2026-07-06 桌面端会话气泡和头像错乱修复
+
+问题：
+
+- 电脑端聊天区出现客户短消息竖排显示，例如“我同意XV”被压成一字一行。
+- 部分客服消息头像和气泡不在同一条稳定轨道上，看起来像头像漂在气泡左侧或上方。
+- 这些问题和前一轮手机端消息适配有关：移动端修复需要让短消息不竖排，但基础消息样式没有完全稳住桌面端。
+
+原因：
+
+- `.message-content` 原来的 `width: fit-content` 在 Grid/Flex 混合布局里容易按最小内容宽度收缩，中文短句可能被压到单字宽度。
+- `.contact-avatar` 是会话列表和聊天消息共用类，会话列表里的命名 grid 区域会影响聊天消息头像定位，必须在 `.message` 作用域里覆盖为 `grid-area: auto`。
+- 桌面端 `.message-body` 没有明确最大宽度和客服/AI 右对齐规则，真实数据里遇到头像图片、长链接、短中文时更容易被内容尺寸牵着跑。
+
+修复：
+
+- `public/styles.css`
+  - `.message` 从只设 `max-width` 改为 `width: min(680px, 82%); max-width: 100%`，让消息行自身有稳定宽度。
+  - `.message.is-compact` 显式 `width: 100%`，保证右侧聊天记录工具栏里的紧凑消息仍按容器排版。
+  - `.message .contact-avatar, .message .contact-photo` 增加 `grid-area: auto`、固定尺寸和顶部对齐，避免继承会话列表头像布局。
+  - `.message-body` 增加 `max-width: 100%`，客服/AI 消息 body 基础层右对齐。
+  - `.message-content` 改为 `box-sizing: border-box; width: max-content; min-width: min(3.2em, 100%); max-width: 100%`，短消息保持横排，长消息按气泡最大宽度自然换行。
+  - 富卡片消息继续单独设 `width: auto; min-width: 0; max-width: 100%`，避免链接、小程序、文件卡片被文字气泡规则挤坏。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless `1366x768` 桌面视口注入真实结构消息：
+  - 客户短句“我同意XV”气泡约 `68x45`，没有竖排。
+  - 客户头像在左列，客服头像在右列，头像和气泡轨道稳定。
+  - 订单号 `5121974090067009148` 保持单行横排，长链接消息按气泡宽度换行。
+- Chrome headless `390x844` 手机视口复查：
+  - 客户短句不竖排。
+  - 右侧客服气泡和头像不溢出屏幕。
+  - 输入框没有被这次消息布局改动向下挤出。
+- QA 截图：
+  - `reports/_uicheck/message-layout-desktop-after.png`
+  - `reports/_uicheck/message-layout-mobile.png`
+
+后续注意：
+
+- 后续不要把 `.message` 改回 `width: fit-content`，否则中文短句很容易再次变成一字一行。
+- 会话列表头像和聊天消息头像虽然共用 `.contact-avatar`，但聊天区必须保留 `.message .contact-avatar { grid-area: auto; }` 这类作用域覆盖。
+- 移动端消息宽度应该在 `@media (max-width: 760px)` 中单独收缩，不要把手机端的视口宽度规则直接搬到基础桌面层。

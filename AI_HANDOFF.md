@@ -3884,3 +3884,45 @@ Followed up the 2026-07-03 audit. All three open code items are done and verifie
 **P2-6 — dead CSS (done, narrowly)**
 
 - Removed only the orphaned login-illustration internals (`.platform`, `.chat-rail*`, `.bubble*`, `.document-card*`, `.cube*` — 172 lines) whose DOM was replaced by a single `<img src="/assets/login_img.png">`. Confirmed zero references in HTML/JS. Kept `.login-illustration`, `.login-illustration img`, `.login-card`. `applyAiSuggestion`/`sendAiSuggestion` left untouched (still bound).
+
+## 2026-07-06 Handoff: Desktop Chat Bubble/Layout Fix
+
+Issue:
+
+- Desktop chat messages could render incorrectly after the mobile message work:
+  - short incoming Chinese text such as `我同意XV` could collapse into one character per line;
+  - some message avatars looked detached from their bubbles.
+
+Root cause:
+
+- `width: fit-content` on `.message-content` is unsafe inside the current grid/flex message structure because it can collapse CJK text to min-content width.
+- `.contact-avatar` is shared by contact cards and chat messages. Contact-card grid placement must be overridden inside `.message`.
+- The desktop base layer needed explicit row/body sizing instead of relying on mobile overrides.
+
+Changed:
+
+- `public/styles.css`
+  - `.message` now uses `width: min(680px, 82%)` plus `max-width: 100%`.
+  - `.message.is-compact` now explicitly uses `width: 100%`.
+  - `.message .contact-avatar, .message .contact-photo` reset `grid-area: auto`, keep fixed size, and align from the top.
+  - `.message-body` has `max-width: 100%`; outgoing/AI bodies right-align in the base layer.
+  - `.message-content` uses `box-sizing: border-box`, `width: max-content`, `min-width: min(3.2em, 100%)`, `max-width: 100%`, `overflow-wrap: anywhere`, and `word-break: normal`.
+  - Rich card messages override text-bubble width behavior with `width:auto; min-width:0; max-width:100%`.
+
+Verified:
+
+- `npm run check` passed.
+- Chrome headless desktop fixture at `1366x768`:
+  - `我同意XV` bubble measured about `68x45`, not vertical.
+  - incoming avatar stayed on the left track; outgoing avatar stayed on the right track.
+  - order number and long-link messages kept sane widths.
+- Chrome headless mobile fixture at `390x844` still rendered messages without one-character columns or composer displacement.
+- QA screenshots:
+  - `reports/_uicheck/message-layout-desktop-after.png`
+  - `reports/_uicheck/message-layout-mobile.png`
+
+Do not regress:
+
+- Do not change `.message-content` back to `fit-content`.
+- Keep the `.message .contact-avatar { grid-area: auto; }` scoped override.
+- Put phone-only sizing under the `max-width: 760px` media layer instead of moving it into the desktop base rules.
