@@ -3836,6 +3836,31 @@ Verified:
   - avatar top was within 2px of the bubble top.
 - QA screenshot: `reports/_uicheck/mobile-message-fit-390x844.png` (left untracked).
 
+## 2026-07-06 Handoff: Empty Conversation List Desktop Height Fix
+
+Issue:
+
+- When the left conversation list is empty, desktop workbench panels stopped above the viewport bottom and exposed a large pale blank area under the composer.
+- When the list contained conversations, the issue was mostly hidden because list content stretched the implicit grid row.
+
+Root cause:
+
+- `.client-layout` defined only columns. Its implicit grid row used `auto`, so empty/short content let the row shrink.
+
+Changed:
+
+- `public/styles.css`
+  - `.client-layout` now has `grid-template-rows: minmax(0, 1fr)` and `align-items: stretch`.
+  - The `@media (max-width: 860px)` single-column fallback resets `grid-template-rows: none`.
+
+Verified:
+
+- `npm run check` passed.
+- Chrome headless desktop fixture at `1919x927`:
+  - Before: layout height `786px`, panes only `559px` tall, ending at y=`605`.
+  - After: panes are `786px` tall and end at the viewport bottom y=`832`.
+- QA screenshot: `reports/_uicheck/empty-layout-after-1919x927.png` (left untracked).
+
 ## 2026-07-05 Handoff: Closed audit open items H1 / M3-M4 / P2-6
 
 Followed up the 2026-07-03 audit. All three open code items are done and verified with disposable end-to-end harnesses (deleted after running). `npm run check` passes.

@@ -660,6 +660,8 @@ textarea:focus-visible {
 .client-layout {
   display: grid;
   grid-template-columns: 306px minmax(460px, 1fr) 382px;
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
   height: calc(100vh - 46px); /* fallback for browsers that ignore dvh */
   height: calc(100dvh - 46px);
   min-height: 560px;
@@ -5587,6 +5589,7 @@ textarea:focus-visible {
 
   .client-layout {
     grid-template-columns: 1fr;
+    grid-template-rows: none;
     height: auto;
   }
 

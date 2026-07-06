@@ -6667,6 +6667,35 @@ AI 感知条行为：
 - QA 截图：
   - `reports/_uicheck/mobile-message-fit-390x844.png`
 
+## 2026-07-06 空会话列表桌面端底部空白修复
+
+问题：
+
+- 当左侧会话列表为空时，桌面端三栏工作台会在输入框下方露出大片浅蓝空白。
+- 同一页面在有会话列表数据时通常不会出现，因为列表内容把 grid 行撑高了。
+
+原因：
+
+- `.client-layout` 只定义了三列 `grid-template-columns`，没有定义行。
+- CSS Grid 的隐式行默认是 `auto`。空列表时这一行按内容高度收缩，三栏面板只到输入框底部，工作台剩余高度露出背景色。
+- 有会话时左侧列表内容变高，隐式行被内容撑开，所以问题不明显。
+
+修复：
+
+- `public/styles.css` 中 `.client-layout` 增加：
+  - `grid-template-rows: minmax(0, 1fr)`
+  - `align-items: stretch`
+- `@media (max-width: 860px)` 的单列兜底中重置 `grid-template-rows: none`，避免影响窄屏堆叠布局。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless 使用 `1919x927` 桌面视口复现空列表：
+  - 修复前：`.client-layout` 高 786px，但 `.conversation-pane/.chat-pane/.tool-pane` 只到 605px。
+  - 修复后：三栏面板高度均为 786px，从 topbar 下方一直撑到窗口底部。
+- QA 截图：
+  - `reports/_uicheck/empty-layout-after-1919x927.png`
+
 ## 2026-07-05 收尾安全审计遗留项 H1 / M3-M4 / P2-6
 
 承接 2026-07-03 审计。三个开放代码项已全部完成，并用一次性端到端脚本验证（跑完即删）。`npm run check` 通过。改动文件：`public/app.js`、`public/index.html`、`public/styles.css`、`server.js`。
