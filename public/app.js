@@ -6357,7 +6357,44 @@ function recordRecentEmoji(token) {
 function getReplyTextContent() {
   const node = el.replyText;
   if (!node) return "";
-  return extractTextFromNode(node);
+  return normalizeComposerText(extractTextFromNode(node));
+}
+
+function normalizeComposerText(text) {
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function isComposerBlockElement(node) {
+  return [
+    "ADDRESS",
+    "ARTICLE",
+    "BLOCKQUOTE",
+    "DIV",
+    "FIGCAPTION",
+    "FIGURE",
+    "FOOTER",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "H5",
+    "H6",
+    "HEADER",
+    "LI",
+    "MAIN",
+    "P",
+    "PRE",
+    "SECTION"
+  ].includes(node?.tagName);
+}
+
+function appendComposerLineBreak(text) {
+  return text && !text.endsWith("\n") ? `${text}\n` : text;
 }
 
 function extractTextFromNode(node) {
@@ -6372,8 +6409,10 @@ function extractTextFromNode(node) {
         text += child.dataset.token || "";
       } else if (child.classList?.contains("inline-draft-image")) {
         text += "[图片]";
-      } else if (child.tagName === "DIV" || child.tagName === "P") {
+      } else if (isComposerBlockElement(child)) {
+        text = appendComposerLineBreak(text);
         text += extractTextFromNode(child);
+        text = appendComposerLineBreak(text);
       } else {
         text += extractTextFromNode(child);
       }
@@ -6388,9 +6427,13 @@ function parseComposerBlocks() {
   const blocks = [];
   const images = [];
   let currentText = "";
+  const appendLineBreak = () => {
+    currentText = appendComposerLineBreak(currentText);
+  };
   const flushText = () => {
     if (currentText) {
-      blocks.push({ type: "text", content: currentText });
+      const content = normalizeComposerText(currentText);
+      if (content) blocks.push({ type: "text", content });
       currentText = "";
     }
   };
@@ -6411,6 +6454,10 @@ function parseComposerBlocks() {
             blocks.push({ type: "image", imageId, image });
             images.push(image);
           }
+        } else if (isComposerBlockElement(child)) {
+          appendLineBreak();
+          walk(child);
+          appendLineBreak();
         } else {
           walk(child);
         }

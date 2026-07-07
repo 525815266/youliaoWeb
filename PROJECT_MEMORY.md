@@ -6953,3 +6953,46 @@ AI 感知条行为：
 
 - 不要直接给整个 `.ai-suggestion-card` 设置 `opacity`，否则文字和按钮也会一起变淡。
 - 应继续用半透明背景 + 可读文字的方式减轻遮挡。
+
+## 2026-07-07 对话框多行文案发送保留换行
+
+问题：
+
+- 客服在输入框粘贴多行商品文案，例如京东商品标题、分隔线、价格、抢购链接，发送后实际内容堆在一起，没有按原换行展示。
+- 典型文案：
+  - `【京东】...`
+  - `---------------`
+  - `京东价：¥99.80`
+  - `到手价：¥59.80`
+  - `抢购链接：https://u.jd.com/...`
+
+原因：
+
+- `contenteditable` 粘贴多行内容时，浏览器经常会生成多个 `<div>` / `<p>` 块。
+- 旧的 `extractTextFromNode()` 和 `parseComposerBlocks()` 只递归块级元素内容，没有在块级边界补 `\n`，所以多个块会被拼成一段。
+- 显示层 `.message-content { white-space: pre-wrap; }` 本身可以显示换行，主要问题在发送前提取阶段。
+
+修复：
+
+- `public/app.js`
+  - 新增 `normalizeComposerText(text)`，统一 CRLF、去掉行尾多余空格，并压缩 3 个以上连续换行为 2 个。
+  - 新增 `isComposerBlockElement(node)`，识别 `DIV`、`P`、`LI`、`PRE`、标题等块级节点。
+  - 新增 `appendComposerLineBreak(text)`。
+  - `getReplyTextContent()` 现在返回规范化后的文本。
+  - `extractTextFromNode()` 遇到块级节点时会在前后补换行。
+  - `parseComposerBlocks()` 遇到块级节点时同样补换行，确保实际发送到 `/ChatContent/SendMsg` 的 `content` 带原始换行。
+
+验证：
+
+- `npm run check` 通过。
+- Chrome headless 注入和用户示例相同结构的多行京东文案：
+  - `replyText.innerHTML = sampleLines.map(line => <div>line</div>)`
+  - `getReplyTextContent()` 返回包含 `\n` 的文本。
+  - `parseComposerBlocks().blocks[0].content` 返回包含 `\n` 的文本。
+  - DOM 多 `<div>` 场景得到 7 行（含尾部换行，真实发送前 `.trim()` 会去掉尾部空行）。
+  - 纯文本节点 `sampleLines.join("\n")` 场景也保持换行。
+
+后续注意：
+
+- 不要在发送前对 `block.content` 做 `.replace(/\s+/g, " ")` 或类似压缩，否则商品文案/价格模板会再次堆叠。
+- 如果后续接入富文本粘贴清洗，必须保留块级节点边界的 `\n`。

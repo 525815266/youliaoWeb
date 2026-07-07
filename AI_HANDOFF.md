@@ -4123,3 +4123,38 @@ Do not regress:
 
 - Do not set opacity on the entire tray because it fades text and buttons too.
 - Use translucent backgrounds while keeping text/button opacity intact.
+
+## 2026-07-07 Handoff: Preserve Composer Newlines on Send
+
+User issue:
+
+- Multi-line product copy pasted into the chat composer, such as JD title, separators, price lines, and purchase URL, was sent/displayed as one stacked paragraph instead of preserving line breaks.
+
+Root cause:
+
+- Browser `contenteditable` paste often creates multiple block nodes (`div`, `p`, etc.).
+- Existing `extractTextFromNode()` and `parseComposerBlocks()` recursively read block contents without adding `\n` at block boundaries.
+- Message rendering already supports `white-space: pre-wrap`, so the main loss was before send.
+
+Changed:
+
+- `public/app.js`
+  - Added `normalizeComposerText(text)`.
+  - Added `isComposerBlockElement(node)`.
+  - Added `appendComposerLineBreak(text)`.
+  - `getReplyTextContent()` now normalizes extracted composer text.
+  - `extractTextFromNode()` inserts newline boundaries around block elements.
+  - `parseComposerBlocks()` inserts newline boundaries around block elements before submitting text blocks to `/ChatContent/SendMsg`.
+
+Verified:
+
+- `npm run check` passed.
+- Chrome headless injected the JD sample as multiple `<div>` lines:
+  - `getReplyTextContent()` preserved `\n`.
+  - `parseComposerBlocks().blocks[0].content` preserved `\n`.
+  - plain text-node newline input also preserved `\n`.
+
+Do not regress:
+
+- Do not collapse composer text with `replace(/\s+/g, " ")` before sending.
+- If adding paste sanitization later, keep block-level line boundaries as `\n`.
