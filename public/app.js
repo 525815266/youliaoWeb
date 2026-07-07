@@ -471,6 +471,8 @@ const state = {
   hideRebate: false,
   contactInfo: null,
   contactInfoContactId: null,
+  userTypeOptions: [],
+  memberTagOptions: [],
   accountDetails: [],
   accountDetailsUserName: "",
   accountDetailTotal: 0,
@@ -8134,6 +8136,499 @@ function ensureActiveContactForTool() {
   return false;
 }
 
+function getUserEditContext() {
+  if (!ensureActiveContactForTool()) return null;
+  const contact = state.activeContact;
+  const info = mergeUserInfo(contact, getActiveContactInfo(contact) || {});
+  const contactId = getContactId(contact);
+  const userName = firstDisplayValue(info.userName, contact?.userName, contact?.wxid);
+  if (!contactId) {
+    toast("未识别到会话 ID，无法保存。", true);
+    return null;
+  }
+  return { contact, info, contactId, userName };
+}
+
+async function refreshUserInfoAfterMutation(message) {
+  await loadContactInfo();
+  closeToolModal();
+  toast(message || "用户信息已保存。");
+}
+
+function normalizeUserTypeOption(item = {}) {
+  return {
+    id: firstDisplayValue(item.idStr, item.id, item.userTypeKey, item.key, item.value),
+    name: firstDisplayValue(item.name, item.typeName, item.label, item.title),
+    groupId: firstDisplayValue(item.groupIdStr, item.groupId),
+    raw: item
+  };
+}
+
+async function showUserTypeModal() {
+  const ctx = getUserEditContext();
+  if (!ctx) return;
+  const currentKey = getCurrentUserTypeKey(ctx.info);
+  openToolModal({
+    type: "user-type",
+    title: "用户类型修改",
+    confirmText: "确定",
+    size: "user-edit",
+    body: renderUserTypeModalBody({ loading: true, currentName: ctx.info.userTypeName || "", currentKey }),
+    onConfirm: saveUserTypeFromModal
+  });
+
+  try {
+    const payload = await api("/Contact/GetUserTypeList", {
+      userGroupId: ctx.info.userTypeGroupId || ctx.info.groupId || 0
+    });
+    state.userTypeOptions = getRecords(payload).map(normalizeUserTypeOption).filter((item) => item.id && item.name);
+    if (state.activeModal?.type === "user-type") {
+      el.toolModalBody.innerHTML = renderUserTypeModalBody({
+        options: state.userTypeOptions,
+        currentName: ctx.info.userTypeName || "",
+        currentKey
+      });
+      focusUserTypePicker();
+    }
+  } catch (error) {
+    if (state.activeModal?.type === "user-type") {
+      el.toolModalBody.innerHTML = renderUserTypeModalBody({
+        error: error.message,
+        currentName: ctx.info.userTypeName || "",
+        currentKey
+      });
+    }
+  }
+}
+
+function getCurrentUserTypeKey(info = {}) {
+  return firstDisplayValue(info.userTypeKey, info.userTypeKeyStr, info.userTypeIdStr, info.userTypeId, "");
+}
+
+function renderUserTypeModalBody({ options = [], currentName = "", currentKey = "", loading = false, error = "" } = {}) {
+  const currentText = currentName ? `<p class="modal-hint">当前类型：${escapeHtml(currentName)}</p>` : "";
+  const hasCurrentKey = currentKey !== undefined && currentKey !== null && currentKey !== "";
+  let matchedCurrentName = false;
+  if (loading) {
+    return `
+      <div class="client-modal-loading">正在读取 /Contact/GetUserTypeList...</div>
+      ${currentText}
+    `;
+  }
+  if (error) {
+    return `
+      <div class="client-modal-error compact"><strong>会员类型读取失败</strong><p>${escapeHtml(error)}</p></div>
+      ${currentText}
+    `;
+  }
+  return `
+    <div class="user-type-picker">
+      <div class="user-edit-current">
+        <span>当前类型</span>
+        <strong>${escapeHtml(currentName || "-")}</strong>
+      </div>
+      <label class="modal-field user-edit-field">
+        <span><i>*</i> 选择修改类型</span>
+        <div class="user-type-search-wrap">
+          <input id="userTypeSearch" type="search" autocomplete="off" placeholder="输入名称快速筛选" />
+          <i class="native-icon bfi-search" aria-hidden="true"></i>
+        </div>
+      </label>
+      <div class="user-type-options" role="radiogroup" aria-label="会员类型">
+        ${options.length ? options.map((item) => {
+          const checkedByKey = hasCurrentKey && String(item.id) === String(currentKey);
+          const checkedByName = !hasCurrentKey && !matchedCurrentName && item.name === currentName;
+          const checked = checkedByKey || checkedByName;
+          if (checkedByName) matchedCurrentName = true;
+          return `
+            <label class="user-type-option ${checked ? "is-selected" : ""}" data-user-type-option data-search-text="${escapeAttr(item.name)}">
+              <input type="radio" name="userTypeKey" value="${escapeAttr(item.id)}" ${checked ? "checked" : ""}>
+              <span>${escapeHtml(item.name)}</span>
+            </label>
+          `;
+        }).join("") : '<p class="empty-state">当前接口没有返回可选会员类型。</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function focusUserTypePicker() {
+  window.setTimeout(() => {
+    const selected = el.toolModalBody.querySelector(".user-type-option input:checked")?.closest(".user-type-option");
+    selected?.scrollIntoView({ block: "center" });
+    $("userTypeSearch")?.focus();
+  }, 0);
+}
+
+function filterUserTypePicker(keyword = "") {
+  const text = String(keyword || "").trim().toLowerCase();
+  el.toolModalBody.querySelectorAll("[data-user-type-option]").forEach((option) => {
+    const haystack = String(option.dataset.searchText || option.textContent || "").toLowerCase();
+    option.hidden = Boolean(text && !haystack.includes(text));
+  });
+}
+
+async function saveUserTypeFromModal() {
+  const ctx = getUserEditContext();
+  const userTypeKey = el.toolModalBody.querySelector('input[name="userTypeKey"]:checked')?.value || "";
+  if (!ctx) return false;
+  if (!userTypeKey) {
+    toast("请选择会员类型。", true);
+    return false;
+  }
+  try {
+    await api("/Contact/UpdateUserType", {
+      contactId: ctx.contactId,
+      userName: ctx.userName,
+      userTypeKey
+    });
+    await refreshUserInfoAfterMutation("会员类型已修改。");
+    return true;
+  } catch (error) {
+    toast(`会员类型修改失败：${error.message}`, true);
+    return false;
+  }
+}
+
+function showBalanceIntegralModal(focusTarget = "balance") {
+  const ctx = getUserEditContext();
+  if (!ctx) return;
+  openToolModal({
+    type: "balance-integral",
+    title: "积分余额修改",
+    confirmText: "确定",
+    size: "user-edit",
+    body: `
+      <div class="amount-edit-current">
+        <span class="amount-current-chip"><em>当前余额</em><strong>${escapeHtml(formatMoney(ctx.info.balance))}</strong></span>
+        <span class="amount-current-chip"><em>当前积分</em><strong>${escapeHtml(ctx.info.integral ?? "-")}</strong></span>
+      </div>
+      <div class="amount-edit-grid">
+        <label class="modal-field amount-edit-field">
+          <span>余额</span>
+          <div class="amount-edit-row">
+            <select id="balanceOperator" aria-label="余额加减">
+              <option value="+">+</option>
+              <option value="-">-</option>
+            </select>
+            <input id="balanceAdjust" type="number" step="0.01" min="0" value="0.0" inputmode="decimal" />
+          </div>
+        </label>
+        <label class="modal-field amount-edit-field">
+          <span>积分</span>
+          <div class="amount-edit-row">
+            <select id="integralOperator" aria-label="积分加减">
+              <option value="+">+</option>
+              <option value="-">-</option>
+            </select>
+            <input id="integralAdjust" type="number" step="1" min="0" value="0" inputmode="numeric" />
+          </div>
+        </label>
+        <label class="modal-field">
+          <span><i>*</i> 理由</span>
+          <textarea id="balanceIntegralReason" rows="4" placeholder="请输入修改原因，方便后续追溯"></textarea>
+        </label>
+      </div>
+      <p class="modal-hint">这里提交的是调整值，不是覆盖当前总额。余额可填小数，积分按整数处理。</p>
+    `,
+    onConfirm: saveBalanceIntegralFromModal
+  });
+  window.setTimeout(() => $(focusTarget === "integral" ? "integralAdjust" : "balanceAdjust")?.focus(), 0);
+}
+
+function readSignedAdjustment(valueId, operatorId, integer = false) {
+  const raw = String($(valueId)?.value || "").trim();
+  if (!raw) return null;
+  const number = Number(raw);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new Error("请输入大于等于 0 的调整数值。");
+  }
+  if (number === 0) return null;
+  const signed = ($(operatorId)?.value === "-" ? -1 : 1) * number;
+  return integer ? Math.trunc(signed) : Number(signed.toFixed(2));
+}
+
+async function saveBalanceIntegralFromModal() {
+  const ctx = getUserEditContext();
+  if (!ctx) return false;
+  let balance;
+  let integral;
+  try {
+    balance = readSignedAdjustment("balanceAdjust", "balanceOperator", false);
+    integral = readSignedAdjustment("integralAdjust", "integralOperator", true);
+  } catch (error) {
+    toast(error.message, true);
+    return false;
+  }
+  const argument = $("balanceIntegralReason")?.value.trim() || "";
+  if (balance === null && integral === null) {
+    toast("请输入要调整的余额或积分。", true);
+    return false;
+  }
+  if (!argument) {
+    toast("请输入修改理由。", true);
+    return false;
+  }
+  const request = {
+    contactId: ctx.contactId,
+    userName: ctx.userName,
+    argument
+  };
+  if (balance !== null) request.balance = balance;
+  if (integral !== null) request.integral = integral;
+
+  try {
+    await api("/Contact/UpdateIntegralAndBalance", request);
+    await refreshUserInfoAfterMutation("积分余额已修改。");
+    return true;
+  } catch (error) {
+    toast(`积分余额修改失败：${error.message}`, true);
+    return false;
+  }
+}
+
+function showUserRemarkModal() {
+  const ctx = getUserEditContext();
+  if (!ctx) return;
+  openToolModal({
+    type: "user-remark",
+    title: "备注修改",
+    confirmText: "保存",
+    body: `
+      <label class="modal-field">
+        <span>备注</span>
+        <input id="userRemarkInput" value="${escapeAttr(getContactRemark(ctx.contact, ctx.info))}" placeholder="请输入用户备注" />
+      </label>
+      <p class="modal-hint">保存后会调用 /Contact/UpdateContactInfo，并刷新右侧真实用户信息。</p>
+    `,
+    onConfirm: saveUserRemarkFromModal
+  });
+  window.setTimeout(() => $("userRemarkInput")?.focus(), 0);
+}
+
+async function saveUserRemarkFromModal() {
+  const ctx = getUserEditContext();
+  if (!ctx) return false;
+  const remark = $("userRemarkInput")?.value.trim() || "";
+  try {
+    await api("/Contact/UpdateContactInfo", {
+      contactId: ctx.contactId,
+      userName: ctx.userName,
+      remark,
+      tags: getUserNormalTagList(ctx.info)
+    });
+    await refreshUserInfoAfterMutation("备注已保存。");
+    return true;
+  } catch (error) {
+    toast(`备注保存失败：${error.message}`, true);
+    return false;
+  }
+}
+
+function renderTagEditor(tags = [], placeholder = "输入后按 Enter 添加标签") {
+  return `
+    <div class="user-tag-editor" data-user-tag-editor>
+      ${tags.map((tag) => `
+        <span class="user-tag-chip" data-user-tag="${escapeAttr(tag)}">
+          <span>${escapeHtml(tag)}</span>
+          <button type="button" data-user-tag-remove="${escapeAttr(tag)}" title="删除标签" aria-label="删除${escapeAttr(tag)}">
+            <i class="native-icon bfi-close" aria-hidden="true"></i>
+          </button>
+        </span>
+      `).join("")}
+      <input data-user-tag-input placeholder="${escapeAttr(placeholder)}" />
+    </div>
+  `;
+}
+
+function readTagEditorValues() {
+  const editor = el.toolModalBody.querySelector("[data-user-tag-editor]");
+  if (!editor) return [];
+  return [...editor.querySelectorAll("[data-user-tag]")]
+    .map((node) => node.dataset.userTag || "")
+    .filter(Boolean);
+}
+
+function addTagEditorValue(value) {
+  const editor = el.toolModalBody.querySelector("[data-user-tag-editor]");
+  const input = editor?.querySelector("[data-user-tag-input]");
+  const tag = String(value || input?.value || "").trim();
+  if (!editor || !input || !tag) return;
+  const exists = readTagEditorValues().some((item) => item === tag);
+  input.value = "";
+  if (exists) return;
+  const chip = document.createElement("span");
+  chip.className = "user-tag-chip";
+  chip.dataset.userTag = tag;
+  chip.innerHTML = `
+    <span>${escapeHtml(tag)}</span>
+    <button type="button" data-user-tag-remove="${escapeAttr(tag)}" title="删除标签" aria-label="删除${escapeAttr(tag)}">
+      <i class="native-icon bfi-close" aria-hidden="true"></i>
+    </button>
+  `;
+  editor.insertBefore(chip, input);
+}
+
+function showUserTagsModal() {
+  const ctx = getUserEditContext();
+  if (!ctx) return;
+  openToolModal({
+    type: "user-tags",
+    title: "标签修改",
+    confirmText: "保存",
+    body: `
+      <label class="modal-field">
+        <span>标签</span>
+        ${renderTagEditor(getUserNormalTagList(ctx.info))}
+      </label>
+      <p class="modal-hint">输入标签后按 Enter 添加，可添加多个标签。</p>
+    `,
+    onConfirm: saveUserTagsFromModal
+  });
+  window.setTimeout(() => el.toolModalBody.querySelector("[data-user-tag-input]")?.focus(), 0);
+}
+
+async function saveUserTagsFromModal() {
+  const ctx = getUserEditContext();
+  if (!ctx) return false;
+  try {
+    await api("/Contact/UpdateContactInfo", {
+      contactId: ctx.contactId,
+      userName: ctx.userName,
+      remark: getContactRemark(ctx.contact, ctx.info),
+      tags: readTagEditorValues()
+    });
+    await refreshUserInfoAfterMutation("标签已保存。");
+    return true;
+  } catch (error) {
+    toast(`标签保存失败：${error.message}`, true);
+    return false;
+  }
+}
+
+function normalizeMemberTagOption(item = {}) {
+  return {
+    id: firstDisplayValue(item.idStr, item.id, item.value, item.key),
+    name: firstDisplayValue(item.name, item.tagName, item.label, item.title),
+    type: firstDisplayValue(item.type, item.tagType, item.category, item.groupName),
+    raw: item
+  };
+}
+
+async function showMemberTagsModal() {
+  const ctx = getUserEditContext();
+  if (!ctx) return;
+  openToolModal({
+    type: "member-tags",
+    title: "设置会员标签",
+    confirmText: "确定",
+    body: renderMemberTagsModalBody({ loading: true, selectedTags: getUserMemberTagList(ctx.info) }),
+    onConfirm: saveMemberTagsFromModal
+  });
+
+  try {
+    const robot = ctx.contact.robot || {};
+    const payload = await api("/Contact/GetMemberTags", {
+      userName: ctx.userName,
+      RobotType: firstValue(robot.robotType, ctx.contact.robotType, ctx.info.robotType, 0),
+      RobotUniqueId: firstValue(robot.robotUniqueIdStr, robot.robotUniqueId, ctx.contact.robotUniqueIdStr, ctx.contact.robotUniqueId, 0)
+    });
+    state.memberTagOptions = getRecords(payload).map(normalizeMemberTagOption).filter((item) => item.id && item.name);
+    if (state.activeModal?.type === "member-tags") {
+      el.toolModalBody.innerHTML = renderMemberTagsModalBody({
+        options: state.memberTagOptions,
+        selectedTags: getUserMemberTagList(ctx.info)
+      });
+    }
+  } catch (error) {
+    if (state.activeModal?.type === "member-tags") {
+      el.toolModalBody.innerHTML = renderMemberTagsModalBody({
+        error: error.message,
+        selectedTags: getUserMemberTagList(ctx.info)
+      });
+    }
+  }
+}
+
+function renderMemberTagsModalBody({ options = [], selectedTags = [], loading = false, error = "" } = {}) {
+  const selected = new Set(selectedTags.map(String));
+  if (loading) return '<div class="client-modal-loading">正在读取 /Contact/GetMemberTags...</div>';
+  if (error) return `<div class="client-modal-error compact"><strong>会员标签读取失败</strong><p>${escapeHtml(error)}</p></div>`;
+  const groups = new Map();
+  options.forEach((item) => {
+    const key = item.type || "普通标签";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  });
+  return `
+    <div class="member-tag-editor">
+      ${options.length ? [...groups.entries()].map(([group, items]) => `
+        <section class="member-tag-group">
+          <strong>${escapeHtml(getMemberTagGroupLabel(group))}</strong>
+          <div class="member-tag-options">
+            ${items.map((item) => {
+              const checked = selected.has(String(item.id)) || selected.has(String(item.name));
+              return `
+                <label class="member-tag-option">
+                  <input type="checkbox" data-member-tag-option="${escapeAttr(item.id)}" ${checked ? "checked" : ""}>
+                  <span>${escapeHtml(item.name)}</span>
+                </label>
+              `;
+            }).join("")}
+          </div>
+        </section>
+      `).join("") : '<p class="empty-state">当前接口没有返回可选会员标签。</p>'}
+      <label class="member-tag-sync">
+        <input id="memberTagSync" type="checkbox">
+        <span>将用户互通的所有端同步设置本次修改的会员标签</span>
+      </label>
+    </div>
+  `;
+}
+
+function getMemberTagGroupLabel(value) {
+  const map = {
+    1: "下单奖励(营销)",
+    2: "邀请额外奖励(营销)",
+    3: "普通标签(无营销)",
+    4: "提现审核",
+    5: "订单冻结"
+  };
+  return map[value] || String(value || "普通标签");
+}
+
+function getSelectedMemberTagOptions() {
+  const checked = [...el.toolModalBody.querySelectorAll("[data-member-tag-option]:checked")]
+    .map((node) => String(node.dataset.memberTagOption || ""));
+  const selected = new Set(checked);
+  return state.memberTagOptions.filter((item) => selected.has(String(item.id)));
+}
+
+async function saveMemberTagsFromModal() {
+  const ctx = getUserEditContext();
+  if (!ctx) return false;
+  const selected = getSelectedMemberTagOptions();
+  const syncUserFlag = $("memberTagSync")?.checked ? 1 : 0;
+  const sysTagList = JSON.stringify(selected.map((item) => ({
+    id: item.id,
+    name: item.name,
+    type: item.type
+  })));
+  try {
+    await api("/Contact/UpdateUserMemberTags", {
+      contactId: ctx.contactId,
+      syncUserFlag,
+      sysTagList,
+      tags: selected.map((item) => item.name)
+    });
+    await refreshUserInfoAfterMutation("会员标签已保存。");
+    return true;
+  } catch (error) {
+    toast(`会员标签保存失败：${error.message}`, true);
+    return false;
+  }
+}
+
 function openToolModal(config) {
   state.activeModal = config;
   el.toolModalTitle.textContent = config.title || "";
@@ -8142,11 +8637,12 @@ function openToolModal(config) {
   el.toolModalConfirm.disabled = Boolean(config.confirmDisabled);
   el.toolModalCancel.classList.toggle("is-hidden", config.hideCancel === true);
   el.toolModalConfirm.classList.toggle("is-hidden", config.hideConfirm === true);
-  el.toolModalPanel.classList.remove("tool-modal-wide", "tool-modal-large", "tool-modal-xl", "tool-modal-settings");
+  el.toolModalPanel.classList.remove("tool-modal-wide", "tool-modal-large", "tool-modal-xl", "tool-modal-settings", "tool-modal-user-edit");
   if (config.size === "wide") el.toolModalPanel.classList.add("tool-modal-wide");
   if (config.size === "large") el.toolModalPanel.classList.add("tool-modal-large");
   if (config.size === "xl") el.toolModalPanel.classList.add("tool-modal-xl");
   if (config.size === "settings") el.toolModalPanel.classList.add("tool-modal-settings");
+  if (config.size === "user-edit") el.toolModalPanel.classList.add("tool-modal-user-edit");
   el.toolModalOverlay.classList.remove("is-hidden");
 }
 
@@ -8191,6 +8687,20 @@ function renderActiveModalBody() {
 function handleToolModalBodyClick(event) {
   if (handlePreviewClickTarget(event)) return;
 
+  const tagRemove = event.target.closest("[data-user-tag-remove]");
+  if (tagRemove) {
+    tagRemove.closest("[data-user-tag]")?.remove();
+    return;
+  }
+
+  const userTypeOption = event.target.closest("[data-user-type-option]");
+  if (userTypeOption) {
+    el.toolModalBody.querySelectorAll("[data-user-type-option]").forEach((node) => {
+      node.classList.toggle("is-selected", node === userTypeOption);
+    });
+    return;
+  }
+
   const target = event.target.closest("[data-client-modal-action]");
   if (!target) return;
 
@@ -8221,7 +8731,9 @@ function handleToolModalBodyClick(event) {
 }
 
 function handleToolModalBodyInput(event) {
-  if (state.activeModal?.type === "database" && event.target.matches("#databaseDeleteStart, #databaseDeleteEnd, #databaseDeleteConfirm")) {
+  if (state.activeModal?.type === "user-type" && event.target.matches("#userTypeSearch")) {
+    filterUserTypePicker(event.target.value);
+  } else if (state.activeModal?.type === "database" && event.target.matches("#databaseDeleteStart, #databaseDeleteEnd, #databaseDeleteConfirm")) {
     updateDatabaseDeleteConfirmState();
   }
 }
@@ -8237,7 +8749,10 @@ function handleToolModalBodyChange(event) {
 
 function handleToolModalBodyKeydown(event) {
   if (event.key !== "Enter" || event.target.matches("textarea")) return;
-  if (state.activeModal?.type === "global-search") {
+  if (event.target.matches("[data-user-tag-input]")) {
+    event.preventDefault();
+    addTagEditorValue(event.target.value);
+  } else if (state.activeModal?.type === "global-search") {
     event.preventDefault();
     runGlobalSearch(1);
   } else if (state.activeModal?.type === "client-stats") {
@@ -8246,6 +8761,9 @@ function handleToolModalBodyKeydown(event) {
   } else if (state.activeModal?.type === "client-notice") {
     event.preventDefault();
     loadClientNotices(1);
+  } else if (["user-type", "balance-integral", "user-remark", "user-tags", "member-tags"].includes(state.activeModal?.type)) {
+    event.preventDefault();
+    confirmToolModal();
   }
 }
 
@@ -11215,6 +11733,8 @@ function renderToolContent() {
     const parentId = firstValue(rawInfo.parentIdStr, rawInfo.parentUserIdStr, rawInfo.parentId, rawInfo.parentUserId, "-");
     const unionUserId = firstValue(rawInfo.unionUserIdStr, rawInfo.unionUserId, "--");
     const remark = getContactRemark(contact, rawInfo);
+    const memberTags = getUserMemberTagList(info);
+    const normalTags = getUserNormalTagList(info);
     el.toolContent.innerHTML = `
       <section class="tool-section">
         <h3><span>用户信息</span><button class="mini-action" type="button" data-action="refresh-user">刷新</button></h3>
@@ -11224,13 +11744,13 @@ function renderToolContent() {
           ${kv("微信ID", info.userName || contact.userName, true)}
           ${kv("会话ID", getContactId(contact), true)}
           ${kv("上级ID", parentId, true)}
-          ${kv("会员类型", info.userTypeName || "-")}
-          ${kv("会员标签", formatTags(info.tags || info.sysTags))}
-          ${kv("余额", formatMoney(info.balance))}
-          ${kv("积分", info.integral ?? "-")}
+          ${kvEditable("会员类型", info.userTypeName || "-", "edit-user-type")}
+          ${kvEditable("会员标签", formatTags(memberTags), "edit-member-tags")}
+          ${kvEditable("余额", formatMoney(info.balance), "edit-balance")}
+          ${kvEditable("积分", info.integral ?? "-", "edit-integral")}
           ${kv("有效订单数", info.validOrderCount ?? "-")}
-          ${kv("备注", remark || "-")}
-          ${kv("标签", formatTags(info.sysTags || info.tags))}
+          ${kvEditable("备注", remark || "-", "edit-user-remark")}
+          ${kvEditable("标签", formatTags(normalTags), "edit-user-tags")}
         </div>
       </section>
       <section class="tool-section">
@@ -11827,6 +12347,21 @@ function kv(label, value, copyable = false) {
   `;
 }
 
+function kvEditable(label, value, action) {
+  const display = value === undefined || value === null || value === "" ? "-" : value;
+  return `
+    <div class="kv-row kv-row-editable">
+      <span>${escapeHtml(label)}</span>
+      <span class="kv-value kv-editable-value">
+        <span>${escapeHtml(display)}</span>
+        <button class="kv-edit-button" type="button" data-action="${escapeAttr(action)}" title="修改${escapeAttr(label)}" aria-label="修改${escapeAttr(label)}">
+          <span class="kv-edit-glyph" aria-hidden="true">✎</span>
+        </button>
+      </span>
+    </div>
+  `;
+}
+
 function firstValue(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "");
 }
@@ -12079,6 +12614,51 @@ function formatTags(value) {
   if (Array.isArray(value)) return value.length ? value.join("、") : "-";
   if (typeof value === "string") return value || "-";
   return JSON.stringify(value);
+}
+
+function normalizeUserTagList(value) {
+  if (value === undefined || value === null || value === "") return [];
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (item === undefined || item === null || item === "") return "";
+        if (typeof item === "object") {
+          return firstDisplayValue(item.name, item.tagName, item.label, item.title, item.value, item.id);
+        }
+        return String(item).trim();
+      })
+      .filter(Boolean);
+  }
+  if (typeof value === "object") {
+    return normalizeUserTagList(Object.values(value));
+  }
+  const text = String(value).trim();
+  if (!text) return [];
+  if (/^[\[{]/.test(text)) {
+    try {
+      const parsed = JSON.parse(text);
+      const parsedTags = normalizeUserTagList(parsed);
+      if (parsedTags.length) return parsedTags;
+    } catch {
+      // Plain backend strings fall through to delimiter parsing.
+    }
+  }
+  return text
+    .split(/[、,，;；|｜\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getUserMemberTagList(info = getActiveContactInfo()) {
+  const tags = normalizeUserTagList(info?.sysTags);
+  if (tags.length) return tags;
+  return normalizeUserTagList(info?.memberTags || info?.userMemberTags);
+}
+
+function getUserNormalTagList(info = getActiveContactInfo()) {
+  const tags = normalizeUserTagList(info?.tags);
+  if (tags.length) return tags;
+  return normalizeUserTagList(info?.labels || info?.normalTags || info?.remarkTags);
 }
 
 function formatMoney(value) {
@@ -12341,6 +12921,18 @@ function handleToolClick(event) {
   const action = actionTarget.dataset.action;
   if (action === "refresh-user") {
     loadContactInfo();
+  } else if (action === "edit-user-type") {
+    showUserTypeModal();
+  } else if (action === "edit-member-tags") {
+    showMemberTagsModal();
+  } else if (action === "edit-balance") {
+    showBalanceIntegralModal("balance");
+  } else if (action === "edit-integral") {
+    showBalanceIntegralModal("integral");
+  } else if (action === "edit-user-remark") {
+    showUserRemarkModal();
+  } else if (action === "edit-user-tags") {
+    showUserTagsModal();
   } else if (action === "refresh-faq") {
     updateFaqKeyword();
     loadFaq();

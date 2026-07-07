@@ -6996,3 +6996,60 @@ AI 感知条行为：
 
 - 不要在发送前对 `block.content` 做 `.replace(/\s+/g, " ")` 或类似压缩，否则商品文案/价格模板会再次堆叠。
 - 如果后续接入富文本粘贴清洗，必须保留块级节点边界的 `\n`。
+
+## 2026-07-07 右侧用户资料真实编辑
+
+需求：
+
+- 右侧工具栏“用户信息”里的会员类型、会员标签、余额、积分、备注、标签都要能修改，按钮要比之前更像客户端的小铅笔，不能只做假 UI。
+- 用户提供的截图里，会员类型是弹窗选择列表；余额和积分共用“加减 + 数值 + 理由”的弹窗。
+
+实现：
+
+- `public/app.js`
+  - 新增右侧资料行 `kvEditable()`，在以下字段旁显示编辑按钮：
+    - 会员类型：`edit-user-type`
+    - 会员标签：`edit-member-tags`
+    - 余额：`edit-balance`
+    - 积分：`edit-integral`
+    - 备注：`edit-user-remark`
+    - 标签：`edit-user-tags`
+  - 会员类型弹窗调用真实 `/Contact/GetUserTypeList` 读取可选类型，渲染为可搜索、可滚动的单选列表，保存调用 `/Contact/UpdateUserType`。
+  - 余额/积分弹窗显示当前余额和当前积分，输入的是本次调整值，不是覆盖总额；保存调用 `/Contact/UpdateIntegralAndBalance`，并要求填写理由 `argument`。
+  - 备注和普通标签保存调用 `/Contact/UpdateContactInfo`；普通标签支持输入后按 Enter 添加多个标签，也支持移除。
+  - 会员标签弹窗调用 `/Contact/GetMemberTags` 读取真实标签，保存调用 `/Contact/UpdateUserMemberTags`，包含 `syncUserFlag` 和 `sysTagList`。
+  - 新增 `normalizeUserTagList()`、`getUserMemberTagList()`、`getUserNormalTagList()`，区分会员标签 `sysTags` 和普通标签 `tags`。
+  - 修改 `openToolModal()`，增加 `tool-modal-user-edit` 尺寸类给资料编辑弹窗使用。
+- `public/styles.css`
+  - 资料行编辑按钮改为稳定铅笔字形 `✎`，不再依赖显示异常的 `bfi-edit` 字体图标。
+  - 新增会员类型 picker、金额调整弹窗、标签 chip、会员标签分组样式。
+
+真实接口来源：
+
+- `C:\Program Files\youchat-desktop\bin\YouChatService.xml`
+  - `/Contact/GetContactInfo`
+  - `/Contact/GetUserTypeList`
+  - `/Contact/UpdateUserType`
+  - `/Contact/GetMemberTags`
+  - `/Contact/UpdateUserMemberTags`
+  - `/Contact/UpdateContactInfo`
+  - `/Contact/UpdateIntegralAndBalance`
+
+验证：
+
+- `npm run check` 通过。
+- Playwright 使用本机 Chrome 登录 `http://127.0.0.1:5177/`，后端为 `http://192.168.9.83:18080/api`。
+- 只读烟测，不点击保存，避免修改真实用户：
+  - 右侧用户信息出现 6 个编辑按钮。
+  - 会员类型弹窗读取到 17 个真实类型，宽度 `522px`，带搜索框和滚动选择区。
+  - 当前类型同名重复时只高亮 1 个选中项。
+  - 余额、积分弹窗都显示当前余额/积分两个当前值 chip。
+- QA 截图：
+  - `reports/_uicheck/user-info-edit-smoke-v2.png`
+  - `reports/_uicheck/user-type-edit-modal-v1.png`
+
+后续注意：
+
+- 不要把余额/积分改成覆盖总额提交，原客户端接口语义是本次调整值。
+- 不要伪造保存成功。写接口如果失败，必须 toast 真实错误。
+- 如果以后原客户端升级导致参数变化，优先重新审计 `YouChatService.xml` 和客户端实际抓包，再调整这些保存函数。

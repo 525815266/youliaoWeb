@@ -4158,3 +4158,72 @@ Do not regress:
 
 - Do not collapse composer text with `replace(/\s+/g, " ")` before sending.
 - If adding paste sanitization later, keep block-level line boundaries as `\n`.
+
+## 2026-07-07 Handoff: Editable Right-Side User Info
+
+User request:
+
+- Match the original client behavior for editing right-side user information:
+  - membership type;
+  - member tags;
+  - balance;
+  - integral;
+  - remark;
+  - normal tags.
+- Use real YouChat APIs, not fake local state. Make the edit buttons cleaner.
+
+Changed:
+
+- `public/app.js`
+  - Added `state.userTypeOptions` and `state.memberTagOptions`.
+  - Added edit modal helpers around `getUserEditContext()` and `refreshUserInfoAfterMutation()`.
+  - Added real user type flow:
+    - read `/Contact/GetUserTypeList`;
+    - render searchable, scrollable radio picker;
+    - save through `/Contact/UpdateUserType`;
+    - use only one highlighted option when duplicate display names exist.
+  - Added balance/integral flow:
+    - modal shows current balance/integral;
+    - inputs are signed adjustment values;
+    - save through `/Contact/UpdateIntegralAndBalance` with required `argument`.
+  - Added remark/normal tag flow via `/Contact/UpdateContactInfo`.
+  - Added member tag flow:
+    - read `/Contact/GetMemberTags`;
+    - grouped checkbox editor;
+    - save through `/Contact/UpdateUserMemberTags` with `syncUserFlag` and JSON `sysTagList`.
+  - Added `normalizeUserTagList()`, `getUserMemberTagList()`, `getUserNormalTagList()`.
+  - Added `kvEditable()` and `handleToolClick()` actions for six edit buttons.
+- `public/styles.css`
+  - Added `.tool-modal-user-edit`.
+  - Replaced right-info edit glyph with stable `✎` instead of the flaky `bfi-edit` icon.
+  - Added styles for user type picker, amount adjustment rows, tag chips, and member tag groups.
+
+Source endpoints:
+
+- `C:\Program Files\youchat-desktop\bin\YouChatService.xml`
+  - `/Contact/GetUserTypeList`
+  - `/Contact/UpdateUserType`
+  - `/Contact/GetMemberTags`
+  - `/Contact/UpdateUserMemberTags`
+  - `/Contact/UpdateContactInfo`
+  - `/Contact/UpdateIntegralAndBalance`
+
+Verified:
+
+- `npm run check` passed.
+- Browser smoke against `http://127.0.0.1:5177/` using the remembered account:
+  - backend `http://192.168.9.83:18080/api`;
+  - right-side user info has 6 edit buttons;
+  - user type modal loaded 17 real options;
+  - user type picker had 1 checked option and 1 selected visual class even with duplicate `会员` display names;
+  - balance/integral modals showed 2 current-value chips.
+- Did not click confirm/save in QA to avoid mutating real customer data.
+- Screenshots:
+  - `reports/_uicheck/user-info-edit-smoke-v2.png`
+  - `reports/_uicheck/user-type-edit-modal-v1.png`
+
+Do not regress:
+
+- Balance/integral values are deltas, not absolute totals.
+- Do not fake successful saves; show real API errors.
+- If endpoint behavior changes, re-check `YouChatService.xml` and HAR/client requests before changing request shapes.
