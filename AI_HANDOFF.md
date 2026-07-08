@@ -4227,3 +4227,59 @@ Do not regress:
 - Balance/integral values are deltas, not absolute totals.
 - Do not fake successful saves; show real API errors.
 - If endpoint behavior changes, re-check `YouChatService.xml` and HAR/client requests before changing request shapes.
+
+## 2026-07-08 Handoff: FnOS Service Online But YouChat Logged Out
+
+User report:
+
+- “服务端离线了好像.”
+
+Diagnosis:
+
+- Web client was online:
+  - `http://192.168.9.83:5177/health` returned OK.
+- Backend HTTP and database were online:
+  - `npm run fnos:health` passed;
+  - `databaseType=0 (mysql)`;
+  - `totalContacts=8212`;
+  - `historyContacts≈5875`.
+- Business login was offline:
+  - `POST /api/System/GetAccountInfo` initially returned `realName=null`, `userId=0`;
+  - `POST /api/Summary/LogIn` returned `success=false`, `message=悠聊未登录`;
+  - `POST /api/System/LogIn` timed out.
+- Root cause:
+  - `youchat-autologin` log showed `Automatic login is paused by the logout API.`
+  - pause marker existed at `/vol1/1000/Docker/youchat/docker-control/autologin.pause` with content `manual logout`.
+  - `youchat-control` logs showed repeated `POST /api/logout`.
+
+Recovery performed:
+
+```sh
+rm -f /vol1/1000/Docker/youchat/docker-control/autologin.pause
+echo '<sudo_password>' | sudo -S docker restart youchat-autologin
+```
+
+Verified after recovery:
+
+- `POST /api/System/GetAccountInfo` returned:
+  - `realName=Boom`;
+  - `userId=1556504756803862529`.
+- `POST /api/Summary/LogIn` returned:
+  - `success=true`;
+  - `message=登录成功`.
+- `npm run fnos:health` passed after recovery:
+  - MySQL mode;
+  - total contacts `8212`;
+  - history contacts `5875`;
+  - guestbook contacts `1`.
+- Pause marker check returned `NOT_PAUSED`.
+- Containers:
+  - `youchat-service` Up on `18080 -> 8080`;
+  - `youchat-mysql` Up healthy;
+  - `youchat-autologin` Up;
+  - `youchat-dev-web` Up healthy.
+
+Do not regress:
+
+- When `GetOptions` and contact/history counts work but `GetAccountInfo.userId=0`, do not treat it as SQLite/database corruption. Check `docker-control/autologin.pause` first.
+- `POST /api/System/CheckLoginStatus` still timed out after recovery; previous notes already say this endpoint can be unreliable. Do not use it as the main online-status probe.

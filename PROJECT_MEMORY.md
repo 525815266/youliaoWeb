@@ -7053,3 +7053,61 @@ AI 感知条行为：
 - 不要把余额/积分改成覆盖总额提交，原客户端接口语义是本次调整值。
 - 不要伪造保存成功。写接口如果失败，必须 toast 真实错误。
 - 如果以后原客户端升级导致参数变化，优先重新审计 `YouChatService.xml` 和客户端实际抓包，再调整这些保存函数。
+
+## 2026-07-08 飞牛服务端“进程在线但悠聊未登录”恢复
+
+现象：
+
+- 用户反馈“服务端离线了好像”。
+- `http://192.168.9.83:5177/health` 正常，Web 客户端在线。
+- `npm run fnos:health` 正常：
+  - `databaseType=0 (mysql)`
+  - `totalContacts=8212`
+  - `historyContacts=5876/5875`
+- `POST /api/System/GetAccountInfo` 初始返回 `success=true`，但 `realName=null`、`userId=0`。
+- `POST /api/Summary/LogIn` 初始返回 `success=false`、`message=悠聊未登录`。
+- `POST /api/System/LogIn` 会超时。
+
+原因：
+
+- Docker 和 MySQL 没离线，真正问题是业务登录态离线。
+- `youchat-autologin` 日志显示：
+  - `Automatic login is paused by the logout API.`
+- 飞牛控制目录存在暂停标记：
+  - `/vol1/1000/Docker/youchat/docker-control/autologin.pause`
+  - 内容：`manual logout`
+- `youchat-control` 日志里能看到多次 `POST /api/logout`，说明之前调用过退出/挂起类接口，导致自动登录暂停。
+
+恢复操作：
+
+```powershell
+# 通过 SSH 到飞牛执行，删除自动登录暂停标记并重启 autologin 容器
+rm -f /vol1/1000/Docker/youchat/docker-control/autologin.pause
+echo '<sudo_password>' | sudo -S docker restart youchat-autologin
+```
+
+恢复验证：
+
+- `POST /api/System/GetAccountInfo` 恢复为：
+  - `realName=Boom`
+  - `userId=1556504756803862529`
+- `POST /api/Summary/LogIn` 恢复为：
+  - `success=true`
+  - `message=登录成功`
+- `npm run fnos:health` 通过：
+  - `databaseMode=mysql`
+  - `totalContacts=8212`
+  - `historyContacts=5875`
+  - `guestbookContacts=1`
+- 暂停标记检查返回 `NOT_PAUSED`。
+- 容器状态：
+  - `youchat-service` Up，映射 `18080 -> 8080`
+  - `youchat-mysql` Up healthy
+  - `youchat-autologin` Up
+  - `youchat-dev-web` Up healthy
+
+后续排查规则：
+
+- 如果 `GetOptions`、联系人、历史数量正常，但 `GetAccountInfo.userId=0` 或 `Summary/LogIn` 返回“悠聊未登录”，优先检查 `docker-control/autologin.pause`。
+- 不要把这种情况误判为数据库崩溃或 Web 客户端问题。
+- `POST /api/System/CheckLoginStatus` 这次恢复后仍超时，且此前文档已记录它单独可能不稳定，暂时不要用它作为在线判断核心。
