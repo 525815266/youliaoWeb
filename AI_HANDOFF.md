@@ -4559,3 +4559,60 @@ Do not regress:
 
 - Do not treat secondary `historyContacts=0` as abnormal; its target env sets `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT=0`.
 - Do not check only `databaseType=0`; also require `connectionStringHasPublicKeyRetrieval=true` for MySQL 8.
+
+## 2026-07-09 Handoff: Web Reconnect Modal Added
+
+User report:
+
+- Native Windows client shows a reconnect dialog when the service connection drops.
+- Web did not show a comparable state; failures were mostly hidden in status text/logs.
+
+Implemented:
+
+- `public/index.html`
+  - Added `#reconnectOverlay`.
+  - Dialog fields:
+    - `#reconnectTitle`
+    - `#reconnectSubtitle`
+    - `#reconnectStateBadge`
+    - `#reconnectLog`
+    - `#reconnectManualLogin`
+- `public/app.js`
+  - Added reconnect state under `state.reconnect`.
+  - Added:
+    - `RECONNECT_LOGIN_REDIRECT_MS = 300000`
+    - `RECONNECT_LOG_LIMIT = 8`
+    - `registerReconnectAttempt(source, error)`
+    - `renderReconnectDialog()`
+    - `clearReconnectState(reason)`
+    - `handleReconnectManualLogin()`
+  - Server SignalR bridge failures now call `registerReconnectAttempt("服务端 SignalR", error)`.
+  - Browser SignalR `onreconnecting`, `onclose`, and start failures call `registerReconnectAttempt("浏览器 SignalR", error)` unless the server bridge is already connected.
+  - Successful server/browser SignalR connection calls `clearReconnectState()`.
+  - Countdown reaches 0 after 300 seconds and returns the user to login.
+  - Manual login button calls `showLogin()`.
+- `public/styles.css`
+  - Added YouChat-style reconnect modal styles with a centered panel, timeline log, readable tips, and footer action.
+
+Verification:
+
+- `npm run check` passed.
+- Local server on temporary port `5187` loaded `/` and `/app.js`.
+- Bad SignalR target returned `502`, matching the error path the modal records.
+- Chrome + Playwright visual preview succeeded:
+  - `#reconnectOverlay` visible;
+  - dialog size about `560x475`;
+  - title showed `正在重新连接...（300秒后跳转到登录页）`;
+  - screenshot saved to untracked `reports/_uicheck/reconnect-modal.png`.
+- Deployed both FnOS Web targets with `scripts/deploy-fnos-web-all.py`.
+- Re-registered both SignalR bridges:
+  - Primary `5177`: `state=Connected`.
+  - Secondary `5178`: `state=Connected`.
+- Online resource check:
+  - `5177/` contains `reconnectOverlay`, `正在重新连接`, `reconnectManualLogin`.
+  - `5177/app.js` contains `registerReconnectAttempt`, `RECONNECT_LOGIN_REDIRECT_MS`.
+
+Do not regress:
+
+- Keep reconnect modal tied to real connection failures, not generic API toasts.
+- Keep the server bridge success path clearing the modal; otherwise it will block the composer after recovery.

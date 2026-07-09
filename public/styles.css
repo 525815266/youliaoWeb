@@ -4467,6 +4467,160 @@ textarea:focus-visible {
   background: rgba(20, 35, 58, 0.18);
 }
 
+.reconnect-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(20, 27, 40, 0.42);
+}
+
+.reconnect-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(560px, calc(100vw - 36px));
+  max-height: min(620px, calc(100dvh - 36px));
+  overflow: hidden;
+  border: 1px solid #d5deeb;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 28px 72px rgba(12, 23, 43, 0.26);
+}
+
+.reconnect-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid #e5edf7;
+}
+
+.reconnect-head strong,
+.reconnect-head span {
+  display: block;
+}
+
+.reconnect-head strong {
+  color: #172033;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.reconnect-head span {
+  margin-top: 4px;
+  color: #68758a;
+  font-size: 12px;
+}
+
+.reconnect-state-badge {
+  flex: 0 0 auto;
+  min-width: 62px;
+  padding: 4px 9px;
+  border: 1px solid #bfd8f5;
+  border-radius: 999px;
+  color: #0d63c7;
+  background: #edf6ff;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.reconnect-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 22px 16px;
+}
+
+.reconnect-log {
+  display: grid;
+  gap: 0;
+  min-height: 116px;
+  max-height: 236px;
+  margin: 0 0 16px;
+  padding: 0 0 0 52px;
+  overflow: auto;
+  list-style: none;
+}
+
+.reconnect-log li {
+  position: relative;
+  min-height: 56px;
+  padding: 7px 0 9px 16px;
+  border-left: 2px solid #e3ebf6;
+}
+
+.reconnect-log li:last-child {
+  border-left-color: transparent;
+}
+
+.reconnect-dot {
+  position: absolute;
+  left: -6px;
+  top: 15px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #217ee7;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 0 0 3px #fff;
+}
+
+.reconnect-log strong,
+.reconnect-log p,
+.reconnect-log small {
+  display: block;
+  margin: 0;
+}
+
+.reconnect-log strong {
+  color: #263348;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.reconnect-log p {
+  margin-top: 5px;
+  color: #3b475b;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.reconnect-log small {
+  margin-top: 4px;
+  color: #7b8798;
+  font-size: 11px;
+}
+
+.reconnect-tips {
+  color: #263348;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.reconnect-tips strong {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 13px;
+}
+
+.reconnect-tips p {
+  margin: 0 0 8px;
+}
+
+.reconnect-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 22px 18px;
+  border-top: 1px solid #e5edf7;
+  background: #fbfdff;
+}
+
 .link-preview-overlay {
   position: fixed;
   inset: 0;

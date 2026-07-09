@@ -8,6 +8,29 @@
   </head>
   <body>
     <div id="toastHost" class="toast-host" aria-live="polite"></div>
+    <div id="reconnectOverlay" class="reconnect-overlay is-hidden" role="presentation">
+      <section class="reconnect-dialog" role="dialog" aria-modal="true" aria-labelledby="reconnectTitle" aria-describedby="reconnectTips">
+        <header class="reconnect-head">
+          <div>
+            <strong id="reconnectTitle">正在重新连接...</strong>
+            <span id="reconnectSubtitle">正在恢复客服在线状态</span>
+          </div>
+          <span id="reconnectStateBadge" class="reconnect-state-badge">重连中</span>
+        </header>
+        <div class="reconnect-body">
+          <ol id="reconnectLog" class="reconnect-log" aria-live="polite"></ol>
+          <div id="reconnectTips" class="reconnect-tips">
+            <strong>注意事项：</strong>
+            <p>1. 断开连接后可等待程序自动恢复。</p>
+            <p>2. 如果一直处于重连中，请检查服务端、网络或反代状态。</p>
+            <p>3. 若上方没有新的日志打印，可以点击“手动登录”回到登录页重新连接。</p>
+          </div>
+        </div>
+        <footer class="reconnect-actions">
+          <button id="reconnectManualLogin" class="light-button" type="button">手动登录</button>
+        </footer>
+      </section>
+    </div>
     <div id="emojiPopover" class="emoji-popover is-hidden" role="dialog" aria-label="表情选择"></div>
     <div id="aiSettingsOverlay" class="settings-overlay is-hidden" role="presentation">
       <form id="aiSettingsPanel" class="settings-panel" aria-label="AI 设置">

@@ -7399,3 +7399,77 @@ Invoke-RestMethod -Method Post "http://192.168.9.83:5177/local/fnos/restore-mysq
   `POST http://192.168.9.83:5177/local/signalr/online`，`accountId=2`。
   但这次真正阻断接收的根因是写库失败，不是单纯 SignalR 离线。
 - 第二套历史为 `0` 是当前新库数据状态，部署配置中阈值必须保持 `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT=0`，不要被默认 `1000` 覆盖。
+
+## 2026-07-09 Web 端补齐原生客户端重连提示弹窗
+
+需求：
+
+- 原生 Windows 客户端在连接断开时会显示居中的重连弹窗：
+  - 标题显示“正在重新连接...”和跳转登录页倒计时；
+  - 列出第几次尝试重连和失败原因；
+  - 给出注意事项；
+  - 提供“手动登录”按钮。
+- Web 端此前只有顶部连接状态和后台自动重连，没有明显提示，用户看不到原生客户端这种状态反馈。
+
+本次修改：
+
+- `public/index.html`
+  - 新增 `#reconnectOverlay`：
+    - `#reconnectTitle`
+    - `#reconnectSubtitle`
+    - `#reconnectStateBadge`
+    - `#reconnectLog`
+    - `#reconnectManualLogin`
+- `public/app.js`
+  - 新增 `state.reconnect` 状态：
+    - 是否显示；
+    - 开始时间；
+    - 300 秒跳登录页截止时间；
+    - 重连次数；
+    - 最近 8 条失败日志；
+    - 定时器。
+  - 新增常量：
+    - `RECONNECT_LOGIN_REDIRECT_MS = 300000`
+    - `RECONNECT_LOG_LIMIT = 8`
+  - 新增方法：
+    - `registerReconnectAttempt(source, error)`
+    - `renderReconnectDialog()`
+    - `clearReconnectState(reason)`
+    - `handleReconnectManualLogin()`
+  - 接入真实连接路径：
+    - 服务端 SignalR 桥 `/local/signalr/online` 失败时显示弹窗；
+    - 浏览器 SignalR `onreconnecting/onclose/start` 失败时显示弹窗；
+    - 任意 SignalR 恢复成功时自动关闭弹窗；
+    - 倒计时到 0 后自动回登录页；
+    - 点击“手动登录”直接回登录页。
+  - HTTPS 页面下，如果服务端桥已连接，则不把浏览器直连 HTTP SignalR 的预期失败弹出来，避免误报。
+- `public/styles.css`
+  - 新增 `.reconnect-overlay`、`.reconnect-dialog`、`.reconnect-log` 等样式；
+  - 保持悠聊蓝白产品风格，居中弹窗，时间线日志，右下角手动登录按钮。
+
+验证：
+
+- `npm run check` 通过。
+- 本地临时端口 `5187` 运行验证，页面资源正常。
+- 用错误的 SignalR 目标模拟失败，服务端返回 `502`，属于前端会记录进重连弹窗的错误类型。
+- 用本机 Chrome + Playwright 预览弹窗：
+  - 弹窗可见；
+  - 倒计时标题正常；
+  - 两条失败日志正常；
+  - 手动登录按钮正常显示；
+  - 截图保存在未跟踪目录：`reports/_uicheck/reconnect-modal.png`，不提交。
+- 已部署飞牛两套 Web：
+  - `5177`
+  - `5178`
+- 部署后重新注册 SignalR：
+  - 主套 `5177/local/signalr/online`：`state=Connected`；
+  - 第二套 `5178/local/signalr/online`：`state=Connected`。
+- 线上资源检查：
+  - `5177/` 包含 `reconnectOverlay`、`正在重新连接`、`reconnectManualLogin`；
+  - `5177/app.js` 包含 `registerReconnectAttempt`、`RECONNECT_LOGIN_REDIRECT_MS`。
+
+后续注意：
+
+- 这个弹窗只负责“连接恢复提示”，不要拿它承载普通接口错误。
+- 服务端桥接成功时应自动关闭弹窗，避免在 Web 已恢复在线后继续遮挡客服输入区。
+- 如果后续改在线保持逻辑，必须继续调用 `registerReconnectAttempt()` 和 `clearReconnectState()`，否则会退回“后台失败但客服无感知”的老问题。

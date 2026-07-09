@@ -25,6 +25,8 @@ const POST_SEND_REFRESH_DELAY_MS = 80;
 const SIGNALR_KEEP_ALIVE_MS = 120000;
 const SIGNALR_START_TIMEOUT_MS = 12000;
 const SERVER_SIGNALR_ONLINE_REFRESH_MS = 60000;
+const RECONNECT_LOGIN_REDIRECT_MS = 300000;
+const RECONNECT_LOG_LIMIT = 8;
 const AI_PRESETS = {
   sub2: {
     label: "sub2 中转",
@@ -580,6 +582,16 @@ const state = {
   serverSignalRKey: "",
   serverSignalRLastRegisteredAt: 0,
   serverSignalRResolvedApiBase: "",
+  reconnect: {
+    visible: false,
+    startedAt: 0,
+    deadlineAt: 0,
+    attempt: 0,
+    logs: [],
+    timer: null,
+    lastSource: "",
+    lastError: ""
+  },
   readContactState: loadReadContactState(),
   logLines: []
 };
@@ -600,6 +612,12 @@ function $(id) {
 function boot() {
   [
     "loginView",
+    "reconnectOverlay",
+    "reconnectTitle",
+    "reconnectSubtitle",
+    "reconnectStateBadge",
+    "reconnectLog",
+    "reconnectManualLogin",
     "workbenchView",
     "loginForm",
     "username",
@@ -717,6 +735,7 @@ function boot() {
 
 function bindEvents() {
   el.loginForm.addEventListener("submit", connect);
+  el.reconnectManualLogin.addEventListener("click", handleReconnectManualLogin);
   el.togglePassword.addEventListener("click", togglePassword);
   el.backStep.addEventListener("click", () => toast("当前先按客户端连接页处理，场景选择页后续可补。"));
   el.versionNote.addEventListener("click", () => toast("Web 二开版已改为读取真实悠聊接口数据。"));
@@ -2783,6 +2802,12 @@ function isSignalRConnected() {
   return Boolean(state.signalRConnection && state.signalRConnection.state === "Connected");
 }
 
+function shouldReportBrowserSignalRError(error) {
+  if (state.serverSignalRStatus === "connected") return false;
+  const message = String(error?.message || error || "");
+  return !/HTTPS.*HTTP SignalR|disabled browser direct HTTP SignalR/i.test(message);
+}
+
 async function ensureSignalRConnection() {
   if (!window.signalR?.HubConnectionBuilder) {
     throw new Error("SignalR browser client is not loaded");
@@ -2815,12 +2840,20 @@ async function ensureSignalRConnection() {
       .withAutomaticReconnect();
     if (window.signalR.LogLevel) builder.configureLogging(window.signalR.LogLevel.Warning);
     const connection = builder.build();
+    connection.onreconnecting((error) => {
+      state.signalRStatus = "reconnecting";
+      if (shouldReportBrowserSignalRError(error)) {
+        registerReconnectAttempt("浏览器 SignalR", error || new Error("浏览器 SignalR 正在重连"));
+      }
+    });
     connection.onclose((error) => {
       state.signalRStatus = "closed";
+      if (shouldReportBrowserSignalRError(error)) registerReconnectAttempt("浏览器 SignalR", error || new Error("浏览器 SignalR 已断开"));
       log("SignalR closed", { error: error?.message || "" });
     });
     connection.onreconnected((connectionId) => {
       state.signalRStatus = "connected";
+      clearReconnectState("browser-signalr");
       log("SignalR reconnected", { connectionId });
       registerSignalRUser(connection).catch((error) => log("SignalR register after reconnect failed", { error: error.message }));
     });
@@ -2831,12 +2864,16 @@ async function ensureSignalRConnection() {
     state.signalRUrl = targetUrl;
     await registerSignalRUser(connection);
     state.signalRStatus = "connected";
+    clearReconnectState("browser-signalr");
     log("SignalR connected", { url: targetUrl, accountId });
     return connection;
   })();
 
   try {
     return await state.signalRConnecting;
+  } catch (error) {
+    if (shouldReportBrowserSignalRError(error)) registerReconnectAttempt("浏览器 SignalR", error);
+    throw error;
   } finally {
     state.signalRConnecting = null;
   }
@@ -2899,6 +2936,7 @@ async function ensureServerSignalROnline(options = {}) {
     state.serverSignalRStatus = "connected";
     state.serverSignalRLastRegisteredAt = Date.now();
     state.serverSignalRResolvedApiBase = payload?.resolvedApiBase || "";
+    clearReconnectState("server-signalr");
     log("server SignalR online registered", {
       accountId,
       resolvedApiBase: state.serverSignalRResolvedApiBase,
@@ -2911,6 +2949,7 @@ async function ensureServerSignalROnline(options = {}) {
     return await state.serverSignalRConnecting;
   } catch (error) {
     state.serverSignalRStatus = "error";
+    registerReconnectAttempt("服务端 SignalR", error);
     throw error;
   } finally {
     state.serverSignalRConnecting = null;
@@ -3112,10 +3151,109 @@ function showWorkbench() {
 
 function showLogin() {
   stopAutoRefresh();
+  clearReconnectState("login");
   stopSignalRConnection().catch((error) => log("SignalR stop on login view failed", { error: error.message }));
   el.workbenchView.classList.add("is-hidden");
   el.loginView.classList.remove("is-hidden");
   setMobilePanel("list");
+}
+
+function isWorkbenchActive() {
+  return Boolean(el.workbenchView && !el.workbenchView.classList.contains("is-hidden"));
+}
+
+function formatReconnectError(error) {
+  const message = String(error?.message || error || "连接失败").trim();
+  return message.replace(/\s+/g, " ").slice(0, 180);
+}
+
+function startReconnectTimer() {
+  if (state.reconnect.timer) return;
+  state.reconnect.timer = window.setInterval(renderReconnectDialog, 1000);
+}
+
+function stopReconnectTimer() {
+  if (state.reconnect.timer) window.clearInterval(state.reconnect.timer);
+  state.reconnect.timer = null;
+}
+
+function registerReconnectAttempt(source, error) {
+  if (!isWorkbenchActive() || state.clientPaused) return;
+  const now = Date.now();
+  if (!state.reconnect.visible) {
+    state.reconnect.visible = true;
+    state.reconnect.startedAt = now;
+    state.reconnect.deadlineAt = now + RECONNECT_LOGIN_REDIRECT_MS;
+    state.reconnect.attempt = 0;
+    state.reconnect.logs = [];
+  }
+
+  const attempt = state.reconnect.attempt + 1;
+  const message = formatReconnectError(error);
+  state.reconnect.attempt = attempt;
+  state.reconnect.lastSource = source;
+  state.reconnect.lastError = message;
+  state.reconnect.logs.unshift({
+    id: `${now}-${attempt}`,
+    attempt,
+    source,
+    message,
+    time: new Date(now).toLocaleTimeString()
+  });
+  state.reconnect.logs = state.reconnect.logs.slice(0, RECONNECT_LOG_LIMIT);
+  state.apiStatus = "重连中";
+  updateConnectionState(true);
+  startReconnectTimer();
+  renderReconnectDialog();
+}
+
+function clearReconnectState(reason = "") {
+  if (!state.reconnect.visible && !state.reconnect.logs.length) return;
+  state.reconnect.visible = false;
+  state.reconnect.startedAt = 0;
+  state.reconnect.deadlineAt = 0;
+  state.reconnect.attempt = 0;
+  state.reconnect.logs = [];
+  state.reconnect.lastSource = "";
+  state.reconnect.lastError = "";
+  stopReconnectTimer();
+  if (el.reconnectOverlay) el.reconnectOverlay.classList.add("is-hidden");
+  if (reason && state.apiStatus === "重连中") {
+    state.apiStatus = "已连接";
+    updateConnectionState(false);
+  }
+}
+
+function renderReconnectDialog() {
+  if (!el.reconnectOverlay || !state.reconnect.visible) return;
+  const remaining = Math.max(0, Math.ceil((Number(state.reconnect.deadlineAt || 0) - Date.now()) / 1000));
+  if (remaining <= 0) {
+    toast("重连超时，已返回登录页，请重新连接。", true);
+    showLogin();
+    return;
+  }
+
+  el.reconnectOverlay.classList.remove("is-hidden");
+  el.reconnectTitle.textContent = `正在重新连接...（${remaining}秒后跳转到登录页）`;
+  el.reconnectSubtitle.textContent = state.reconnect.lastSource
+    ? `${state.reconnect.lastSource}连接异常，正在等待自动恢复`
+    : "正在恢复客服在线状态";
+  el.reconnectStateBadge.textContent = `第 ${state.reconnect.attempt || 1} 次`;
+  el.reconnectLog.innerHTML = state.reconnect.logs.map((item) => `
+    <li>
+      <span class="reconnect-dot" aria-hidden="true"></span>
+      <div>
+        <strong>第 ${escapeHtml(item.attempt)} 次尝试重连...</strong>
+        <p>${escapeHtml(item.source)}失败：${escapeHtml(item.message)}</p>
+        <small>${escapeHtml(item.time)}</small>
+      </div>
+    </li>
+  `).join("");
+}
+
+function handleReconnectManualLogin() {
+  toast("已切回登录页，请重新连接服务端。", true);
+  showLogin();
 }
 
 function updateConnectionState(failed) {
