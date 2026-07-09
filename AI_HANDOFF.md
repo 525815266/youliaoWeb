@@ -4421,3 +4421,44 @@ Important:
 - Secondary history count is low because it is a new database. Its guard threshold is intentionally `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT=0`.
 - Do not deploy only `5177` unless the user explicitly asks for a single target. Default should be `deploy-fnos-web-all.py`.
 - Do not mix primary and secondary service directories or API ports. Primary uses `18080` + `/vol1/1000/Docker/youchat`; secondary uses `18082` + `/vol1/1000/Docker/youchat-2`.
+
+## 2026-07-09 Handoff: Conversation Tab History Count Flashed Then Reset To 0
+
+User report:
+
+- Left conversation tabs showed `历史 (0)` while real history count was around `5886/5887`.
+- Clicking `历史` briefly showed the real count, then it snapped back to `0`.
+
+Root cause:
+
+- `loadContacts()` used the global `state.listTab` after async requests returned.
+- A stale request started under `current` could finish after the user switched to `history`, then write the current-list total into the history tab.
+- Dynamic append / viewport-fill requests could also downgrade known history total to `0` if the response was ambiguous or empty.
+
+Fix in `public/app.js`:
+
+- Added `contactListLoadToken`.
+- `loadContacts()` now captures:
+  - `requestedTab`
+  - `loadToken`
+- If a response returns after the active tab changed or a newer list request started, it is ignored and logged:
+  - `ignored stale contact list response`
+  - `ignored stale contact list failure`
+- Count/list writes now use `requestedTab`, not the mutable global `state.listTab`.
+- Added:
+  - `getKnownListTotal(tab)`
+  - `shouldPreserveKnownListTotal(tab, result, nextTotal, mode)`
+- For `history`, once a real known total exists, append/count requests with ambiguous `0` cannot overwrite it.
+
+Verified:
+
+- `npm run check` passed.
+- Deployed both Web stacks through `scripts/deploy-fnos-web-all.py`.
+- `5177/app.js` and `5178/app.js` both contain the new stale-response and known-total guards.
+- `5177/health` and `5178/health` are OK.
+- Primary backend history probe returned `total=5887`.
+
+Do not regress:
+
+- Any async contact-list request that writes tab-specific state needs a request-time tab snapshot or token.
+- Do not write history counts from append/auto-fill empty responses over an already-known total.

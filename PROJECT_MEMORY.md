@@ -7256,3 +7256,51 @@ python .\scripts\deploy-fnos-web.py
 - 第二套 Web 的数据库保护阈值是 `0`，不要套用主库 `1000`，否则新库历史少会被误判异常。
 - 主套和第二套的 Web 代码应保持一致，差异只应存在于 `.env`、数据目录、配置目录和后端服务端目录。
 - 如果第二套新消息仍进入留言，优先确认 `5178/local/signalr/online` 能连到 `18082/chathub`，不要拿主套 `18080` 的结果代替。
+
+## 2026-07-09 会话 tab 历史计数瞬间归零修复
+
+现象：
+
+- 左侧会话 tab 中，“历史”未点击时显示 `0`。
+- 点击“历史”后会短暂显示真实数量，例如 `5886/5887`，随后又瞬间变回 `0`。
+
+原因：
+
+- `loadContacts()` 发起请求时没有固定本次请求对应的 tab。
+- 如果用户切到“历史”时，之前“当前”列表的自动刷新请求刚好返回，旧请求会使用最新的 `state.listTab=history` 写入结果。
+- 于是“当前”接口返回的 `0/1` 可能被写到 `history` 的计数里，造成历史计数闪一下后归零。
+- 另外历史列表自动追加页、自动补满视口时，如果接口偶发空结果，也不应该覆盖已经拿到的真实历史总数。
+
+本次修改：
+
+- `public/app.js`
+  - 新增 `contactListLoadToken`。
+  - `loadContacts()` 开始时保存：
+    - `requestedTab`
+    - `loadToken`
+  - 请求返回后如果 `requestedTab !== state.listTab` 或 token 已不是最新，直接忽略该旧响应，只写调试日志：
+    - `ignored stale contact list response`
+    - `ignored stale contact list failure`
+  - 所有列表计数写入改为使用 `requestedTab`，不再用可能已经变化的 `state.listTab`。
+  - 新增：
+    - `getKnownListTotal(tab)`
+    - `shouldPreserveKnownListTotal(tab, result, nextTotal, mode)`
+  - 历史已有真实总数时，追加页或可疑空响应不能把历史总数降成 `0`。
+
+验证：
+
+- `npm run check` 通过。
+- `scripts/deploy-fnos-web-all.py` 已部署主套和第二套 Web。
+- 线上 `app.js` 检查：
+  - `5177/app.js` 包含 `ignored stale contact list response` 和 `shouldPreserveKnownListTotal`。
+  - `5178/app.js` 包含同样修复。
+- 健康检查：
+  - `5177/health` OK，`apiBase=http://host.docker.internal:18080/api`。
+  - `5178/health` OK，`apiBase=http://host.docker.internal:18082/api`。
+- 主服务端历史真实数量：
+  - `POST /api/Contact/GetContactList(isHistory=true,pageIndex=1,pageSize=20)` 返回 `total=5887`。
+
+后续注意：
+
+- 会话列表这类接口是异步并发的，切 tab、自动刷新、动态加载更多会同时发生。以后所有会写列表状态的请求都要带“请求时 tab 快照”或 token，不能用返回时的全局 `state.listTab` 直接写。
+- 历史计数是全局总数，不能被动态加载下一页的空结果覆盖。

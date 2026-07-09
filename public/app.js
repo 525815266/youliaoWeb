@@ -587,6 +587,7 @@ const state = {
 const el = {};
 let refreshTimer = null;
 let scrollRequestId = 0;
+let contactListLoadToken = 0;
 let withdrawRiskScanTimer = null;
 let withdrawRiskScanToken = 0;
 let aiSettingsSnapshot = null;
@@ -3587,6 +3588,20 @@ function getContactListPayloadTotal(payload, contacts = getRecords(payload)) {
   return hasZeroDataPayload(payload) ? 0 : contacts.length;
 }
 
+function getKnownListTotal(tab) {
+  return Math.max(
+    Number(state.listServerCounts?.[tab] || 0),
+    Number(state.listCounts?.[tab] || 0)
+  );
+}
+
+function shouldPreserveKnownListTotal(tab, result, nextTotal, mode = "replace") {
+  if (tab !== "history" || Number(nextTotal || 0) !== 0) return false;
+  const knownTotal = getKnownListTotal(tab);
+  if (knownTotal <= 0) return false;
+  return mode !== "replace" || Boolean(result?.isZeroData) || result?.explicitTotal === null;
+}
+
 function isUsefulContactListResult(result) {
   return Boolean(result?.contacts?.length) || Number(result?.explicitTotal || 0) > 0;
 }
@@ -3671,14 +3686,19 @@ async function loadContactCounts() {
       return;
     }
     const normalizedTotal = Math.max(0, Number(data.total || 0));
-    state.listServerCounts[tab] = normalizedTotal;
+    const nextTotal = shouldPreserveKnownListTotal(tab, data, normalizedTotal, "count")
+      ? getKnownListTotal(tab)
+      : normalizedTotal;
+    state.listServerCounts[tab] = nextTotal;
     state.listCountSources[tab] = data.source || "server";
-    state.listCounts[tab] = normalizedTotal;
+    state.listCounts[tab] = nextTotal;
   });
   renderConversationTabs();
 }
 
 async function loadContacts(options = {}) {
+  const requestedTab = state.listTab;
+  const loadToken = ++contactListLoadToken;
   state.contactListLoading = true;
   try {
     await ensureContactListAccountId();
@@ -3695,7 +3715,7 @@ async function loadContacts(options = {}) {
     const previousHistoryScrollTop = previousHistoryList?.scrollTop || 0;
     const previousHistoryWasNearBottom = isNearBottom(previousHistoryList);
     const preserveScroll = Boolean(options.preserveScroll);
-    const result = await fetchContactListWithFallback(state.listTab, {
+    const result = await fetchContactListWithFallback(requestedTab, {
       pageIndex: page,
       pageSize: options.pageSize || CONTACT_LIST_PAGE_SIZE,
       keyWord: options.keyWord,
@@ -3703,15 +3723,27 @@ async function loadContacts(options = {}) {
       omitAccountId: options.omitAccountId,
       accountIdOverride: options.accountIdOverride
     });
+    if (loadToken !== contactListLoadToken || requestedTab !== state.listTab) {
+      log("ignored stale contact list response", {
+        requestedTab,
+        activeTab: state.listTab,
+        mode,
+        page
+      });
+      return;
+    }
     let contacts = result.contacts;
-    const serverTotal = Math.max(0, Number(result.total || 0));
-    state.listServerCounts[state.listTab] = serverTotal;
-    state.listCountSources[state.listTab] = result.source || "server";
+    const rawServerTotal = Math.max(0, Number(result.total || 0));
+    const serverTotal = shouldPreserveKnownListTotal(requestedTab, result, rawServerTotal, mode)
+      ? getKnownListTotal(requestedTab)
+      : rawServerTotal;
+    state.listServerCounts[requestedTab] = serverTotal;
+    state.listCountSources[requestedTab] = result.source || "server";
     let locallyFiltered = false;
-    if (state.listTab !== "history") {
+    if (requestedTab !== "history") {
       const beforeFilterCount = contacts.length;
-      contacts = filterLocallyClearedContacts(state.listTab, contacts);
-      locallyFiltered = contacts.length !== beforeFilterCount || shouldKeepListLocallyCleared(state.listTab);
+      contacts = filterLocallyClearedContacts(requestedTab, contacts);
+      locallyFiltered = contacts.length !== beforeFilterCount || shouldKeepListLocallyCleared(requestedTab);
     }
 
     if (shouldPreserveEmptyContactResult(result, contacts, options)) {
@@ -3745,13 +3777,13 @@ async function loadContacts(options = {}) {
       previousCount,
       nextCount: nextContacts.length
     });
-    state.totalContacts = state.listTab === "history"
+    state.totalContacts = requestedTab === "history"
       ? Math.max(nextContacts.length, serverTotal)
       : locallyFiltered
       ? nextContacts.length
       : Math.max(nextContacts.length, serverTotal);
-    state.listCounts[state.listTab] = state.totalContacts || state.contacts.length;
-    state.listUnreadCounts[state.listTab] = sumContactUnread(state.contacts);
+    state.listCounts[requestedTab] = state.totalContacts || state.contacts.length;
+    state.listUnreadCounts[requestedTab] = sumContactUnread(state.contacts);
     const previousActiveAvatar = getContactAvatar(state.activeContact);
     state.activeContact = state.contacts.find((contact) => String(getContactId(contact)) === String(selectedId)) || state.contacts[0] || null;
     const activeChanged = String(selectedId || "") !== String(getContactId(state.activeContact) || "");
@@ -3786,8 +3818,16 @@ async function loadContacts(options = {}) {
       scheduleContactListViewportFill();
     }
   } catch (error) {
+    if (loadToken !== contactListLoadToken || requestedTab !== state.listTab) {
+      log("ignored stale contact list failure", {
+        requestedTab,
+        activeTab: state.listTab,
+        error: error.message
+      });
+      return;
+    }
     if (options.preserveScroll && state.contacts.length) {
-      state.listCountSources[state.listTab] = "stale";
+      state.listCountSources[requestedTab] = "stale";
       renderConversationTabs();
       renderContacts();
       log("contact refresh preserved existing list after failure", { error: error.message });
@@ -3801,7 +3841,7 @@ async function loadContacts(options = {}) {
     renderAll();
     toast(`会话接口失败：${error.message}`, true);
   } finally {
-    state.contactListLoading = false;
+    if (loadToken === contactListLoadToken) state.contactListLoading = false;
   }
 }
 
