@@ -6162,7 +6162,7 @@ textarea:focus-visible {
   .ai-suggestion-card {
     grid-template-columns: 1fr;
     gap: 4px;
-    max-height: 152px;
+    max-height: 160px;
     padding: 6px 9px 7px;
   }
 
@@ -6174,7 +6174,7 @@ textarea:focus-visible {
   .ai-suggestion-options {
     width: 100%;
     max-width: 100%;
-    max-height: 108px;
+    max-height: 112px;
   }
 
   .ai-suggestion-option {
@@ -6498,7 +6498,7 @@ textarea:focus-visible {
 
   .ai-suggestion-card {
     grid-template-columns: 1fr;
-    max-height: 150px;
+    max-height: 160px;
     padding: 6px 9px 7px;
   }
 
@@ -6510,7 +6510,7 @@ textarea:focus-visible {
   .ai-suggestion-options {
     width: 100%;
     max-width: 100%;
-    max-height: 106px;
+    max-height: 112px;
   }
 
   .ai-suggestion-option {
@@ -6943,7 +6943,7 @@ textarea:focus-visible {
 
   .ai-suggestion-card {
     grid-template-columns: minmax(0, 1fr);
-    max-height: 150px;
+    max-height: 160px;
     padding: 6px 8px 7px;
   }
 
@@ -6952,7 +6952,7 @@ textarea:focus-visible {
   }
 
   .ai-suggestion-options {
-    max-height: 106px;
+    max-height: 112px;
   }
 
   .ai-suggestion-option {

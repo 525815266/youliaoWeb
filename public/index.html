@@ -25,7 +25,7 @@
             </label>
             <label class="settings-toggle">
               <input id="skillAutoReply" type="checkbox" />
-              <span>开启 skill 自动回复</span>
+              <span>开启技能自动回复</span>
             </label>
             <label class="settings-toggle">
               <input id="skillAutoLearn" type="checkbox" />
@@ -164,7 +164,7 @@
             <div id="clientSettingsMenu" class="client-settings-menu is-hidden" role="menu" aria-label="客户端设置菜单">
               <button type="button" role="menuitem" data-client-menu="settings"><i class="native-icon client-icon-settings" aria-hidden="true"></i><span>设置</span></button>
               <button type="button" role="menuitem" data-client-menu="database"><i class="native-icon client-icon-database" aria-hidden="true"></i><span>数据库管理</span></button>
-              <button type="button" role="menuitem" data-client-menu="skill-training"><i class="native-icon bfi-edit" aria-hidden="true"></i><span>skill 训练</span></button>
+              <button type="button" role="menuitem" data-client-menu="skill-training"><i class="native-icon bfi-edit" aria-hidden="true"></i><span>技能训练</span></button>
               <button type="button" role="menuitem" data-client-menu="pause"><i class="native-icon client-icon-pause" aria-hidden="true"></i><span id="clientPauseMenuText">挂起</span></button>
               <button type="button" role="menuitem" data-client-menu="logout"><i class="native-icon client-icon-logout" aria-hidden="true"></i><span>退出登录</span></button>
               <button type="button" role="menuitem" data-client-menu="close"><i class="native-icon bfi-close" aria-hidden="true"></i><span>关闭程序</span></button>
@@ -252,7 +252,7 @@
               <div class="composer-link-group" aria-label="快捷面板">
                 <button id="quickReplyTool" class="tool-button" type="button">快捷回复</button>
                 <button id="orderTool" class="tool-button" type="button">查订单</button>
-                <button id="skillReplyTool" class="tool-button" type="button">skill 回复</button>
+                <button id="skillReplyTool" class="tool-button" type="button">技能回复</button>
                 <button id="aiSuggest" class="tool-button strong" type="button">AI 推荐</button>
                 <button id="optimizeDraft" class="tool-button optimize-draft-button" type="button">优化文案</button>
               </div>
@@ -276,8 +276,8 @@
                 <button id="sendText" class="send-button" type="button">发送</button>
                 <label class="send-mode-select" title="发送快捷键">
                   <select id="sendMode" aria-label="发送快捷键">
-                    <option value="enter">Enter 发送</option>
-                    <option value="ctrl-enter">Ctrl+Enter 发送</option>
+                    <option value="enter">回车发送</option>
+                    <option value="ctrl-enter">Ctrl+回车发送</option>
                   </select>
                 </label>
               </div>
@@ -293,7 +293,7 @@
           <div class="tool-tabs" role="tablist" aria-label="右侧工具栏">
             <button class="tool-tab is-active" data-tool-tab="user" type="button">用户</button>
             <button class="tool-tab" data-tool-tab="quick" type="button">快捷回复</button>
-            <button class="tool-tab" data-tool-tab="skill" type="button">skill回复</button>
+            <button class="tool-tab" data-tool-tab="skill" type="button">技能回复</button>
             <button class="tool-tab" data-tool-tab="order" type="button">订单</button>
             <button class="tool-tab" data-tool-tab="detail" type="button">明细</button>
             <button class="tool-tab" data-tool-tab="history" type="button">聊天记录</button>

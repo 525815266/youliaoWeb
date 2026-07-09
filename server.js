@@ -3318,6 +3318,143 @@ async function ensureServerSignalRConnection(apiBase, accountId) {
   }
 }
 
+function getSignalRConnectionStatus(apiBase, accountId, connection = null) {
+  const normalizedAccountId = String(accountId || "").trim();
+  const key = getSignalRConnectionKey(apiBase, normalizedAccountId);
+  const cached = signalRHubConnections.get(key);
+  const activeConnection = connection || cached?.connection || null;
+  return {
+    state: activeConnection?.state || "Disconnected",
+    hubUrl: cached?.hubUrl || buildSignalRHubUrl(apiBase, normalizedAccountId),
+    lastUsedAt: cached?.lastUsedAt ? new Date(cached.lastUsedAt).toISOString() : ""
+  };
+}
+
+async function handleSignalROnline(req, res) {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { success: false, message: "Method not allowed" });
+    return;
+  }
+
+  const body = await readBody(req);
+  const payload = parseRequestPayload(body, req);
+  const apiBase = normalizeApiBase(payload.apiBase || DEFAULT_API_BASE);
+  const accountId = String(payload.accountId || "").trim();
+
+  if (!accountId) {
+    sendJson(res, 400, { success: false, message: "SignalR accountId is required" });
+    return;
+  }
+
+  const attempts = [];
+  for (const candidateBase of getApiBaseCandidates(apiBase)) {
+    try {
+      const connection = await ensureServerSignalRConnection(candidateBase, accountId);
+      const status = getSignalRConnectionStatus(candidateBase, accountId, connection);
+      sendJson(res, 200, {
+        success: true,
+        source: "node-signalr-online",
+        apiBase,
+        resolvedApiBase: candidateBase,
+        hubUrl: status.hubUrl,
+        accountId,
+        state: status.state,
+        lastUsedAt: status.lastUsedAt,
+        failedAttempts: attempts
+      });
+      return;
+    } catch (error) {
+      attempts.push({
+        apiBase: candidateBase,
+        hubUrl: buildSignalRHubUrl(candidateBase, accountId),
+        error: error.message
+      });
+    }
+  }
+
+  sendJson(res, 502, {
+    success: false,
+    message: "SignalR online registration failed",
+    error: attempts.map((item) => `${item.apiBase}: ${item.error}`).join("; "),
+    apiBase,
+    hubUrl: buildSignalRHubUrl(apiBase, accountId),
+    accountId,
+    attempts
+  });
+}
+
+async function handleSignalROffline(req, res) {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { success: false, message: "Method not allowed" });
+    return;
+  }
+
+  const body = await readBody(req);
+  const payload = parseRequestPayload(body, req);
+  const apiBase = normalizeApiBase(payload.apiBase || DEFAULT_API_BASE);
+  const accountId = String(payload.accountId || "").trim();
+
+  if (!accountId) {
+    sendJson(res, 400, { success: false, message: "SignalR accountId is required" });
+    return;
+  }
+
+  const closed = [];
+  const attempts = [];
+  for (const candidateBase of getApiBaseCandidates(apiBase)) {
+    const key = getSignalRConnectionKey(candidateBase, accountId);
+    const cached = signalRHubConnections.get(key);
+    const connection = cached?.connection;
+    if (!connection) {
+      closed.push({ apiBase: candidateBase, state: "missing" });
+      continue;
+    }
+
+    try {
+      if (connection.state === signalR.HubConnectionState.Connected) {
+        await withTimeout(
+          connection.invoke("UnRegisterUser", accountId),
+          SIGNALR_START_TIMEOUT_MS,
+          "SignalR UnRegisterUser"
+        );
+      }
+      if (connection.state !== signalR.HubConnectionState.Disconnected) {
+        await connection.stop();
+      }
+      signalRHubConnections.delete(key);
+      closed.push({ apiBase: candidateBase, state: "closed" });
+    } catch (error) {
+      signalRHubConnections.delete(key);
+      attempts.push({
+        apiBase: candidateBase,
+        hubUrl: buildSignalRHubUrl(candidateBase, accountId),
+        error: error.message
+      });
+    }
+  }
+
+  if (attempts.length && !closed.some((item) => item.state === "closed")) {
+    sendJson(res, 502, {
+      success: false,
+      message: "SignalR offline unregister failed",
+      error: attempts.map((item) => `${item.apiBase}: ${item.error}`).join("; "),
+      apiBase,
+      accountId,
+      attempts
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    success: true,
+    source: "node-signalr-offline",
+    apiBase,
+    accountId,
+    closed,
+    failedAttempts: attempts
+  });
+}
+
 async function handleSignalRConsume(req, res) {
   if (req.method !== "POST") {
     sendJson(res, 405, { success: false, message: "Method not allowed" });
@@ -4119,6 +4256,16 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url.startsWith("/local/media-proxy")) {
     await handleMediaProxy(req, res);
+    return;
+  }
+
+  if (req.url.startsWith("/local/signalr/online")) {
+    await handleSignalROnline(req, res);
+    return;
+  }
+
+  if (req.url.startsWith("/local/signalr/offline")) {
+    await handleSignalROffline(req, res);
     return;
   }
 

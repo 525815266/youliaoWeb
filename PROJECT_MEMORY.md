@@ -7111,3 +7111,67 @@ echo '<sudo_password>' | sudo -S docker restart youchat-autologin
 - 如果 `GetOptions`、联系人、历史数量正常，但 `GetAccountInfo.userId=0` 或 `Summary/LogIn` 返回“悠聊未登录”，优先检查 `docker-control/autologin.pause`。
 - 不要把这种情况误判为数据库崩溃或 Web 客户端问题。
 - `POST /api/System/CheckLoginStatus` 这次恢复后仍超时，且此前文档已记录它单独可能不稳定，暂时不要用它作为在线判断核心。
+
+## 2026-07-09 Web 客服真实在线注册修复
+
+现象：
+
+- 官方 Windows 客户端在线时，新消息会进入“当前”会话列表。
+- 只打开 Web 客服端时，新消息更容易进入“留言”。
+- 这说明 Web 端能轮询接口、读取数据，但没有被悠聊分配系统稳定识别为“在线客服”。
+
+原因判断：
+
+- Web 前端原来只在浏览器中尝试连接 SignalR：
+  - `/chathub?mode=client&userName=<accountId>`
+  - `RegisterUser(accountId, false, false, 0)`
+- 公网 HTTPS / Lucky 反代页面不能直接连接内网 HTTP SignalR，浏览器侧会主动跳过。
+- 现有 Node SignalR 桥只服务于 `/local/signalr/consume` 清红点，只有清红点时才懒加载注册，不能代表 Web 登录后已经在线。
+
+本次修改：
+
+- `server.js`
+  - 新增 `POST /local/signalr/online`
+    - 由 Node 服务连接真实 `/chathub`。
+    - 调用 `RegisterUser(accountId, false, false, 0)`。
+    - 返回 `resolvedApiBase`、`hubUrl`、`state`、失败候选地址，方便排查 Docker 内网映射。
+  - 新增 `POST /local/signalr/offline`
+    - 调用 `UnRegisterUser(accountId)`。
+    - 停止并清理 Node 侧缓存的 SignalR 连接。
+- `public/app.js`
+  - 登录连接成功并解析出联系人列表 `accountId` 后，先调用 `/local/signalr/online`。
+  - 自动刷新循环中每 60 秒轻量保活一次，防止 hub 断线或容器重启后不再注册。
+  - 暂停/退出 Web 工作台时调用 `/local/signalr/offline`，避免 Docker Web 服务无人值守时仍占用在线客服身份。
+  - 浏览器 SignalR 仍保留为本地 HTTP 场景补充，Node 桥是公网/容器场景主路径。
+
+验证：
+
+- `npm run check` 通过。
+- 用临时端口启动当前代码：
+
+```powershell
+$env:PORT='5199'; node server.js
+```
+
+- 在线注册测试：
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:5199/local/signalr/online `
+  -ContentType 'application/json' `
+  -Body '{"apiBase":"http://192.168.9.83:18080/api","accountId":"2"}'
+```
+
+- 返回：
+  - `success=true`
+  - `source=node-signalr-online`
+  - `hubUrl=http://192.168.9.83:18080/chathub?mode=client&userName=2`
+  - `state=Connected`
+- 离线注销测试：
+  - `POST /local/signalr/offline`
+  - 返回 `success=true`、`state=closed`。
+
+后续注意：
+
+- 当前已验证 Web 能注册到 hub，但“新消息是否完全从留言进入当前”还需要实测一条真实新消息。
+- 如果仍进入留言，不要改前端列表假搬运，应继续对比官方 Electron 客户端是否还调用了额外在线/分配/心跳接口。
+- 联系人列表必须继续使用短账号 `accountId=2`，不要用商户长 `userId=1556504756803862529` 注册 hub。

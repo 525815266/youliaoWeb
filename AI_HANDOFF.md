@@ -4283,3 +4283,69 @@ Do not regress:
 
 - When `GetOptions` and contact/history counts work but `GetAccountInfo.userId=0`, do not treat it as SQLite/database corruption. Check `docker-control/autologin.pause` first.
 - `POST /api/System/CheckLoginStatus` still timed out after recovery; previous notes already say this endpoint can be unreliable. Do not use it as the main online-status probe.
+
+## 2026-07-09 Handoff: Web Client Must Register Online Through Node SignalR Bridge
+
+User report:
+
+- Official Windows client online: incoming messages are routed into `当前`.
+- Only Web client open: incoming messages land in `留言`.
+- Interpretation: Web was reading real APIs but was not reliably registered as an online customer-service client for YouChat routing.
+
+Key implementation:
+
+- `server.js`
+  - Added `POST /local/signalr/online`.
+    - Reads `{ apiBase, accountId }`.
+    - Tries `getApiBaseCandidates(apiBase)` so Docker can use `host.docker.internal` when needed.
+    - Calls `ensureServerSignalRConnection(candidateBase, accountId)`.
+    - That starts `/chathub?mode=client&userName=<accountId>` and invokes `RegisterUser(accountId, false, false, 0)`.
+    - Responds with `source=node-signalr-online`, `resolvedApiBase`, `hubUrl`, `state`, and failed attempts.
+  - Added `POST /local/signalr/offline`.
+    - Invokes `UnRegisterUser(accountId)`.
+    - Stops and removes the cached Node SignalR connection.
+- `public/app.js`
+  - Added server SignalR state fields:
+    - `serverSignalRConnecting`
+    - `serverSignalRStatus`
+    - `serverSignalRKey`
+    - `serverSignalRLastRegisteredAt`
+    - `serverSignalRResolvedApiBase`
+  - Added:
+    - `ensureServerSignalROnline()`
+    - `keepServerSignalROnline()`
+    - `stopServerSignalROnline()`
+  - `connect()` now waits for `keepServerSignalROnline({ force: true })` after `ensureContactListAccountId()`.
+  - `startAutoRefresh()` calls `keepServerSignalROnline()` before polling contacts/messages; throttle is `SERVER_SIGNALR_ONLINE_REFRESH_MS = 60000`.
+  - pause/resume:
+    - resume calls `keepServerSignalROnline({ force: true })`;
+    - pause/logout route through `stopSignalRConnection()`, which now calls `/local/signalr/offline`.
+
+Verified locally:
+
+- `npm run check` passed.
+- Temporary current-code server:
+
+```powershell
+$env:PORT='5199'; node server.js
+```
+
+- `POST http://127.0.0.1:5199/local/signalr/online` with:
+
+```json
+{"apiBase":"http://192.168.9.83:18080/api","accountId":"2"}
+```
+
+- Returned:
+  - `success=true`
+  - `source=node-signalr-online`
+  - `resolvedApiBase=http://192.168.9.83:18080/api`
+  - `hubUrl=http://192.168.9.83:18080/chathub?mode=client&userName=2`
+  - `state=Connected`
+- `/local/signalr/offline` returned `success=true` with `state=closed`.
+
+Do not regress:
+
+- The hub registration account is the short contact-list account id (`2` for `Boom666`), not merchant long user id `1556504756803862529`.
+- Do not “fix”留言/current routing by locally moving records between tabs; routing must be solved by real online registration and, if needed, any additional official-client distribution endpoint.
+- Browser SignalR is intentionally not the primary path for HTTPS public pages; Node bridge must remain first-class for Docker/Lucky deployments.

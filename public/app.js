@@ -24,6 +24,7 @@ const IMAGE_UPLOAD_JPEG_QUALITY = 0.86;
 const POST_SEND_REFRESH_DELAY_MS = 80;
 const SIGNALR_KEEP_ALIVE_MS = 120000;
 const SIGNALR_START_TIMEOUT_MS = 12000;
+const SERVER_SIGNALR_ONLINE_REFRESH_MS = 60000;
 const AI_PRESETS = {
   sub2: {
     label: "sub2 中转",
@@ -574,6 +575,11 @@ const state = {
   signalRConnecting: null,
   signalRStatus: "idle",
   signalRUrl: "",
+  serverSignalRConnecting: null,
+  serverSignalRStatus: "idle",
+  serverSignalRKey: "",
+  serverSignalRLastRegisteredAt: 0,
+  serverSignalRResolvedApiBase: "",
   readContactState: loadReadContactState(),
   logLines: []
 };
@@ -891,7 +897,7 @@ function hydrateComposerFields() {
 }
 
 function updateComposerStatus() {
-  const shortcut = state.sendMode === "ctrl-enter" ? "Ctrl+Enter 发送，Enter 换行" : "Enter 发送，Ctrl+Enter 换行";
+  const shortcut = state.sendMode === "ctrl-enter" ? "Ctrl+回车发送，回车换行" : "回车发送，Ctrl+回车换行";
   const detail = state.draftImages.length ? `已附加 ${state.draftImages.length} 张图，${shortcut}` : shortcut;
   if (el.sendMode) el.sendMode.value = state.sendMode;
   const status = document.querySelector(".composer-status");
@@ -1023,6 +1029,7 @@ function toggleClientPause() {
     toast("已挂起：自动刷新已暂停。");
   } else {
     startAutoRefresh();
+    keepServerSignalROnline({ force: true }).catch((error) => log("server SignalR resume failed", { error: error.message }));
     ensureSignalRConnection().catch((error) => log("SignalR resume failed", { error: error.message }));
     toast("已恢复：自动刷新重新开启。");
   }
@@ -2842,8 +2849,124 @@ async function registerSignalRUser(connection = state.signalRConnection) {
   log("SignalR user registered", { accountId, mode: 0 });
 }
 
+function buildServerSignalRKey(accountId = getSignalRAccountId()) {
+  return `${normalizeApiBase(state.apiBase || DEFAULT_API_BASE)}::${String(accountId || "").trim()}`;
+}
+
+async function ensureServerSignalROnline(options = {}) {
+  const accountId = getSignalRAccountId();
+  if (!accountId) {
+    throw new Error("missing account id for server SignalR registration");
+  }
+
+  const key = buildServerSignalRKey(accountId);
+  const now = Date.now();
+  if (
+    !options.force &&
+    state.serverSignalRStatus === "connected" &&
+    state.serverSignalRKey === key &&
+    now - Number(state.serverSignalRLastRegisteredAt || 0) < SERVER_SIGNALR_ONLINE_REFRESH_MS
+  ) {
+    return {
+      success: true,
+      cached: true,
+      source: "node-signalr-online",
+      accountId,
+      resolvedApiBase: state.serverSignalRResolvedApiBase
+    };
+  }
+
+  if (state.serverSignalRConnecting && state.serverSignalRKey === key) {
+    return state.serverSignalRConnecting;
+  }
+
+  state.serverSignalRKey = key;
+  state.serverSignalRStatus = "connecting";
+  state.serverSignalRConnecting = (async () => {
+    const response = await fetchWithTimeout("/local/signalr/online", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        apiBase: state.apiBase,
+        accountId
+      })
+    }, SIGNALR_START_TIMEOUT_MS + 3000, "local SignalR online");
+    const payload = parsePayload(await response.text());
+    if (!response.ok || payload?.success === false) {
+      throw new Error(getMessage(payload) || payload?.error || `HTTP ${response.status}`);
+    }
+    state.serverSignalRStatus = "connected";
+    state.serverSignalRLastRegisteredAt = Date.now();
+    state.serverSignalRResolvedApiBase = payload?.resolvedApiBase || "";
+    log("server SignalR online registered", {
+      accountId,
+      resolvedApiBase: state.serverSignalRResolvedApiBase,
+      state: payload?.state || ""
+    });
+    return payload;
+  })();
+
+  try {
+    return await state.serverSignalRConnecting;
+  } catch (error) {
+    state.serverSignalRStatus = "error";
+    throw error;
+  } finally {
+    state.serverSignalRConnecting = null;
+  }
+}
+
+async function keepServerSignalROnline(options = {}) {
+  try {
+    return await ensureServerSignalROnline(options);
+  } catch (error) {
+    log("server SignalR online failed", {
+      error: error.message,
+      accountId: getSignalRAccountId(),
+      apiBase: state.apiBase
+    });
+    return null;
+  }
+}
+
+async function stopServerSignalROnline() {
+  const accountId = getSignalRAccountId();
+  const shouldNotifyServer = Boolean(accountId && state.serverSignalRKey);
+  state.serverSignalRConnecting = null;
+  state.serverSignalRStatus = "idle";
+  state.serverSignalRKey = "";
+  state.serverSignalRLastRegisteredAt = 0;
+  state.serverSignalRResolvedApiBase = "";
+  if (!shouldNotifyServer) return null;
+
+  try {
+    const response = await fetchWithTimeout("/local/signalr/offline", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        apiBase: state.apiBase,
+        accountId
+      })
+    }, SIGNALR_START_TIMEOUT_MS + 3000, "local SignalR offline");
+    const payload = parsePayload(await response.text());
+    if (!response.ok || payload?.success === false) {
+      throw new Error(getMessage(payload) || payload?.error || `HTTP ${response.status}`);
+    }
+    log("server SignalR offline unregistered", { accountId });
+    return payload;
+  } catch (error) {
+    log("server SignalR offline failed", {
+      error: error.message,
+      accountId,
+      apiBase: state.apiBase
+    });
+    return null;
+  }
+}
+
 async function stopSignalRConnection() {
   state.signalRConnecting = null;
+  await stopServerSignalROnline();
   const connection = state.signalRConnection;
   state.signalRConnection = null;
   state.signalRUrl = "";
@@ -2918,6 +3041,7 @@ async function connect(event) {
     await loginIfPossible();
     state.accountIdResolved = false;
     await ensureContactListAccountId();
+    await keepServerSignalROnline({ force: true });
     ensureSignalRConnection().catch((error) => log("SignalR connect failed", { error: error.message, url: buildSignalRUrl() }));
     showWorkbench();
     await Promise.all([loadContacts(), loadFaq(), loadFriendRequestBadgeTotals(), loadClientNoticeBadge()]);
@@ -7627,7 +7751,7 @@ async function uploadDraftImagesForSkill() {
     steps.push({
       type: "image",
       url: imageUrl,
-      label: image.name || `skill 图片 ${index + 1}`
+      label: image.name || `技能图片 ${index + 1}`
     });
     await delay(120);
   }
@@ -8055,7 +8179,7 @@ function showSaveSkillModal() {
   const draftImageCount = state.draftImages.length;
   openToolModal({
     type: "save-skill",
-    title: "保存 skill 回复",
+    title: "保存 技能回复",
     confirmText: "保存",
     body: `
       <label class="modal-field">
@@ -8066,7 +8190,7 @@ function showSaveSkillModal() {
         <span>回复内容</span>
         <textarea id="saveSkillContent" rows="6" placeholder="请输入要沉淀的回复话术">${escapeHtml(sourceText.reply)}</textarea>
       </label>
-      <p class="modal-hint">保存后会进入 skill 回复库，后续 AI/skill 推荐会自动使用。${draftImageCount ? `当前草稿里的 ${draftImageCount} 张图片也会上传并保存到这条 skill。` : ""}</p>
+      <p class="modal-hint">保存后会进入 技能回复库，后续 AI/技能推荐会自动使用。${draftImageCount ? `当前草稿里的 ${draftImageCount} 张图片也会上传并保存到这条技能。` : ""}</p>
     `,
     onConfirm: saveSkillFromModal
   });
@@ -8122,7 +8246,7 @@ async function saveSkillFromModal() {
     if (Array.isArray(payload.skills)) state.replySkills = payload.skills;
     closeToolModal();
     if (state.activeTool === "skill") renderToolContent();
-    toast(imageSteps.length ? `已保存到 skill 回复库，并写入 ${imageSteps.length} 张图片。` : "已保存到 skill 回复库。");
+    toast(imageSteps.length ? `已保存到 技能回复库，并写入 ${imageSteps.length} 张图片。` : "已保存到 技能回复库。");
     return true;
   } catch (error) {
     toast(`保存 skill 失败：${error.message}`, true);
@@ -8425,7 +8549,7 @@ async function saveUserRemarkFromModal() {
   }
 }
 
-function renderTagEditor(tags = [], placeholder = "输入后按 Enter 添加标签") {
+function renderTagEditor(tags = [], placeholder = "输入后按回车添加标签") {
   return `
     <div class="user-tag-editor" data-user-tag-editor>
       ${tags.map((tag) => `
@@ -8481,7 +8605,7 @@ function showUserTagsModal() {
         <span>标签</span>
         ${renderTagEditor(getUserNormalTagList(ctx.info))}
       </label>
-      <p class="modal-hint">输入标签后按 Enter 添加，可添加多个标签。</p>
+      <p class="modal-hint">输入标签后按回车添加，可添加多个标签。</p>
     `,
     onConfirm: saveUserTagsFromModal
   });
@@ -8789,7 +8913,7 @@ async function sendSuggestionSteps(suggestion) {
       await learnFromSentSuggestion(suggestion, steps);
       touchActiveContact(getSuggestionTextForComposer(suggestion).slice(0, 80) || "[suggestion]");
       await loadMessages(1, "replace", { forceBottom: true });
-      toast("skill 推荐已发送。");
+      toast("技能推荐已发送。");
     } catch (error) {
       toast(`推荐发送失败：${error.message}`, true);
     }
@@ -9419,7 +9543,7 @@ async function loadReplySkills() {
     log("reply skills loaded", { count: state.replySkills.length });
   } catch (error) {
     state.replySkills = [];
-    toast(`skill 回复库加载失败：${error.message}`, true);
+    toast(`技能回复库加载失败：${error.message}`, true);
   } finally {
     state.replySkillsLoading = false;
     if (state.activeTool === "skill") renderToolContent();
@@ -9434,7 +9558,7 @@ async function saveReplySkills() {
   });
   const payload = await response.json();
   if (!response.ok || payload.success === false) {
-    throw new Error(payload.message || "保存 skill 回复库失败");
+    throw new Error(payload.message || "保存 技能回复库失败");
   }
   state.replySkills = Array.isArray(payload.skills) ? payload.skills : state.replySkills;
 }
@@ -9457,7 +9581,7 @@ function buildSkillSuggestion() {
   if (skill.noReply) {
     return {
       type: "skill",
-      title: `skill：${skill.title}`,
+      title: `技能：${skill.title}`,
       skillId: skill.id,
       noReply: true,
       reason: skill.fallback || "这类消息通常不需要回复。",
@@ -9473,7 +9597,7 @@ function buildSkillSuggestion() {
 
   return {
     type: "skill",
-    title: `skill：${skill.title}`,
+    title: `技能：${skill.title}`,
     skillId: skill.id,
     allowAutoReply: skill.allowAutoReply !== false,
     content: replyProfile?.text || getSkillText(skill),
@@ -10046,13 +10170,13 @@ function renderSkillImageStrip(skillOrSuggestion, options = {}) {
   const visibleImages = images.slice(0, limit);
   const hiddenCount = Math.max(0, images.length - visibleImages.length);
   return `
-    <div class="skill-image-strip" aria-label="skill 图片">
+    <div class="skill-image-strip" aria-label="技能图片">
       ${visibleImages.map((step, index) => {
         const imageUrl = normalizeImageUrl(step.url || step.content);
         const displayImageUrl = getDisplayMediaUrl(imageUrl);
         return `
-          <button class="skill-image-thumb" type="button" data-image-preview="${escapeAttr(imageUrl)}" title="${escapeAttr(step.label || `skill 图片 ${index + 1}`)}">
-            <img src="${escapeAttr(displayImageUrl)}" alt="${escapeAttr(step.label || `skill 图片 ${index + 1}`)}">
+          <button class="skill-image-thumb" type="button" data-image-preview="${escapeAttr(imageUrl)}" title="${escapeAttr(step.label || `技能图片 ${index + 1}`)}">
+            <img src="${escapeAttr(displayImageUrl)}" alt="${escapeAttr(step.label || `技能图片 ${index + 1}`)}">
           </button>
         `;
       }).join("")}
@@ -10777,7 +10901,7 @@ function renderAiSuggestionCard() {
           <p>${escapeHtml(formatSuggestionText(suggestion))}</p>
         </div>
         <div class="ai-suggestion-row-actions">
-          ${suggestion.type === "optimize" && suggestion.skillId ? `<button class="mini-action primary" type="button" data-suggestion-action="update-skill" data-suggestion-index="${index}">更新skill</button>` : ""}
+          ${suggestion.type === "optimize" && suggestion.skillId ? `<button class="mini-action primary" type="button" data-suggestion-action="update-skill" data-suggestion-index="${index}">更新技能</button>` : ""}
           <button class="mini-action" type="button" data-suggestion-action="apply" data-suggestion-index="${index}" ${suggestion.noReply || suggestion.loading ? "disabled" : ""}>采用</button>
           <button class="mini-action" type="button" data-suggestion-action="send" data-suggestion-index="${index}" ${suggestion.noReply || suggestion.loading ? "disabled" : ""}>发送</button>
         </div>
@@ -11314,7 +11438,7 @@ function handleWithdrawRiskSignalClick(event) {
 function getSuggestionPanelTitle(suggestion) {
   if (!suggestion) return "AI 推荐";
   if (suggestion.type === "optimize") return "文字优化";
-  if (suggestion.type === "skill") return "skill 回复";
+  if (suggestion.type === "skill") return "技能回复";
   return "AI 推荐";
 }
 
@@ -11867,7 +11991,7 @@ function renderSkillReplyPanel() {
   return `
     <section class="tool-section skill-section">
       <h3>
-        <span>skill 回复</span>
+        <span>技能回复</span>
         <div class="skill-head-actions">
           <button class="mini-action" type="button" data-action="refresh-skills">刷新</button>
           <button class="mini-action" type="button" data-action="trim-skill-learning">清理学习</button>
@@ -11879,14 +12003,14 @@ function renderSkillReplyPanel() {
       </div>
       <div class="quick-search">
         <input data-skill-keyword value="${escapeAttr(state.skillKeyword)}" placeholder="搜索技能、关键词、话术" />
-        <button type="button" class="icon-search-button" data-action="search-skills" title="搜索 skill" aria-label="搜索 skill"><i class="native-icon bfi-search" aria-hidden="true"></i></button>
+        <button type="button" class="icon-search-button" data-action="search-skills" title="搜索技能" aria-label="搜索技能"><i class="native-icon bfi-search" aria-hidden="true"></i></button>
       </div>
       <div class="skill-summary">
         <span>${escapeHtml(autoText)} / ${escapeHtml(learnText)}</span>
         <span>${escapeHtml(matchText)} / ${state.replySkillsLoading ? "加载中" : `${state.replySkills.length} 个 skill`}</span>
       </div>
       <div class="skill-panel-scroll">
-        <div class="skill-tabs" role="group" aria-label="skill 分类">
+        <div class="skill-tabs" role="group" aria-label="技能分类">
           ${buildSkillCategoryTabs(suggestion).map((item) => `
             <button class="${item.value === state.skillCategory ? "is-active" : ""}" type="button" data-skill-category="${escapeAttr(item.value)}">
               ${escapeHtml(item.label)}
@@ -12205,7 +12329,7 @@ function renderSkillMatchCard(suggestion) {
     <div class="skill-match-card ${suggestion.noReply ? "no-reply" : ""}">
       <div class="skill-match-top">
         <div class="skill-match-head">
-          <strong>${escapeHtml(suggestion.title || "skill 命中")}</strong>
+          <strong>${escapeHtml(suggestion.title || "技能命中")}</strong>
           ${metaTags.length ? `<div class="skill-match-tags">${metaTags.map((item) => `<span class="skill-meta-tag">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
         </div>
         <div class="skill-match-actions">
@@ -12270,7 +12394,7 @@ function renderSkillRow(skill, index, suggestion = null) {
     <article class="skill-row ${skill.enabled === false ? "is-disabled" : ""} ${isMatched ? "is-matched" : ""} ${isDimmed ? "is-dimmed" : ""}">
       <div class="skill-row-aside">
         <span class="quick-index">${isMatched ? "中" : index + 1}</span>
-        <button class="quick-copy" type="button" data-copy="${escapeAttr(content)}" title="复制 skill" aria-label="复制 skill"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>
+        <button class="quick-copy" type="button" data-copy="${escapeAttr(content)}" title="复制技能" aria-label="复制技能"><i class="native-icon bfi-copy" aria-hidden="true"></i></button>
       </div>
       <div class="skill-row-main">
         <div class="skill-row-head">
@@ -13031,7 +13155,7 @@ function getSkillById(id) {
 
 async function replaceReplySkill(nextSkill) {
   const id = String(nextSkill?.id || "");
-  if (!id) throw new Error("缺少 skill id");
+  if (!id) throw new Error("缺少技能编号");
   const index = state.replySkills.findIndex((skill) => String(skill.id) === id);
   if (index < 0) throw new Error("没有找到要更新的 skill");
   const merged = {
@@ -13061,7 +13185,7 @@ function normalizeSkillReplySteps(steps = []) {
       imageSteps.push({
         type: "image",
         url,
-        label: step.label || "skill 图片"
+        label: step.label || "技能图片"
       });
       return;
     }
@@ -13088,7 +13212,7 @@ async function updateSkillFromSuggestion(suggestion) {
     return;
   }
   if (skill.noReply) {
-    toast("无需回复类 skill 不需要更新话术。", true);
+    toast("无需回复类技能不需要更新话术。", true);
     return;
   }
   const text = getSuggestionTextForComposer(suggestion).trim();
@@ -13111,7 +13235,7 @@ async function updateSkillFromSuggestion(suggestion) {
     });
     state.lastSuggestionUsed = true;
     if (state.activeTool === "skill") renderToolContent();
-    toast(imageSteps.length ? `已把优化后的话术和 ${imageSteps.length} 张图片更新到当前 skill。` : "已把优化后的话术更新到当前 skill。");
+    toast(imageSteps.length ? `已把优化后的话术和 ${imageSteps.length} 张图片更新到当前技能。` : "已把优化后的话术更新到当前技能。");
   } catch (error) {
     toast(`更新 skill 失败：${error.message}`, true);
   }
@@ -13121,7 +13245,7 @@ async function resetSkillLearningById(id) {
   const skill = getSkillById(id);
   if (!skill) return;
   if (!Array.isArray(skill.manualOverrides) || !skill.manualOverrides.length) {
-    toast("这个 skill 目前没有学习覆盖。");
+    toast("这个技能目前没有学习覆盖。");
     return;
   }
   try {
@@ -13131,7 +13255,7 @@ async function resetSkillLearningById(id) {
       lastManualOverrideAt: null
     });
     if (state.activeTool === "skill") renderToolContent();
-    toast("已恢复为 skill 基线话术。");
+    toast("已恢复为技能基线话术。");
   } catch (error) {
     toast(`恢复 skill 失败：${error.message}`, true);
   }
@@ -13178,7 +13302,7 @@ function applySkillById(id) {
   });
   appendAiSuggestion({
     type: "skill",
-    title: `skill：${skill.title}`,
+    title: `技能：${skill.title}`,
     skillId: skill.id,
     content: replyProfile.text,
     steps: replyProfile.steps,
@@ -13200,7 +13324,7 @@ function sendSkillById(id) {
   });
   sendSuggestionSteps({
     type: "skill",
-    title: `skill：${skill.title}`,
+    title: `技能：${skill.title}`,
     skillId: skill.id,
     content: replyProfile.text,
     steps: replyProfile.steps,
@@ -13219,7 +13343,7 @@ async function optimizeSkillById(id) {
   const skill = getSkillById(id);
   if (!skill) return;
   if (skill.noReply) {
-    toast("无需回复类 skill 不需要优化发送话术。", true);
+    toast("无需回复类技能不需要优化发送话术。", true);
     return;
   }
   if (!state.aiEnabled) {
@@ -13239,7 +13363,7 @@ async function optimizeSkillById(id) {
     preferLearned: true
   }).text;
   if (!skillText) {
-    toast("这条 skill 没有可优化的话术。", true);
+    toast("这条技能没有可优化的话术。", true);
     return;
   }
 
@@ -13286,16 +13410,16 @@ async function optimizeSkillById(id) {
     const fallbackSuggestions = replies.length >= 2 ? replies : buildLocalSuggestionVariants(replies[0] || skillText);
     appendAiSuggestions(fallbackSuggestions.map((reply, index) => ({
       type: "optimize",
-      title: `skill 优化${index ? ` ${index + 1}` : ""}`,
-      label: `skill 优化 · ${tone.name}`,
+      title: `skill 优化助手PLACEHOLDER_KEEP${index ? ` ${index + 1}` : ""}`,
+      label: `skill 优化助手PLACEHOLDER_KEEP · ${tone.name}`,
       skillId: skill.id,
       content: reply,
       steps: [{ type: "text", content: reply }],
       keepDraftImages: Boolean(state.draftImages.length)
     })).slice(0, 3), { silent: true });
-    toast("已按当前输入和图片生成 skill 优化候选。");
+    toast("已按当前输入和图片生成技能优化候选。");
   } catch (error) {
-    toast(`skill 优化失败：${error.message}`, true);
+    toast(`skill 优化助手PLACEHOLDER_KEEP失败：${error.message}`, true);
   } finally {
     state.aiGenerating = false;
     updateAiButtonState();
@@ -13678,6 +13802,7 @@ function startAutoRefresh() {
   refreshTimer = window.setInterval(async () => {
     if (document.hidden) return;
     try {
+      await keepServerSignalROnline();
       await loadContacts({ preserveScroll: true, mode: state.contactListPage > 1 ? "merge" : "replace" });
       await loadMessages(1, "merge");
       if (state.activeTool === "order") await loadOrders(state.orderPage);
