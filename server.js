@@ -10,7 +10,7 @@ const signalR = require("@microsoft/signalr");
 
 const PORT = Number(process.env.PORT || 5177);
 const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "http://192.168.9.83:18080/api";
-const FNOS_MYSQL_CONNECTION_STRING = process.env.YOUCHAT_MYSQL_CONNECTION_STRING || "Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;Allow User Variables=true;";
+const FNOS_MYSQL_CONNECTION_STRING = ensureMySQLConnectionStringOptions(process.env.YOUCHAT_MYSQL_CONNECTION_STRING || "Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;AllowPublicKeyRetrieval=True;Allow User Variables=true;");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const CLIENT_WWWROOT = process.env.YOUCHAT_DESKTOP_WWWROOT || "C:\\Program Files\\youchat-desktop\\wwwroot";
 const BUNDLED_BRAFT_ICONS_FILE = path.join(PUBLIC_DIR, "native-icons", "braft-icons.woff");
@@ -1588,7 +1588,7 @@ function readFnOSServiceEnv() {
 
 function buildMySQLConnectionStringFromEnv(env = {}) {
   const direct = String(env.YOUCHAT_DB_CONNECTION_STRING || "").trim();
-  if (direct) return direct;
+  if (direct) return ensureMySQLConnectionStringOptions(direct);
   const host = String(env.YOUCHAT_DB_HOST || "mysql").trim();
   const port = String(env.YOUCHAT_DB_PORT || "3306").trim();
   const database = String(env.YOUCHAT_DB_NAME || "1556504756803862529").trim();
@@ -1597,7 +1597,27 @@ function buildMySQLConnectionStringFromEnv(env = {}) {
   const sslMode = String(env.YOUCHAT_DB_SSL_MODE || "None").trim();
   if (!host || !database || !user || !password) return "";
   if ([host, port, database, user, password, sslMode].some((item) => item.includes(";"))) return "";
-  return `Server=${host};Port=${port};Database=${database};User ID=${user};Password=${password};CharSet=utf8mb4;SslMode=${sslMode};AllowPublicKeyRetrieval=True;Allow User Variables=true;`;
+  return ensureMySQLConnectionStringOptions(`Server=${host};Port=${port};Database=${database};User ID=${user};Password=${password};CharSet=utf8mb4;SslMode=${sslMode};AllowPublicKeyRetrieval=True;Allow User Variables=true;`);
+}
+
+function ensureMySQLConnectionStringOptions(value = "") {
+  let connectionString = String(value || "").trim();
+  if (!connectionString) return "";
+  if (/AllowPublicKeyRetrieval\s*=/i.test(connectionString)) {
+    connectionString = connectionString.replace(/AllowPublicKeyRetrieval\s*=\s*[^;]*/i, "AllowPublicKeyRetrieval=True");
+  } else {
+    connectionString = `${connectionString.replace(/;?\s*$/, ";")}AllowPublicKeyRetrieval=True;`;
+  }
+  if (/Allow User Variables\s*=/i.test(connectionString)) {
+    connectionString = connectionString.replace(/Allow User Variables\s*=\s*[^;]*/i, "Allow User Variables=true");
+  } else {
+    connectionString = `${connectionString.replace(/;?\s*$/, ";")}Allow User Variables=true;`;
+  }
+  return connectionString;
+}
+
+function hasMySQLPublicKeyRetrieval(value = "") {
+  return /AllowPublicKeyRetrieval\s*=\s*True/i.test(String(value || ""));
 }
 
 function getConfigSection(config, upperName, lowerName) {
@@ -1614,11 +1634,11 @@ function normalizeYouChatConfigForMySQL(source = {}, connectionString = "") {
   const commonOptions = getConfigSection(source, "CommonOptions", "commonOptions");
   const jobOptions = getConfigSection(source, "JobOptions", "jobOptions");
   const aiOptions = getConfigSection(source, "AiOptions", "aiOptions");
-  const resolvedConnection = String(
+  const resolvedConnection = ensureMySQLConnectionStringOptions(String(
     connectionString ||
     getConfigValue(dataBaseOptions, "ConnectionString", "connectionString") ||
     FNOS_MYSQL_CONNECTION_STRING
-  ).trim();
+  ).trim());
 
   return {
     DataBaseOptions: {
@@ -1665,6 +1685,7 @@ function parseYouChatConfigFile(filePath) {
     databaseType: null,
     databaseMode: "unknown",
     connectionStringPresent: false,
+    connectionStringHasPublicKeyRetrieval: false,
     autoShutDown: null,
     ok: false,
     error: ""
@@ -1685,13 +1706,15 @@ function parseYouChatConfigFile(filePath) {
     summary.validJson = true;
     const dataBaseOptions = getConfigSection(parsed, "DataBaseOptions", "dataBaseOptions");
     const jobOptions = getConfigSection(parsed, "JobOptions", "jobOptions");
+    const connectionString = String(getConfigValue(dataBaseOptions, "ConnectionString", "connectionString") || "").trim();
     summary.databaseType = Number(getConfigValue(dataBaseOptions, "DatabaseType", "databaseType"));
     summary.databaseMode = getYouChatDatabaseMode(summary.databaseType);
-    summary.connectionStringPresent = Boolean(String(getConfigValue(dataBaseOptions, "ConnectionString", "connectionString") || "").trim());
+    summary.connectionStringPresent = Boolean(connectionString);
+    summary.connectionStringHasPublicKeyRetrieval = hasMySQLPublicKeyRetrieval(connectionString);
     summary.autoShutDown = normalizeBoolean(getConfigValue(jobOptions, "AutoShutDown", "autoShutDown"), false);
-    summary.ok = summary.validJson && summary.databaseType === 0 && summary.connectionStringPresent && summary.autoShutDown === false;
+    summary.ok = summary.validJson && summary.databaseType === 0 && summary.connectionStringPresent && summary.connectionStringHasPublicKeyRetrieval && summary.autoShutDown === false;
     if (!summary.ok) {
-      summary.error = `config is not safe mysql mode: databaseType=${summary.databaseType}, autoShutDown=${summary.autoShutDown}`;
+      summary.error = `config is not safe mysql mode: databaseType=${summary.databaseType}, publicKeyRetrieval=${summary.connectionStringHasPublicKeyRetrieval}, autoShutDown=${summary.autoShutDown}`;
     }
   } catch (error) {
     summary.error = error.message || String(error);
@@ -1839,13 +1862,14 @@ async function getYouChatContactCount(body = {}, apiBase = DEFAULT_API_BASE) {
 
 async function getFnOSDatabaseHealth(options = {}) {
   const apiBase = options.apiBase || DEFAULT_API_BASE;
-  const minHistoryCount = Number(options.minHistoryCount || 1000);
+  const minHistoryCount = Number(options.minHistoryCount ?? 1000);
   const summary = {
     apiBase,
     ok: true,
     databaseType: null,
     databaseMode: "unknown",
     connectionStringPresent: false,
+    connectionStringHasPublicKeyRetrieval: false,
     serviceConfig: null,
     offlineRepairAvailable: isDirectorySafe(FNOS_YOUCHAT_SERVICE_DIR),
     totalContacts: 0,
@@ -1859,13 +1883,23 @@ async function getFnOSDatabaseHealth(options = {}) {
   try {
     const optionsPayload = await postYouChatApi("/System/GetOptions", {}, apiBase);
     const databaseOptions = optionsPayload?.data?.dataBaseOptions || {};
+    const runtimeConnectionString = String(databaseOptions.connectionString || "").trim();
     summary.databaseType = Number(databaseOptions.databaseType);
     summary.databaseMode = getYouChatDatabaseMode(summary.databaseType);
-    summary.connectionStringPresent = Boolean(String(databaseOptions.connectionString || "").trim());
+    summary.connectionStringPresent = Boolean(runtimeConnectionString);
+    summary.connectionStringHasPublicKeyRetrieval = hasMySQLPublicKeyRetrieval(runtimeConnectionString);
     summary.serviceConfig = inspectFnOSConfigFile();
     if (summary.databaseType !== 0) {
       summary.ok = false;
       summary.errors.push("FnOS service is not using MySQL mode.");
+    }
+    if (summary.databaseType === 0 && !summary.connectionStringHasPublicKeyRetrieval) {
+      summary.ok = false;
+      summary.errors.push("MySQL connection string is missing AllowPublicKeyRetrieval=True; incoming messages can fail to write.");
+    }
+    if (summary.serviceConfig?.exists && summary.serviceConfig.validJson && !summary.serviceConfig.ok) {
+      summary.ok = false;
+      summary.errors.push("FnOS service config is not safe: " + summary.serviceConfig.error);
     }
   } catch (error) {
     summary.ok = false;
@@ -1927,11 +1961,11 @@ async function waitForFnOSYouChatApi(apiBase, timeoutMs = FNOS_CONFIG_REPAIR_WAI
 async function restoreFnOSDatabaseToMySQL(options = {}) {
   const apiBase = options.apiBase || DEFAULT_API_BASE;
   const serviceEnv = readFnOSServiceEnv();
-  const connectionString = String(
+  const connectionString = ensureMySQLConnectionStringOptions(String(
     options.connectionString ||
     buildMySQLConnectionStringFromEnv(serviceEnv) ||
     FNOS_MYSQL_CONNECTION_STRING
-  ).trim();
+  ).trim());
   if (!connectionString) throw new Error("MySQL connection string is empty.");
 
   try {
@@ -2067,8 +2101,10 @@ async function handleFnOSDatabase(req, res) {
   const url = new URL(req.url, "http://localhost:" + PORT);
   try {
     if (url.pathname === "/local/fnos/health") {
+      const minHistoryCountParam = url.searchParams.get("minHistoryCount");
       const health = await getFnOSDatabaseHealth({
-        apiBase: url.searchParams.get("apiBase") || DEFAULT_API_BASE
+        apiBase: url.searchParams.get("apiBase") || DEFAULT_API_BASE,
+        minHistoryCount: minHistoryCountParam === null ? DATABASE_GUARD_MIN_HISTORY_COUNT : Number(minHistoryCountParam)
       });
       databaseGuardState.lastHealth = health;
       databaseGuardState.lastCheckedAt = new Date().toISOString();

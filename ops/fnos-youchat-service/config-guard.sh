@@ -41,7 +41,7 @@ backup_config_file() {
 
 build_mysql_connection_string() {
   if [ -n "${YOUCHAT_DB_CONNECTION_STRING:-}" ]; then
-    printf '%s\n' "$YOUCHAT_DB_CONNECTION_STRING"
+    ensure_mysql_connection_string_options "$YOUCHAT_DB_CONNECTION_STRING"
     return 0
   fi
 
@@ -63,12 +63,21 @@ build_mysql_connection_string() {
     "$db_host" "$db_port" "$db_name" "$db_user" "$db_password" "$db_ssl_mode"
 }
 
+ensure_mysql_connection_string_options() {
+  conn="$1"
+  conn="${conn%;}"
+  printf '%s\n' "$conn" | grep -Eiq 'AllowPublicKeyRetrieval[[:space:]]*=[[:space:]]*True' || conn="${conn};AllowPublicKeyRetrieval=True"
+  printf '%s\n' "$conn" | grep -Eiq 'Allow User Variables[[:space:]]*=' || conn="${conn};Allow User Variables=true"
+  printf '%s;\n' "$conn"
+}
+
 is_mysql_config() {
   cfg="$1"
   [ -s "$cfg" ] || return 1
   grep -Eq '"DataBaseOptions"|"dataBaseOptions"' "$cfg" || return 1
   grep -Eq '"DatabaseType"[[:space:]]*:[[:space:]]*0|"databaseType"[[:space:]]*:[[:space:]]*0' "$cfg" || return 1
   grep -Eq '"ConnectionString"|"connectionString"' "$cfg" || return 1
+  grep -Eiq 'AllowPublicKeyRetrieval[[:space:]]*=[[:space:]]*True' "$cfg" || return 1
   return 0
 }
 

@@ -4462,3 +4462,100 @@ Do not regress:
 
 - Any async contact-list request that writes tab-specific state needs a request-time tab snapshot or token.
 - Do not write history counts from append/auto-fill empty responses over an already-known total.
+
+## 2026-07-09 Handoff: Primary Could Not Receive New Messages
+
+User report:
+
+- Primary stack could not receive new messages.
+- Official client also looked wrong, so this was not just a Web rendering issue.
+
+What was found:
+
+- `5177/health` OK.
+- `18080/api/System/GetAccountInfo` OK.
+- `Senstive/GetAccountList` returned the primary account:
+  - short `id=2`
+  - long account/account owner id `1556504756803862529`
+- Manual Web SignalR registration worked:
+  - `POST http://192.168.9.83:5177/local/signalr/online`
+  - payload `{"apiBase":"http://192.168.9.83:18080/api","accountId":"2"}`
+  - returned `state=Connected`
+- `Contact/GetContactList accountId=2` returned `total=1`.
+- Guestbook returned `0`.
+- Docker showed primary containers up:
+  - `youchat-service` Up
+  - `youchat-mysql` healthy
+  - `youchat-dev-web` healthy
+
+Actual root cause:
+
+- `docker logs youchat-service` showed repeated write failures:
+
+```text
+Authentication method 'caching_sha2_password' failed. Either use a secure connection, specify the server's RSA public key with ServerRSAPublicKeyFile, or set AllowPublicKeyRetrieval=True.
+```
+
+- The backend could answer read APIs, but incoming message handling failed when writing contacts/messages to MySQL.
+- The runtime connection string was missing `AllowPublicKeyRetrieval=True`.
+- Previous guard logic treated this as healthy because `databaseType=0` and contact counts were normal.
+
+Immediate production repair already done:
+
+```powershell
+$conn = "Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;AllowPublicKeyRetrieval=True;Allow User Variables=true;"
+Invoke-RestMethod -Method Post "http://192.168.9.83:5177/local/fnos/restore-mysql" `
+  -ContentType "application/json" `
+  -Body (@{ connectionString = $conn; minHistoryCount = 1000 } | ConvertTo-Json -Compress)
+```
+
+Post-repair verification:
+
+- `System/GetConnectionString` includes `AllowPublicKeyRetrieval=True`.
+- `System/GetOptions` includes `AllowPublicKeyRetrieval=True`.
+- `totalContacts=8222`.
+- `historyContacts=5887`.
+- `guestbookContacts=0`.
+- `currentAccount2=1`.
+- `POST /local/signalr/online` for `accountId=2` returned `Connected`.
+
+Code changes made:
+
+- `server.js`
+  - Default `FNOS_MYSQL_CONNECTION_STRING` now includes `AllowPublicKeyRetrieval=True`.
+  - Added `ensureMySQLConnectionStringOptions()` to normalize direct env/config/API connection strings.
+  - Added `hasMySQLPublicKeyRetrieval()`.
+  - `parseYouChatConfigFile()` now reports `connectionStringHasPublicKeyRetrieval`.
+  - `getFnOSDatabaseHealth()` now marks health bad if runtime or mounted service config lacks `AllowPublicKeyRetrieval=True`.
+  - `restoreFnOSDatabaseToMySQL()` normalizes the connection string before calling official APIs.
+- `ops/fnos-youchat-service/config-guard.sh`
+  - `is_mysql_config()` now requires `AllowPublicKeyRetrieval=True`.
+  - Direct `YOUCHAT_DB_CONNECTION_STRING` values are normalized before use.
+- `tools/restore-fnos-mysql-mode.ps1`
+  - Default connection string now includes `AllowPublicKeyRetrieval=True`.
+  - Added normalization for user-supplied connection strings.
+- `scripts/install-fnos-youchat-service-guard.py`
+  - Added `FNOS_YOUCHAT_SERVICE_CONTAINER`.
+  - This lets guard installation restart `youchat-service` for primary and `youchat-service-2` for secondary.
+- `server.js`
+  - `/local/fnos/health` now passes the configured `DATABASE_GUARD_MIN_HISTORY_COUNT`.
+  - `getFnOSDatabaseHealth()` uses nullish fallback so secondary `minHistoryCount=0` is respected.
+
+Verification:
+
+- `npm run check` passed.
+- `python -m py_compile scripts/install-fnos-youchat-service-guard.py scripts/deploy-fnos-web.py scripts/deploy-fnos-web-all.py` passed.
+- Installed guard on both backend dirs:
+  - `/vol1/1000/Docker/youchat` with `FNOS_YOUCHAT_SERVICE_CONTAINER=youchat-service`
+  - `/vol1/1000/Docker/youchat-2` with `FNOS_YOUCHAT_SERVICE_CONTAINER=youchat-service-2`
+- Deployed both Web targets using `scripts/deploy-fnos-web-all.py`.
+- Final health:
+  - Primary `5177/local/fnos/health`: `ok=true`, `connectionStringHasPublicKeyRetrieval=true`, `totalContacts=8222`, `historyContacts=5886`, `currentAccount2=2`.
+  - Secondary `5178/local/fnos/health`: `ok=true`, `connectionStringHasPublicKeyRetrieval=true`, `totalContacts=11`, `historyContacts=0`, `currentAccount2=6`.
+  - Primary SignalR online: `state=Connected`.
+  - Secondary SignalR online: `state=Connected`.
+
+Do not regress:
+
+- Do not treat secondary `historyContacts=0` as abnormal; its target env sets `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT=0`.
+- Do not check only `databaseType=0`; also require `connectionStringHasPublicKeyRetrieval=true` for MySQL 8.

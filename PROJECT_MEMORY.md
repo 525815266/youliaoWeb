@@ -7304,3 +7304,98 @@ python .\scripts\deploy-fnos-web.py
 
 - 会话列表这类接口是异步并发的，切 tab、自动刷新、动态加载更多会同时发生。以后所有会写列表状态的请求都要带“请求时 tab 快照”或 token，不能用返回时的全局 `state.listTab` 直接写。
 - 历史计数是全局总数，不能被动态加载下一页的空结果覆盖。
+
+## 2026-07-09 第一套接不到新消息：MySQL 连接串伪健康修复
+
+现象：
+
+- 用户测试第一套服务端时，发现 Web/官方客户端都接不到新消息。
+- `5177/health`、`18080/api/System/GetAccountInfo`、`Contact/GetContactList` 都能返回，表面看服务端和 MySQL 还活着。
+- 但 `docker logs youchat-service` 持续报错：
+  - `Authentication method 'caching_sha2_password' failed`
+  - 提示需要 `AllowPublicKeyRetrieval=True`
+- 这说明消息到达后端了，但写入联系人/聊天记录时数据库连接失败，所以前端列表自然收不到。
+
+根因：
+
+- 第一套的运行连接串仍是：
+  `Server=mysql;...;SslMode=None;Allow User Variables=true;`
+- 少了 MySQL 8 `caching_sha2_password` 场景需要的：
+  `AllowPublicKeyRetrieval=True`
+- 之前数据库守护只判断：
+  - `databaseType=0`
+  - 有连接串
+  - 历史数量正常
+  - `AutoShutDown=false`
+- 因此这种“看起来是 MySQL，但新消息写库会失败”的伪健康状态没有被自动修复。
+
+线上处理：
+
+- 已调用第一套 Web 的真实恢复接口：
+
+```powershell
+Invoke-RestMethod -Method Post "http://192.168.9.83:5177/local/fnos/restore-mysql" `
+  -ContentType "application/json" `
+  -Body '{"connectionString":"Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;AllowPublicKeyRetrieval=True;Allow User Variables=true;","minHistoryCount":1000}'
+```
+
+- 返回 `success=true`、`method=api`。
+- 修复后验证：
+  - `System/GetConnectionString` 已包含 `AllowPublicKeyRetrieval=True`。
+  - `System/GetOptions` 已包含同样连接串。
+  - `totalContacts=8222`。
+  - `historyContacts=5887`。
+  - `guestbookContacts=0`。
+  - `currentAccount2=1`。
+  - `POST /local/signalr/online accountId=2` 返回 `state=Connected`。
+
+本次代码修复：
+
+- `server.js`
+  - 默认 `FNOS_MYSQL_CONNECTION_STRING` 加上 `AllowPublicKeyRetrieval=True`。
+  - 新增 `ensureMySQLConnectionStringOptions()`：
+    - 自动补齐或改正 `AllowPublicKeyRetrieval=True`。
+    - 自动补齐或改正 `Allow User Variables=true`。
+  - `buildMySQLConnectionStringFromEnv()` 对直接环境变量连接串也做规范化。
+  - `normalizeYouChatConfigForMySQL()` 写配置文件前统一规范化连接串。
+  - `parseYouChatConfigFile()` 新增 `connectionStringHasPublicKeyRetrieval`。
+  - `getFnOSDatabaseHealth()` 将缺少 `AllowPublicKeyRetrieval=True` 判为不健康，并提示：
+    `MySQL connection string is missing AllowPublicKeyRetrieval=True; incoming messages can fail to write.`
+  - 服务端配置文件如果缺少该参数，也会让整体健康检查失败，触发自动恢复。
+- `ops/fnos-youchat-service/config-guard.sh`
+  - 启动守护检查 MySQL 配置时，也要求配置里存在 `AllowPublicKeyRetrieval=True`。
+  - 从 `YOUCHAT_DB_CONNECTION_STRING` 读取直接连接串时，会自动补齐该参数。
+- `tools/restore-fnos-mysql-mode.ps1`
+  - 默认连接串加上 `AllowPublicKeyRetrieval=True`。
+  - 用户传入旧连接串时也会自动规范化。
+- `scripts/install-fnos-youchat-service-guard.py`
+  - 新增 `FNOS_YOUCHAT_SERVICE_CONTAINER`，安装 guard 时可以分别重启：
+    - 主套 `youchat-service`
+    - 第二套 `youchat-service-2`
+- `server.js`
+  - `/local/fnos/health` 默认使用当前 Web 容器的 `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT`。
+  - `getFnOSDatabaseHealth()` 使用 `??` 保留阈值 `0`，避免第二套新库 `historyContacts=0` 被误判异常。
+
+验证：
+
+- `npm run check` 通过。
+- `python -m py_compile scripts/install-fnos-youchat-service-guard.py scripts/deploy-fnos-web.py scripts/deploy-fnos-web-all.py` 通过。
+- 已安装两套飞牛服务端 guard：
+  - `/vol1/1000/Docker/youchat` + `youchat-service`
+  - `/vol1/1000/Docker/youchat-2` + `youchat-service-2`
+- 已部署两套 Web：
+  - `5177` 主套
+  - `5178` 第二套
+- 最终线上健康：
+  - 主套 `/local/fnos/health`：`ok=true`、`connectionStringHasPublicKeyRetrieval=true`、`totalContacts=8222`、`historyContacts=5886`、`currentAccount2=2`。
+  - 第二套 `/local/fnos/health`：`ok=true`、`connectionStringHasPublicKeyRetrieval=true`、`totalContacts=11`、`historyContacts=0`、`currentAccount2=6`。
+  - 主套 `/local/signalr/online`：`state=Connected`。
+  - 第二套 `/local/signalr/online`：`state=Connected`。
+
+后续注意：
+
+- 以后遇到“接口能查历史，但新消息接不进来”，不要只看 `databaseType=0`，一定同时查连接串是否包含 `AllowPublicKeyRetrieval=True`。
+- 第一套修复后仍需要让 Web 维持在线：
+  `POST http://192.168.9.83:5177/local/signalr/online`，`accountId=2`。
+  但这次真正阻断接收的根因是写库失败，不是单纯 SignalR 离线。
+- 第二套历史为 `0` 是当前新库数据状态，部署配置中阈值必须保持 `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT=0`，不要被默认 `1000` 覆盖。

@@ -1,6 +1,6 @@
 param(
   [string]$ApiBase = "http://192.168.9.83:18080/api",
-  [string]$ConnectionString = "Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;Allow User Variables=true;",
+  [string]$ConnectionString = "Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;AllowPublicKeyRetrieval=True;Allow User Variables=true;",
   [int]$TimeoutSeconds = 15
 )
 
@@ -49,6 +49,26 @@ function Invoke-YouChatApi {
     -ContentType "application/x-www-form-urlencoded" `
     -TimeoutSec $TimeoutSeconds
 }
+
+function Normalize-MySqlConnectionString {
+  param([string]$Value)
+
+  $result = ([string]$Value).Trim()
+  if (-not $result) { return $result }
+  if ($result -match "(?i)AllowPublicKeyRetrieval\s*=") {
+    $result = [regex]::Replace($result, "(?i)AllowPublicKeyRetrieval\s*=\s*[^;]*", "AllowPublicKeyRetrieval=True")
+  } else {
+    $result = $result.TrimEnd(";") + ";AllowPublicKeyRetrieval=True;"
+  }
+  if ($result -match "(?i)Allow User Variables\s*=") {
+    $result = [regex]::Replace($result, "(?i)Allow User Variables\s*=\s*[^;]*", "Allow User Variables=true")
+  } else {
+    $result = $result.TrimEnd(";") + ";Allow User Variables=true;"
+  }
+  return $result
+}
+
+$ConnectionString = Normalize-MySqlConnectionString -Value $ConnectionString
 
 Write-Step "Probe current database mode"
 $before = Invoke-YouChatApi -Path "/System/GetOptions"

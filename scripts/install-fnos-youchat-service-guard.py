@@ -52,6 +52,7 @@ def install() -> None:
     password = os.environ.get("FNOS_PASSWORD")
     sudo_password = os.environ.get("FNOS_SUDO_PASSWORD", password or "")
     remote_dir = os.environ.get("FNOS_YOUCHAT_REMOTE_DIR", DEFAULT_REMOTE_DIR)
+    service_container = os.environ.get("FNOS_YOUCHAT_SERVICE_CONTAINER", "youchat-service")
     if not password:
         raise SystemExit("Set FNOS_PASSWORD before installing the fnOS service guard.")
     if not GUARD_SOURCE.exists():
@@ -93,9 +94,9 @@ if insert not in text:
     p.write_text(text, encoding='utf-8')
 PY
 fi
-docker restart youchat-service >/dev/null
+docker restart {quote(service_container)} >/dev/null
 sleep 8
-docker ps -a --filter name=youchat-service --format 'table {{{{.Names}}}}\\t{{{{.Status}}}}\\t{{{{.Ports}}}}'
+docker ps -a --filter name={quote(service_container)} --format 'table {{{{.Names}}}}\\t{{{{.Status}}}}\\t{{{{.Ports}}}}'
 """
         print(run_ssh(client, f"{sudo}bash -lc {quote(patch)}", timeout=180))
         print("Installed fnOS YouChat service config guard.")
