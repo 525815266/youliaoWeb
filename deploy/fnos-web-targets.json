@@ -1,0 +1,36 @@
+{
+  "targets": [
+    {
+      "name": "primary",
+      "label": "primary web / primary backend",
+      "remoteDir": "/vol1/1000/Docker/youchat-dev-web",
+      "projectName": "youchat-dev-web",
+      "composeFile": "compose.yaml",
+      "healthUrl": "http://192.168.9.83:5177/health",
+      "expectedApiBase": "http://host.docker.internal:18080/api",
+      "env": {
+        "WEB_CONTAINER_NAME": "youchat-dev-web",
+        "WEB_PORT": "5177",
+        "YOUCHAT_API_BASE": "http://host.docker.internal:18080/api",
+        "FNOS_YOUCHAT_SERVICE_DIR": "/vol1/1000/Docker/youchat",
+        "YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT": "1000"
+      }
+    },
+    {
+      "name": "secondary",
+      "label": "secondary web / secondary backend",
+      "remoteDir": "/vol1/1000/Docker/youchat-dev-web-2",
+      "projectName": "youchat-dev-web-2",
+      "composeFile": "compose.yaml",
+      "healthUrl": "http://192.168.9.83:5178/health",
+      "expectedApiBase": "http://host.docker.internal:18082/api",
+      "env": {
+        "WEB_CONTAINER_NAME": "youchat-dev-web-2",
+        "WEB_PORT": "5178",
+        "YOUCHAT_API_BASE": "http://host.docker.internal:18082/api",
+        "FNOS_YOUCHAT_SERVICE_DIR": "/vol1/1000/Docker/youchat-2",
+        "YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT": "0"
+      }
+    }
+  ]
+}

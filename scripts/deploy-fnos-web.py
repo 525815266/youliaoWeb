@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import pathlib
 import posixpath
+import re
 import sys
 import tarfile
 import time
@@ -73,6 +75,42 @@ def quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def sed_replacement(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace("&", "\\&").replace("|", "\\|")
+
+
+def load_env_overrides() -> dict[str, str]:
+    raw = os.environ.get("FNOS_WEB_ENV_OVERRIDES_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"FNOS_WEB_ENV_OVERRIDES_JSON is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SystemExit("FNOS_WEB_ENV_OVERRIDES_JSON must be a JSON object.")
+    overrides: dict[str, str] = {}
+    for key, value in data.items():
+        key_text = str(key).strip()
+        if not re.fullmatch(r"[A-Z0-9_]+", key_text):
+            raise SystemExit(f"Invalid .env key in FNOS_WEB_ENV_OVERRIDES_JSON: {key!r}")
+        overrides[key_text] = "" if value is None else str(value)
+    return overrides
+
+
+def build_remote_env_update_command(remote_dir: str, overrides: dict[str, str]) -> str:
+    parts = [f"cd {quote(remote_dir)} && touch .env"]
+    for key, value in overrides.items():
+        replacement = sed_replacement(f"{key}={value}")
+        append_line = f"{key}={value}\n"
+        parts.append(
+            f"if grep -q '^{key}=' .env; then "
+            f"sed -i 's|^{key}=.*|{replacement}|' .env; "
+            f"else printf %s {quote(append_line)} >> .env; fi"
+        )
+    return " && ".join(parts)
+
+
 def create_archive() -> pathlib.Path:
     dist_dir = PROJECT_ROOT / "deploy-dist"
     dist_dir.mkdir(exist_ok=True)
@@ -108,6 +146,7 @@ def deploy() -> None:
     remote_dir = os.environ.get("FNOS_WEB_REMOTE_DIR", DEFAULT_REMOTE_DIR)
     compose_file = os.environ.get("FNOS_WEB_COMPOSE_FILE", "compose.yaml")
     project_name = os.environ.get("FNOS_WEB_PROJECT_NAME", "youchat-dev-web")
+    env_overrides = load_env_overrides()
     use_sudo = os.environ.get("FNOS_USE_SUDO", "1") != "0"
     if not password:
         raise SystemExit("Set FNOS_PASSWORD before deploying.")
@@ -137,6 +176,8 @@ def deploy() -> None:
             "sed -i 's#^YOUCHAT_API_BASE=.*#YOUCHAT_API_BASE=http://host.docker.internal:18080/api#' .env; "
             "fi",
         )
+        if env_overrides:
+            run_ssh(client, build_remote_env_update_command(remote_dir, env_overrides))
 
         docker = "sudo -S docker" if use_sudo else "docker"
         sudo_input = f"{sudo_password}\n" if use_sudo else None

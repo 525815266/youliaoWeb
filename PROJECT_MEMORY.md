@@ -7175,3 +7175,84 @@ Invoke-RestMethod -Method Post http://127.0.0.1:5199/local/signalr/online `
 - 当前已验证 Web 能注册到 hub，但“新消息是否完全从留言进入当前”还需要实测一条真实新消息。
 - 如果仍进入留言，不要改前端列表假搬运，应继续对比官方 Electron 客户端是否还调用了额外在线/分配/心跳接口。
 - 联系人列表必须继续使用短账号 `accountId=2`，不要用商户长 `userId=1556504756803862529` 注册 hub。
+
+## 2026-07-09 飞牛第二套 Docker Web / 服务端纳入同步部署
+
+用户新搭了一套独立 Docker 服务端和 Web 客户端，需要后续 Web 更新时两套一起更新。
+
+已识别到的两套环境：
+
+| 目标 | Web 地址 | Web 容器/项目 | Web 目录 | 后端 API | 后端容器/项目 | 后端目录 |
+| --- | --- | --- | --- | --- | --- | --- |
+| primary | `http://192.168.9.83:5177` | `youchat-dev-web` / `youchat-dev-web` | `/vol1/1000/Docker/youchat-dev-web` | `http://192.168.9.83:18080/api` | `youchat-service` / `youliaoapp` | `/vol1/1000/Docker/youchat` |
+| secondary | `http://192.168.9.83:5178` | `youchat-dev-web-2` / `youchat-dev-web-2` | `/vol1/1000/Docker/youchat-dev-web-2` | `http://192.168.9.83:18082/api` | `youchat-service-2` / `youchat-2` | `/vol1/1000/Docker/youchat-2` |
+
+第二套附属容器：
+
+- `youchat-control-2`：宿主机 `18083 -> 8081`。
+- `youchat-autologin-2`：登录账号是第二套自己的账号。
+- `youchat-backup-2`：备份目录指向 `.../youliaobackup-2`。
+- 第二套数据库是同一 MySQL 服务上的独立库 `youchat2`，用户为 `yz2`，不要和主库 `1556504756803862529` 混用。
+
+本次发现和修复：
+
+- 第二套 Web 初始健康正常，但 `/local/signalr/online` 返回 `Not found`，说明没有同步 2026-07-09 的 Web 真在线注册修复。
+- 新增 `deploy/fnos-web-targets.json`，记录两套 Web 的远端目录、compose project、端口、后端 API 和服务端挂载目录。
+- 新增 `scripts/deploy-fnos-web-all.py`，以后统一部署两套 Web。
+- 增强 `scripts/deploy-fnos-web.py`：
+  - 支持 `FNOS_WEB_ENV_OVERRIDES_JSON`；
+  - 部署时可按目标写入远端 `.env`；
+  - 避免第二套 Web 误用第一套 `18080` 或 `/vol1/1000/Docker/youchat`。
+- `compose.yaml` 和 `compose.registry.yaml` 的 `container_name` 已参数化：
+  - 主套：`WEB_CONTAINER_NAME=youchat-dev-web`
+  - 第二套：`WEB_CONTAINER_NAME=youchat-dev-web-2`
+- 第一次批量部署暴露过容器名冲突：第二套目录被通用 compose 覆盖后曾尝试创建 `youchat-dev-web`，和主容器撞名。已通过 `WEB_CONTAINER_NAME` 修复。
+
+以后部署两套 Web：
+
+```powershell
+cd C:\youchat-dev-web
+$env:FNOS_PASSWORD = "飞牛 SSH 密码"
+$env:FNOS_SUDO_PASSWORD = "飞牛 sudo 密码"
+python .\scripts\deploy-fnos-web-all.py
+```
+
+仍可单独部署某一套：
+
+```powershell
+# 主套
+$env:FNOS_WEB_REMOTE_DIR = "/vol1/1000/Docker/youchat-dev-web"
+$env:FNOS_WEB_PROJECT_NAME = "youchat-dev-web"
+$env:FNOS_WEB_ENV_OVERRIDES_JSON = '{"WEB_CONTAINER_NAME":"youchat-dev-web","WEB_PORT":"5177","YOUCHAT_API_BASE":"http://host.docker.internal:18080/api","FNOS_YOUCHAT_SERVICE_DIR":"/vol1/1000/Docker/youchat","YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT":"1000"}'
+python .\scripts\deploy-fnos-web.py
+
+# 第二套
+$env:FNOS_WEB_REMOTE_DIR = "/vol1/1000/Docker/youchat-dev-web-2"
+$env:FNOS_WEB_PROJECT_NAME = "youchat-dev-web-2"
+$env:FNOS_WEB_ENV_OVERRIDES_JSON = '{"WEB_CONTAINER_NAME":"youchat-dev-web-2","WEB_PORT":"5178","YOUCHAT_API_BASE":"http://host.docker.internal:18082/api","FNOS_YOUCHAT_SERVICE_DIR":"/vol1/1000/Docker/youchat-2","YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT":"0"}'
+python .\scripts\deploy-fnos-web.py
+```
+
+验证结果：
+
+- `npm run check` 通过。
+- `python -m py_compile .\scripts\deploy-fnos-web.py .\scripts\deploy-fnos-web-all.py` 通过。
+- `python .\scripts\deploy-fnos-web-all.py` 已成功部署两套：
+  - `5177` 健康，`apiBase=http://host.docker.internal:18080/api`。
+  - `5178` 健康，`apiBase=http://host.docker.internal:18082/api`。
+- 第二套 Web 的 `/local/signalr/online` 已恢复：
+  - 请求 `apiBase=http://192.168.9.83:18082/api`、`accountId=2`；
+  - 返回 `success=true`、`state=Connected`、`resolvedApiBase=http://host.docker.internal:18082/api`；
+  - 随后 `/local/signalr/offline` 返回 `success=true`。
+- 第二套服务端健康：
+  - `System/GetOptions`：`databaseType=0 (mysql)`。
+  - `Contact total=6`。
+  - `History contacts=0`，这是新库当前数据少，检查阈值设为 `0`。
+  - `AccountId=2 current probe=3`。
+
+后续注意：
+
+- 更新 Web 时默认跑 `scripts/deploy-fnos-web-all.py`，不要只更新 `5177`。
+- 第二套 Web 的数据库保护阈值是 `0`，不要套用主库 `1000`，否则新库历史少会被误判异常。
+- 主套和第二套的 Web 代码应保持一致，差异只应存在于 `.env`、数据目录、配置目录和后端服务端目录。
+- 如果第二套新消息仍进入留言，优先确认 `5178/local/signalr/online` 能连到 `18082/chathub`，不要拿主套 `18080` 的结果代替。

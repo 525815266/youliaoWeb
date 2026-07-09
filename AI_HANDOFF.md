@@ -4349,3 +4349,75 @@ Do not regress:
 - The hub registration account is the short contact-list account id (`2` for `Boom666`), not merchant long user id `1556504756803862529`.
 - Do not “fix”留言/current routing by locally moving records between tabs; routing must be solved by real online registration and, if needed, any additional official-client distribution endpoint.
 - Browser SignalR is intentionally not the primary path for HTTPS public pages; Node bridge must remain first-class for Docker/Lucky deployments.
+
+## 2026-07-09 Handoff: Two fnOS Web Targets Must Deploy Together
+
+User added a second independent Docker backend and Web client. Future Web updates should deploy to both Web stacks.
+
+Current target inventory:
+
+- Primary:
+  - Web URL: `http://192.168.9.83:5177`
+  - Web container/project: `youchat-dev-web` / `youchat-dev-web`
+  - Web dir: `/vol1/1000/Docker/youchat-dev-web`
+  - Backend API: `http://192.168.9.83:18080/api`
+  - Backend service/project: `youchat-service` / `youliaoapp`
+  - Backend dir mounted into Web: `/vol1/1000/Docker/youchat`
+- Secondary:
+  - Web URL: `http://192.168.9.83:5178`
+  - Web container/project: `youchat-dev-web-2` / `youchat-dev-web-2`
+  - Web dir: `/vol1/1000/Docker/youchat-dev-web-2`
+  - Backend API: `http://192.168.9.83:18082/api`
+  - Backend service/project: `youchat-service-2` / `youchat-2`
+  - Backend dir mounted into Web: `/vol1/1000/Docker/youchat-2`
+  - Control API host port: `18083`
+  - Database: independent MySQL database `youchat2`, not the primary database.
+
+Files added/changed for multi-target deploy:
+
+- `deploy/fnos-web-targets.json`
+  - Defines `primary` and `secondary` Web targets.
+  - Contains only non-secret paths, ports, API bases, and env overrides.
+- `scripts/deploy-fnos-web-all.py`
+  - Reads the targets file.
+  - Runs `scripts/deploy-fnos-web.py` once per target.
+  - Verifies each target health URL and expected `apiBase`.
+- `scripts/deploy-fnos-web.py`
+  - Now supports `FNOS_WEB_ENV_OVERRIDES_JSON`.
+  - Writes target-specific values into remote `.env` before `docker compose up`.
+- `compose.yaml` and `compose.registry.yaml`
+  - `container_name` is now `${WEB_CONTAINER_NAME:-youchat-dev-web}`.
+  - This is required because secondary must be `youchat-dev-web-2`; a hardcoded name conflicts with primary.
+
+Deploy both Web targets:
+
+```powershell
+cd C:\youchat-dev-web
+$env:FNOS_PASSWORD = "..."
+$env:FNOS_SUDO_PASSWORD = "..."
+python .\scripts\deploy-fnos-web-all.py
+```
+
+Verification performed:
+
+- `npm run check` passed.
+- `python -m py_compile .\scripts\deploy-fnos-web.py .\scripts\deploy-fnos-web-all.py` passed.
+- `scripts/deploy-fnos-web-all.py` deployed both:
+  - `5177` health OK, `apiBase=http://host.docker.internal:18080/api`.
+  - `5178` health OK, `apiBase=http://host.docker.internal:18082/api`.
+- Secondary Web initially lacked `/local/signalr/online`; after deploying both, secondary online bridge works:
+  - `POST http://192.168.9.83:5178/local/signalr/online`
+  - payload `{"apiBase":"http://192.168.9.83:18082/api","accountId":"2"}`
+  - returned `success=true`, `state=Connected`, `resolvedApiBase=http://host.docker.internal:18082/api`.
+  - `/local/signalr/offline` returned `success=true`.
+- Secondary backend health:
+  - MySQL mode (`databaseType=0`);
+  - `totalContacts=6`;
+  - `historyContacts=0`;
+  - `currentAccount2=3`.
+
+Important:
+
+- Secondary history count is low because it is a new database. Its guard threshold is intentionally `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT=0`.
+- Do not deploy only `5177` unless the user explicitly asks for a single target. Default should be `deploy-fnos-web-all.py`.
+- Do not mix primary and secondary service directories or API ports. Primary uses `18080` + `/vol1/1000/Docker/youchat`; secondary uses `18082` + `/vol1/1000/Docker/youchat-2`.

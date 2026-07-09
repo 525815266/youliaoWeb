@@ -1,7 +1,7 @@
 services:
   youchat-dev-web:
     image: ${YOUCHAT_WEB_IMAGE:-ghcr.io/your-github-user/youchat-dev-web:latest}
-    container_name: youchat-dev-web
+    container_name: ${WEB_CONTAINER_NAME:-youchat-dev-web}
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-5177}:5177"

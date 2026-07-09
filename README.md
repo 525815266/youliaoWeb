@@ -112,6 +112,20 @@ python .\scripts\deploy-fnos-web.py
 docker compose -p youchat-dev-web -f compose.yaml up -d --build --force-recreate
 ```
 
+如果飞牛上同时维护主 Web 和第二套 Web，默认使用批量部署脚本，让两套一起更新：
+
+```powershell
+cd C:\youchat-dev-web
+$env:FNOS_PASSWORD = "你的飞牛 SSH 密码"
+$env:FNOS_SUDO_PASSWORD = "你的飞牛 sudo 密码"
+python .\scripts\deploy-fnos-web-all.py
+```
+
+批量目标配置在 `deploy/fnos-web-targets.json`：
+
+- 主套：`5177` -> `http://host.docker.internal:18080/api`，服务端目录 `/vol1/1000/Docker/youchat`。
+- 第二套：`5178` -> `http://host.docker.internal:18082/api`，服务端目录 `/vol1/1000/Docker/youchat-2`。
+
 持久化目录：
 
 - `data/`：skill 回复库和训练数据。
