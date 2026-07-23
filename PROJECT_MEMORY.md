@@ -7508,6 +7508,19 @@ Invoke-RestMethod -Method Post "http://192.168.9.83:5177/local/fnos/restore-mysq
   - compose：`compose.yaml`
   - project：`youchat-2`
 - 四个侧车已恢复为 `Up`。
+- 新增脚本 `npm run fnos:repair:sidecars` 已在真实飞牛环境实测成功：
+  - 主套 `youchat-control`、`youchat-backup` 为 `running`；
+  - 第二套 `youchat-control-2`、`youchat-backup-2` 为 `running`；
+  - 两套 control `/api/status` 均带 `X-Control-Token` 返回 `200`。
+- 已重新部署两套 Web 容器到飞牛：
+  - `5177/health` OK，后端 `http://host.docker.internal:18080/api`；
+  - `5178/health` OK，后端 `http://host.docker.internal:18082/api`。
+- Web 重建后已重新注册 SignalR 在线桥：
+  - `5177/local/signalr/online` 返回 `state=Connected`；
+  - `5178/local/signalr/online` 返回 `state=Connected`。
+- 数据库健康检查：
+  - 主套 `databaseMode=mysql`、`historyContacts=5909`；
+  - 第二套 `databaseMode=mysql`、`historyContacts=4`。第二套历史少不是 SQLite，本次健康检查显示仍在 MySQL。
 
 代码沉淀：
 

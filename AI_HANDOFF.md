@@ -4657,6 +4657,17 @@ Immediate repair done:
     - cwd `/vol1/1000/Docker/youchat-2`
     - `docker compose up -d youchat-control youchat-backup`
 - All four sidecars came back Up.
+- The new `npm run fnos:repair:sidecars` script was run against the real FnOS host and succeeded:
+  - primary `youchat-control` / `youchat-backup`: `running`;
+  - secondary `youchat-control-2` / `youchat-backup-2`: `running`;
+  - both control `/api/status` probes returned `200` with `X-Control-Token`.
+- After the commit, both FnOS Web containers were redeployed with `scripts/deploy-fnos-web-all.py`.
+- Final online checks:
+  - `5177/health` OK, `apiBase=http://host.docker.internal:18080/api`;
+  - `5178/health` OK, `apiBase=http://host.docker.internal:18082/api`;
+  - `5177/local/fnos/health`: MySQL, `historyContacts=5909`;
+  - `5178/local/fnos/health`: MySQL, `historyContacts=4`;
+  - both `local/signalr/online` calls returned `state=Connected`.
 
 Code/docs added:
 
