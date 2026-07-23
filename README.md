@@ -300,7 +300,15 @@ POST /ai/chat/completions
 C:\youchat-dev-web\data\reply-skills.json
 ```
 
-这里可以维护关键词、回复步骤、图片步骤、是否允许自动回复、是否仅标记无需回复。开启“自动学习人工回复”后，如果已经命中某个 skill 但客服没有采用推荐，而是自己回复，页面会先把人工回复记录到这个 skill 的 `manualOverrides`；同一 skill 被人工纠正累计 3 次后，会自动把人工话术回写到该 skill 的 `replySteps/fallback`。没有命中 skill 时，才会按“最新客户问题 + 人工回复”沉淀为新的 learned skill。开启“skill 自动回复”后，只有命中 `allowAutoReply: true` 且不是系统提示/提现成功/无需回复类消息时才会自动发送。
+这里可以维护关键词、回复步骤、图片步骤、是否允许自动回复、是否仅标记无需回复。开启“自动学习人工回复”后，如果已经命中某个 skill 但客服没有采用推荐，而是自己回复，页面会先把人工回复记录到这个 skill 的 `manualOverrides`；学习覆盖会优先用于当前上下文推荐，但不会自动污染主 `replySteps/fallback`。没有命中 skill 时，才会按“最新客户问题 + 人工回复”沉淀为新的 learned skill。开启“skill 自动回复”后，只有命中 `allowAutoReply: true` 且不是系统提示/提现成功/无需回复类消息时才会自动发送。
+
+人工整理的客服记录可以通过导入工具批量沉淀为 skill：
+
+```powershell
+npm run skills:import:curated -- --input .\my-curated-skills.json --target http://192.168.9.83:5177/local/reply-skills --target http://192.168.9.83:5178/local/reply-skills
+```
+
+导入工具接受 `intent/platformKey/scenario/reply/allowAutoReply/recommendOnly/noReply/skill/sourceRef` 这类字段，会把 `platformKey: "all"` 转成平台不限，避免影响淘宝、京东、拼多多、抖音等真实订单上下文命中；同一个场景再次导入会按稳定 id 更新，不会清空已有自动学习。
 
 skill 命中卡片和 skill 列表都提供“优化”按钮。优化时会参考当前 skill 话术、客服输入框里的补充文字、草稿图片数量、最新客户消息和最近聊天记录，只优化文字，不处理或改写图片。优化候选里会出现“更新skill”按钮，点击后会把当前候选写回命中的 skill；如果输入框里有草稿图片，会先上传图片并把真实图片 URL 追加为 skill 图片步骤，旧图片步骤会保留并按 URL 去重。
 

@@ -7547,3 +7547,84 @@ npm run fnos:repair:sidecars
 - 遇到 `control/backup` Exited 255 时，先恢复飞牛云盘授权，再跑 `npm run fnos:repair:sidecars`。
 - 不要把 `YOUCHAT_BACKUP_HOST_PATH` 改到 `/vol1/1000/Docker/...` 本地兜底目录；用户明确拒绝这种方案。
 - 主套和第二套 compose/project 不一样，恢复时不要混用。
+## 2026-07-23 常见问题文档导入 curated Skill
+
+用户提供 `C:\Users\ACER\Downloads\最近一个月客服系统中常见的问题.docx`，希望用最近一个月的客服常见问题训练 AI 自动回复。
+
+文档抽取结论：
+
+- 文档是纯文本型 Word，共 25 个有效段落、无表格。
+- 主要问题：
+  - 提现未到账或延迟到账；
+  - 支付宝接口异常 / 付款方余额不足；
+  - 微信提现被反诈风控拦截；
+  - 提现明细找不到；
+  - 超过 100 天未下单导致不能提现；
+  - 订单显示为空；
+  - 维权订单刷新。
+
+用户随后提供 10 条整理后的 JSON 训练记录，覆盖：
+
+- 提现失败-支付宝余额不足；
+- 提现失败-长时间未下单；
+- 提现失败-未绑定支付宝；
+- 订单显示为空；
+- 提现问题-其他；
+- 无法提现-情绪安抚；
+- 提现到账方式咨询；
+- 快递理赔/纠纷-进度咨询；
+- 快递理赔/纠纷-定价疑问；
+- 订单退换货提示异常。
+
+本次新增：
+
+- `scripts/import-curated-reply-skills.py`
+- npm 命令：
+
+```powershell
+npm run skills:import:curated -- --input .\my-curated-skills.json --target http://192.168.9.83:5177/local/reply-skills --target http://192.168.9.83:5178/local/reply-skills
+```
+
+导入策略：
+
+- `platformKey: "all"` 不写入具体 `platformKey`，只保留 `platformScope=all`，让前端按“平台不限”处理，避免命中时被当成一个未知平台扣分。
+- 提现类统一落到宽泛 `intentKey=withdraw_query`，再用关键词区分余额不足、长时间未下单、未绑定支付宝、到账方式等细分场景。
+- 订单显示为空、退换货异常落到 `intentKey=order_missing`。
+- 快递理赔类落到 `intentKey=general`，只做关键词命中。
+- `allowAutoReply=true` 且 `recommendOnly=false` 的记录才允许自动回复；其余只做推荐。
+- 同一场景用稳定 id upsert，不清空已有学习数据；如果旧 skill 有 `manualOverrides` 会保留。
+
+实际导入结果：
+
+- 主套 `http://192.168.9.83:5177/local/reply-skills`
+  - 从 49 条变为 59 条；
+  - 新增 10 条；
+  - 4 条允许自动回复，6 条只推荐。
+- 第二套 `http://192.168.9.83:5178/local/reply-skills`
+  - 从 40 条变为 50 条；
+  - 新增 10 条；
+  - 4 条允许自动回复，6 条只推荐。
+
+导入的 skill id：
+
+- `curated-26978cd3a62b`
+- `curated-b52652767612`
+- `curated-9738741980f1`
+- `curated-05064b9a9c09`
+- `curated-3ddeb9b02235`
+- `curated-455b32b155dd`
+- `curated-d78b6fd8303b`
+- `curated-208c8a0be87c`
+- `curated-926bb20a52e2`
+- `curated-3fd7f2ef1336`
+
+验证：
+
+- `python -m py_compile scripts\import-curated-reply-skills.py` 通过。
+- 两套 `/local/reply-skills` 均能查到 10 条 curated skill。
+- 两套 `/health` OK。
+
+注意：
+
+- 本次写入的是两套 Web 运行态 `reply-skills.json`，不是提交 `data/reply-skills.json`。
+- 以后用户继续给 JSON 训练数据，优先用 `skills:import:curated` 导入，不要手改运行态 JSON。

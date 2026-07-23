@@ -9,6 +9,7 @@
     "patch:export": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-devkit-patch.ps1",
     "client:audit": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/audit-client-update.ps1",
     "client:audit:compare": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/compare-client-audits.ps1",
+    "skills:import:curated": "python scripts/import-curated-reply-skills.py",
     "fnos:health": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-fnos-youchat-health.ps1",
     "fnos:restore:mysql": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/restore-fnos-mysql-mode.ps1",
     "fnos:repair:sidecars": "python scripts/repair-fnos-youchat-sidecars.py",

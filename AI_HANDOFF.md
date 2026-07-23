@@ -4693,3 +4693,78 @@ Do not regress:
 - Do not introduce a local fallback backup directory for these sidecars unless the user explicitly reverses the instruction.
 - Do not mix primary and secondary compose projects.
 - If this fails again, first confirm FnOS cloud authorization/mount is restored, then run `npm run fnos:repair:sidecars`.
+## 2026-07-23 Handoff: Curated Common-Issue Reply Skills Imported
+
+User provided:
+
+- `C:\Users\ACER\Downloads\最近一个月客服系统中常见的问题.docx`
+- Then a 10-item JSON-like curated reply list.
+
+DOCX extraction:
+
+- 25 non-empty paragraphs, no tables.
+- Main issue categories:
+  - withdraw delayed/not arrived;
+  - Alipay interface / payer balance insufficient;
+  - WeChat withdraw blocked by anti-fraud risk control;
+  - withdraw details missing;
+  - cannot withdraw after more than 100 days without ordering;
+  - order page empty;
+  - rights/refund order refreshed.
+
+Code added:
+
+- `scripts/import-curated-reply-skills.py`
+- npm command:
+
+```powershell
+npm run skills:import:curated -- --input .\my-curated-skills.json --target http://192.168.9.83:5177/local/reply-skills --target http://192.168.9.83:5178/local/reply-skills
+```
+
+Import behavior:
+
+- Reads JSON or JSON-ish input.
+- Fixes blank `"sourceRef":` values when parsing.
+- Converts `platformKey: "all"` into wildcard/no concrete `platformKey`, storing `platformScope=all`.
+- Maps fine-grained withdraw records to broad `intentKey=withdraw_query`.
+- Maps order empty/refund-rights records to `intentKey=order_missing`.
+- Maps express-claim records to `intentKey=general`.
+- Uses stable ids based on skill/intent/scenario.
+- Upserts without clearing existing skills; preserves existing `manualOverrides` if reimporting same id.
+
+Runtime import already done:
+
+- Primary `5177/local/reply-skills`:
+  - 49 -> 59 skills;
+  - 10 inserted;
+  - 4 auto-reply enabled;
+  - 6 recommend-only.
+- Secondary `5178/local/reply-skills`:
+  - 40 -> 50 skills;
+  - 10 inserted;
+  - 4 auto-reply enabled;
+  - 6 recommend-only.
+
+Imported ids:
+
+- `curated-26978cd3a62b`
+- `curated-b52652767612`
+- `curated-9738741980f1`
+- `curated-05064b9a9c09`
+- `curated-3ddeb9b02235`
+- `curated-455b32b155dd`
+- `curated-d78b6fd8303b`
+- `curated-208c8a0be87c`
+- `curated-926bb20a52e2`
+- `curated-3fd7f2ef1336`
+
+Verification:
+
+- `python -m py_compile scripts\import-curated-reply-skills.py` passed.
+- Both remote `/local/reply-skills` endpoints returned the imported records.
+- Both `/health` endpoints OK.
+
+Important:
+
+- Do not commit `data/reply-skills.json`; this import updated remote runtime skill data through `/local/reply-skills`.
+- Continue using `skills:import:curated` for user-supplied curated JSON instead of manually editing runtime JSON.
