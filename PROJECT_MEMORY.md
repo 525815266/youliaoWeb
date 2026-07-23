@@ -7473,3 +7473,64 @@ Invoke-RestMethod -Method Post "http://192.168.9.83:5177/local/fnos/restore-mysq
 - 这个弹窗只负责“连接恢复提示”，不要拿它承载普通接口错误。
 - 服务端桥接成功时应自动关闭弹窗，避免在 Web 已恢复在线后继续遮挡客服输入区。
 - 如果后续改在线保持逻辑，必须继续调用 `registerReconnectAttempt()` 和 `clearReconnectState()`，否则会退回“后台失败但客服无感知”的老问题。
+
+## 2026-07-23 飞牛两套 control/backup 侧车恢复与云盘路径保护
+
+用户反馈第二套 Docker 客户端里有服务报错关闭，并强调“不光要拉起来，还要一起修复问题”，随后明确要求“不要用本地目录”。
+
+本次排查结论：
+
+- 两套主业务容器均不是主要故障点：
+  - 主套 `youchat-service`、`youchat-autologin` 仍在；
+  - 第二套 `youchat-service-2`、`youchat-autologin-2` 仍在。
+- 异常退出的是四个侧车：
+  - `youchat-control`
+  - `youchat-backup`
+  - `youchat-control-2`
+  - `youchat-backup-2`
+- `docker inspect` 原始错误都是飞牛云盘挂载源创建失败：
+  - 主套：`/vol02/1000-1-713f7ca0/来自：飞牛私有云/youliaobackup`
+  - 第二套：`/vol02/1000-1-713f7ca0/来自：飞牛私有云/youliaobackup-2`
+- 这次不是 SQLite 回退，也不是 Web 前端假数据问题；根因是云盘路径曾不可用，导致 Docker 无法挂载备份目录。
+
+现场处理：
+
+- 按用户要求继续使用源目录，未改 `.env` 到本地目录。
+- 用远端 Python 从 `.env` 读取 UTF-8 路径验证，避免 SSH/shell 直接传中文路径时被转成 `????`：
+  - 主套源目录存在、可写，且已有备份文件；
+  - 第二套源目录存在、可写。
+- 主套按原 compose 标签恢复：
+  - 工作目录：`/vol1/1000/Docker/youchat`
+  - compose：`docker-compose.yml + compose.mysql.yaml`
+  - project：`youliaoapp`
+- 第二套按原 compose 标签恢复：
+  - 工作目录：`/vol1/1000/Docker/youchat-2`
+  - compose：`compose.yaml`
+  - project：`youchat-2`
+- 四个侧车已恢复为 `Up`。
+
+代码沉淀：
+
+- 新增 `scripts/repair-fnos-youchat-sidecars.py`。
+- 新增 npm 命令：
+
+```powershell
+npm run fnos:repair:sidecars
+```
+
+脚本行为：
+
+- SSH 到飞牛；
+- 读取两套后端 `.env`；
+- 只接受 `/vol02/` 下的云盘备份路径；
+- 验证 `YOUCHAT_BACKUP_HOST_PATH` 存在且可写；
+- 如果云盘父目录存在且可写，仅允许创建缺失的备份叶子目录；
+- 拒绝非云盘/本地目录，不做本地 fallback；
+- 分别用原 compose project 恢复 `control/backup`；
+- 用 `.env` 的 `YOUCHAT_CONTROL_TOKEN` 调 `/api/status` 检查 control API。
+
+后续注意：
+
+- 遇到 `control/backup` Exited 255 时，先恢复飞牛云盘授权，再跑 `npm run fnos:repair:sidecars`。
+- 不要把 `YOUCHAT_BACKUP_HOST_PATH` 改到 `/vol1/1000/Docker/...` 本地兜底目录；用户明确拒绝这种方案。
+- 主套和第二套 compose/project 不一样，恢复时不要混用。

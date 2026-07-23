@@ -433,6 +433,16 @@ npm run fnos:health
 
 如果 `fnos:restore:mysql` 成功但稍后又掉回 SQLite，就继续排查飞牛侧是否有启动后的初始化脚本或手工设置把数据库模式再次改回去。
 
+如果飞牛里 `youchat-control`、`youchat-backup` 或第二套的 `youchat-control-2`、`youchat-backup-2` 退出，且 `docker inspect` 显示创建 `/vol02/.../来自：飞牛私有云/youliaobackup*` 挂载源失败，通常是飞牛云盘授权或挂载短暂失效，不是 Web 前端问题。恢复云盘授权后运行：
+
+```powershell
+$env:FNOS_PASSWORD = "你的飞牛 SSH 密码"
+$env:FNOS_SUDO_PASSWORD = "你的飞牛 sudo 密码"
+npm run fnos:repair:sidecars
+```
+
+这个脚本只读取两套服务端 `.env` 里的 `YOUCHAT_BACKUP_HOST_PATH`，验证云盘源目录可写后重启 `control/backup` 侧车；它会拒绝非 `/vol02/` 的本地备份路径，不会把备份悄悄切到本地目录。
+
 2026-06-16 又确认一个触发点：系统设置弹窗里保存 `/System/SetOptions` 时，如果把服务端返回的数据库配置或任务配置原样提交，可能导致悠聊服务端再次切回 SQLite。Web 已做保护：
 
 - 系统设置里的 `自动关闭会话` 锁定为关闭，不允许保存成开启，避免服务端自动关闭会话。

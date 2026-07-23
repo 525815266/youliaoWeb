@@ -4616,3 +4616,69 @@ Do not regress:
 
 - Keep reconnect modal tied to real connection failures, not generic API toasts.
 - Keep the server bridge success path clearing the modal; otherwise it will block the composer after recovery.
+
+## 2026-07-23 Handoff: FnOS YouChat Sidecars Recovered Without Local Backup Fallback
+
+User report:
+
+- Secondary Docker client had services errored/closed.
+- User then clarified the task should not only start them, but also fix the underlying problem.
+- User explicitly rejected using a local fallback directory: `不要用本地目录`.
+
+Remote state found:
+
+- Main business containers were not the failing ones:
+  - primary `youchat-service` / `youchat-autologin` still running;
+  - secondary `youchat-service-2` / `youchat-autologin-2` still running.
+- Four sidecars were exited with code `255`:
+  - `youchat-control`
+  - `youchat-backup`
+  - `youchat-control-2`
+  - `youchat-backup-2`
+- All four had the same Docker mount-source error:
+  - primary cloud backup path: `/vol02/1000-1-713f7ca0/来自：飞牛私有云/youliaobackup`
+  - secondary cloud backup path: `/vol02/1000-1-713f7ca0/来自：飞牛私有云/youliaobackup-2`
+- Root cause was the FnOS cloud-storage path being unavailable earlier, not SQLite and not Web fake counts.
+
+Important encoding detail:
+
+- Passing the Chinese cloud path directly through SSH/shell can display or become `????`.
+- The reliable probe is to read `.env` on the remote machine with Python as UTF-8, then use that path object directly.
+
+Immediate repair done:
+
+- Did not change `.env` to a local path.
+- Verified both configured cloud paths exist and are writable.
+- Restored sidecars with their original compose identities:
+  - primary:
+    - cwd `/vol1/1000/Docker/youchat`
+    - `docker compose -p youliaoapp -f docker-compose.yml -f compose.mysql.yaml up -d youchat-control youchat-backup`
+  - secondary:
+    - cwd `/vol1/1000/Docker/youchat-2`
+    - `docker compose up -d youchat-control youchat-backup`
+- All four sidecars came back Up.
+
+Code/docs added:
+
+- `scripts/repair-fnos-youchat-sidecars.py`
+- npm command:
+
+```powershell
+npm run fnos:repair:sidecars
+```
+
+Script behavior:
+
+- SSHes to FnOS.
+- Reads primary/secondary backend `.env` files.
+- Verifies `YOUCHAT_BACKUP_HOST_PATH`.
+- Refuses non-`/vol02/` backup paths so it cannot silently switch to local fallback.
+- Allows creating only a missing leaf backup directory if the cloud parent exists and is writable.
+- Runs the original compose commands for primary and secondary sidecars.
+- Checks container state and probes control `/api/status` with `X-Control-Token` from `.env`.
+
+Do not regress:
+
+- Do not introduce a local fallback backup directory for these sidecars unless the user explicitly reverses the instruction.
+- Do not mix primary and secondary compose projects.
+- If this fails again, first confirm FnOS cloud authorization/mount is restored, then run `npm run fnos:repair:sidecars`.
