@@ -4768,3 +4768,71 @@ Important:
 
 - Do not commit `data/reply-skills.json`; this import updated remote runtime skill data through `/local/reply-skills`.
 - Continue using `skills:import:curated` for user-supplied curated JSON instead of manually editing runtime JSON.
+
+## 2026-08-19 Handoff: YouChat Linux Service Package Upgraded on Both FnOS Backends
+
+User clarified `C:\Users\ACER\Downloads\youChat-linux (2).zip` is a server package, not the Web client.
+
+Local backend Docker project:
+
+- Path: `C:\Users\ACER\Downloads\youChat-linux1\youChat-linux`
+- New package extracted at: `C:\Users\ACER\Downloads\youChat-linux-new-extract-20260819-224959\youChat-linux`
+- Updated tracked files:
+  - `YouChatService`
+  - `YouChatService.pdb`
+  - `YouChatService.xml`
+- `appsettings.json` had no meaningful diff.
+- Tracked static assets had no diff after copy; custom `wwwroot/service-login.html` was preserved.
+- `YouChatService.xml` removed 21 lines, mainly `UpdateContactIsNotice` / `IsNotice` XML documentation entries.
+- Local backend commit: `e8a744e Update YouChat service binary package`.
+- Backend repo currently has no Git remote. Do not push this binary package into the Web repo `525815266/youliaoWeb`; configure a dedicated backend remote first.
+
+FnOS deployment completed:
+
+- Primary backend:
+  - dir `/vol1/1000/Docker/youchat`
+  - container `youchat-service`
+  - API `http://192.168.9.83:18080/api`
+- Secondary backend:
+  - dir `/vol1/1000/Docker/youchat-2`
+  - container `youchat-service-2`
+  - API `http://192.168.9.83:18082/api`
+
+Actions performed:
+
+- Uploaded the new server root files to FnOS temp dir `/tmp/youchat-service-upgrade-20260819-225508`.
+- Backed up current program files before replacement:
+  - `/vol1/1000/Docker/youchat/docker-control/program-backups/service-upgrade-20260819-225508`
+  - `/vol1/1000/Docker/youchat-2/docker-control/program-backups/service-upgrade-20260819-225508`
+- Stopped `youchat-service` and `youchat-service-2`.
+- Replaced the server program files in both backend dirs.
+- Restored executable permission on `YouChatService`.
+- Started both service containers.
+
+Verification:
+
+- Both deployed `YouChatService` files now hash to `49d37e3362e3b8b026f2fde3d2c4225cac3f00e7700f2cc57c4cb7c1dd8b122b`.
+- `POST /api/System/GetOptions`:
+  - primary: `success=true`, `databaseType=0`, MySQL, `autoShutDown=false`;
+  - secondary: `success=true`, `databaseType=0`, MySQL, `autoShutDown=false`.
+- `POST /api/System/GetAccountInfo`:
+  - primary: `realName=Boom`;
+  - secondary: `realName=猫猫一号`.
+- Contact counts after upgrade:
+  - primary: total contacts `8410`;
+  - secondary: total contacts `44`.
+- Web containers:
+  - `5177/health` OK, `apiBase=http://host.docker.internal:18080/api`;
+  - `5178/health` OK, `apiBase=http://host.docker.internal:18082/api`.
+- FnOS database health:
+  - primary: `databaseMode=mysql`, `historyContacts=6034`, `guestbookContacts=0`;
+  - secondary: `databaseMode=mysql`, `historyContacts=3`, `guestbookContacts=4`.
+- SignalR online bridge re-registered:
+  - `5177/local/signalr/online` returned `state=Connected`;
+  - `5178/local/signalr/online` returned `state=Connected`.
+
+Important:
+
+- Probe YouChat API routes with POST. `GET /api/System/GetOptions` returns the service's own 404 and should not be treated as an outage.
+- Keep primary and secondary paths/ports separate.
+- Do not overwrite `.env`, `docker-control`, `docker-data`, cloud backup paths, or the runtime `\悠聊数据库\config\YouChatConfig.json`.

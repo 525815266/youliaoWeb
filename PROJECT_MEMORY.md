@@ -7628,3 +7628,77 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 
 - 本次写入的是两套 Web 运行态 `reply-skills.json`，不是提交 `data/reply-skills.json`。
 - 以后用户继续给 JSON 训练数据，优先用 `skills:import:curated` 导入，不要手改运行态 JSON。
+
+## 2026-08-19 服务端程序包升级：youChat-linux (2)
+
+用户确认 `C:\Users\ACER\Downloads\youChat-linux (2).zip` 是服务端程序包，不是 Web 客户端包。
+
+处理原则：
+
+- 只升级 YouChat Linux 服务程序包。
+- 保留现有 Docker 编排、`.env`、MySQL 守护、control/backup/autologin 脚本、运行态配置和数据卷。
+- 不覆盖 `wwwroot/service-login.html`、`wwwroot/service-config.json`、`\悠聊数据库\config\YouChatConfig.json` 等本地/运行态文件。
+
+本地服务端 Docker 项目：
+
+- 路径：`C:\Users\ACER\Downloads\youChat-linux1\youChat-linux`
+- 新包解压路径：`C:\Users\ACER\Downloads\youChat-linux-new-extract-20260819-224959\youChat-linux`
+- 变更文件：
+  - `YouChatService`
+  - `YouChatService.pdb`
+  - `YouChatService.xml`
+- 新旧 `appsettings.json` 无实质差异。
+- 官方静态资源复制检查后无 tracked diff，`wwwroot/service-login.html` 已保留。
+- `YouChatService.xml` 比旧版少 21 行，主要移除 `UpdateContactIsNotice` / `IsNotice` 相关 XML 文档项。
+- 本地服务端 Git commit：`e8a744e Update YouChat service binary package`
+- 注意：该服务端 Docker 项目当前没有配置 Git remote，所以服务端包已本地 commit，但不能直接 push 到 GitHub。不要把 140MB 服务端二进制硬塞进 Web 仓库。
+
+飞牛部署：
+
+- 主套后端：
+  - 目录：`/vol1/1000/Docker/youchat`
+  - 容器：`youchat-service`
+  - API：`http://192.168.9.83:18080/api`
+- 第二套后端：
+  - 目录：`/vol1/1000/Docker/youchat-2`
+  - 容器：`youchat-service-2`
+  - API：`http://192.168.9.83:18082/api`
+
+部署动作：
+
+- 上传新服务端根目录程序文件到飞牛临时目录。
+- 两套目录分别备份旧程序到：
+  - `/vol1/1000/Docker/youchat/docker-control/program-backups/service-upgrade-20260819-225508`
+  - `/vol1/1000/Docker/youchat-2/docker-control/program-backups/service-upgrade-20260819-225508`
+- 停止 `youchat-service`、`youchat-service-2`。
+- 替换服务程序文件并恢复 `YouChatService` 执行权限。
+- 启动 `youchat-service`、`youchat-service-2`。
+
+验证结果：
+
+- 两套 `YouChatService` SHA256 均为新包 hash：`49d37e3362e3b8b026f2fde3d2c4225cac3f00e7700f2cc57c4cb7c1dd8b122b`。
+- `POST /api/System/GetOptions`：
+  - 主套：`success=true`、`databaseType=0`、MySQL、`autoShutDown=false`。
+  - 第二套：`success=true`、`databaseType=0`、MySQL、`autoShutDown=false`。
+- `POST /api/System/GetAccountInfo`：
+  - 主套：`realName=Boom`。
+  - 第二套：`realName=猫猫一号`。
+- `POST /api/Contact/GetContactList`：
+  - 主套 `total=8410`。
+  - 第二套 `total=44`。
+- Web 健康：
+  - `5177/health` OK，`apiBase=http://host.docker.internal:18080/api`。
+  - `5178/health` OK，`apiBase=http://host.docker.internal:18082/api`。
+- Web 数据库守护健康：
+  - 主套 `databaseMode=mysql`、`historyContacts=6034`、`guestbookContacts=0`。
+  - 第二套 `databaseMode=mysql`、`historyContacts=3`、`guestbookContacts=4`。
+  - 第二套历史少不是 SQLite，本次检查确认仍为 MySQL 小库。
+- SignalR 在线桥已重新注册：
+  - `5177/local/signalr/online`：`state=Connected`。
+  - `5178/local/signalr/online`：`state=Connected`。
+
+后续注意：
+
+- 业务接口探测优先用 POST。`GET /api/System/GetOptions` 会返回服务端自己的 404，不能据此误判服务异常。
+- 主套和第二套 API、目录、容器名不要混用。
+- 如果用户再次要求“推到 GitHub”，先给服务端 Docker 项目配置独立 GitHub remote，或让用户明确服务端仓库地址；不要把服务端二进制提交到 `525815266/youliaoWeb` 这个 Web 仓库。
