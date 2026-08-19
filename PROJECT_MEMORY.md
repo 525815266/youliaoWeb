@@ -7702,3 +7702,65 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 - 业务接口探测优先用 POST。`GET /api/System/GetOptions` 会返回服务端自己的 404，不能据此误判服务异常。
 - 主套和第二套 API、目录、容器名不要混用。
 - 如果用户再次要求“推到 GitHub”，先给服务端 Docker 项目配置独立 GitHub remote，或让用户明确服务端仓库地址；不要把服务端二进制提交到 `525815266/youliaoWeb` 这个 Web 仓库。
+
+## 2026-08-19 服务端发布链路优化：GitHub/GHCR + 飞牛双套同步
+
+基于上一节的建议，继续把服务端 Docker 项目整理成可长期维护和发布的形态。
+
+服务端本地项目：
+
+- 路径：`C:\Users\ACER\Downloads\youChat-linux1\youChat-linux`
+- 新 commit：`3cdccbb Add backend release and dual FnOS deploy workflow`
+
+新增文件：
+
+- `.github/workflows/publish-ghcr.yml`
+  - 支持 tag 或手动触发构建 Docker 镜像；
+  - checkout 开启 `lfs: true`；
+  - 发布到 `ghcr.io/525815266/youchat-service`。
+- `deploy/fnos-service-targets.json`
+  - 记录主套 `/vol1/1000/Docker/youchat`、API `18080`；
+  - 记录第二套 `/vol1/1000/Docker/youchat-2`、API `18082`。
+- `scripts/fnos_deploy_all.py`
+  - 一次上传完整服务端包；
+  - 逐套同步飞牛后端；
+  - 默认只重建 `youchat` 主服务，不重建 MySQL；
+  - 默认保留远端 `.env` 和 `compose*.yaml` / `docker-compose.yml`，避免第二套定制端口/容器名被主套模板覆盖；
+  - 每套在 `docker-control/program-backups/deploy-all-<timestamp>` 备份旧程序；
+  - 先等待 `POST /System/GetOptions` 成功；
+  - 再等待 `POST /System/GetAccountInfo` 返回非 0 `userId`，避免刚重启时误判未登录。
+- `scripts/prepare_github_publish.ps1`
+  - 检查 `git-lfs`；
+  - 可用 `-MigrateLfs` 把 `YouChatService` 历史迁移到 Git LFS；
+  - 可用 `-RemoteUrl` 添加服务端独立 GitHub remote。
+- `docs/GITHUB_GHCR_RELEASE.md`
+  - 记录独立服务端仓库、Git LFS、GHCR 发布、飞牛继续使用挂载目录模式的原因。
+
+实测：
+
+- `python -m py_compile scripts\fnos_deploy.py scripts\fnos_deploy_all.py` 通过。
+- `powershell -ExecutionPolicy Bypass -File .\scripts\prepare_github_publish.ps1` 干跑通过，确认当前 `YouChatService` 仍是普通大文件，真正推 GitHub 前需用 `-MigrateLfs`。
+- `python .\scripts\fnos_deploy_all.py` 已真实同步飞牛两套后端。
+  - 第一次发现验证太急，服务刚重启时 `curl` 连接重置；
+  - 已改成 API 重试等待；
+  - 第二次发现 `GetAccountInfo` 会先返回 `userId=0`；
+  - 已改成继续等待自动登录完成。
+- 最后一轮同步成功：
+  - 主套 API 等待 1 次，账号登录等待 11 次后恢复 `Boom`；
+  - 第二套 API 等待 1 次，账号登录等待 18 次后恢复 `猫猫一号`。
+
+最终飞牛状态：
+
+- `youchat-service`：Up，端口 `18080 -> 8080`；
+- `youchat-service-2`：Up，端口 `18082 -> 8080`；
+- `5177/health` OK；
+- `5178/health` OK；
+- 主套 `/local/fnos/health`：MySQL，`historyContacts=6033`；
+- 第二套 `/local/fnos/health`：MySQL，`historyContacts=3`；
+- 两套 `local/signalr/online` 均返回 `state=Connected`。
+
+重要限制：
+
+- 服务端 Docker 项目仍没有 Git remote。
+- 因 `YouChatService` 大于普通 GitHub 单文件限制，不能直接推；需先运行 `scripts/prepare_github_publish.ps1 -MigrateLfs` 或改用 Release 附件/外部制品方式。
+- 不要把服务端二进制或 GHCR 工作流塞进 Web 仓库；Web 仓库只记录文档和前端代码。

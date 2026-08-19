@@ -4836,3 +4836,62 @@ Important:
 - Probe YouChat API routes with POST. `GET /api/System/GetOptions` returns the service's own 404 and should not be treated as an outage.
 - Keep primary and secondary paths/ports separate.
 - Do not overwrite `.env`, `docker-control`, `docker-data`, cloud backup paths, or the runtime `\悠聊数据库\config\YouChatConfig.json`.
+
+## 2026-08-19 Handoff: Backend Release Workflow and Dual FnOS Deploy Script
+
+Follow-up to the service package upgrade. The backend Docker project was improved for future independent GitHub/GHCR publishing and safer dual-stack FnOS updates.
+
+Backend local project:
+
+- Path: `C:\Users\ACER\Downloads\youChat-linux1\youChat-linux`
+- New commit: `3cdccbb Add backend release and dual FnOS deploy workflow`
+
+Added:
+
+- `.github/workflows/publish-ghcr.yml`
+  - Builds/pushes a Docker image on tag or manual workflow dispatch.
+  - Uses checkout `lfs: true`.
+  - Publishes to `ghcr.io/525815266/youchat-service`.
+- `deploy/fnos-service-targets.json`
+  - Primary target: `/vol1/1000/Docker/youchat`, API `18080`.
+  - Secondary target: `/vol1/1000/Docker/youchat-2`, API `18082`.
+- `scripts/fnos_deploy_all.py`
+  - Uploads one archive and applies it to both FnOS backends.
+  - Defaults to recreating only the `youchat` service, not MySQL/sidecars.
+  - Preserves remote `.env` and compose files by default, which is critical because secondary has customized ports/container names.
+  - Backs up old program files to `docker-control/program-backups/deploy-all-<timestamp>`.
+  - Waits for `POST /System/GetOptions`.
+  - Then waits for `POST /System/GetAccountInfo` to return non-zero `userId`, avoiding false negatives during autologin delay.
+- `scripts/prepare_github_publish.ps1`
+  - Checks git-lfs.
+  - With `-MigrateLfs`, migrates `YouChatService` history to Git LFS.
+  - With `-RemoteUrl`, adds a dedicated backend GitHub remote.
+- `docs/GITHUB_GHCR_RELEASE.md`
+  - Documents independent backend GitHub repo, Git LFS, GHCR tagging, and why FnOS should keep the mounted-directory deployment model.
+
+Verification:
+
+- `python -m py_compile scripts\fnos_deploy.py scripts\fnos_deploy_all.py` passed.
+- Dry run of `scripts\prepare_github_publish.ps1` passed and confirmed current `YouChatService` is still a normal large Git blob.
+- `scripts\fnos_deploy_all.py` was run against real FnOS targets.
+  - First run exposed too-early API verification; script now retries `GetOptions`.
+  - Next run exposed autologin delay where `GetAccountInfo.userId=0`; script now waits for non-zero user ID.
+  - Final run succeeded for both stacks:
+    - primary waited 1 API attempt and 11 account-login attempts, then returned `Boom`;
+    - secondary waited 1 API attempt and 18 account-login attempts, then returned `猫猫一号`.
+
+Final live state:
+
+- `youchat-service`: Up on `18080 -> 8080`.
+- `youchat-service-2`: Up on `18082 -> 8080`.
+- `5177/health`: OK.
+- `5178/health`: OK.
+- Primary `/local/fnos/health`: MySQL, `historyContacts=6033`.
+- Secondary `/local/fnos/health`: MySQL, `historyContacts=3`.
+- Both `local/signalr/online` calls returned `state=Connected`.
+
+Important:
+
+- Backend repo still has no Git remote.
+- Do not push the backend repo to GitHub before running `scripts/prepare_github_publish.ps1 -MigrateLfs` or choosing a Release-asset/external artifact strategy.
+- Keep backend binary/workflows out of `525815266/youliaoWeb`; that repo is for the Web client and docs memory only.
