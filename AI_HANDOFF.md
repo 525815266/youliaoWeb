@@ -4895,3 +4895,28 @@ Important:
 - Backend repo still has no Git remote.
 - Do not push the backend repo to GitHub before running `scripts/prepare_github_publish.ps1 -MigrateLfs` or choosing a Release-asset/external artifact strategy.
 - Keep backend binary/workflows out of `525815266/youliaoWeb`; that repo is for the Web client and docs memory only.
+
+## 2026-08-21 Handoff: Web Online Registration After Backend Upgrade
+
+Problem:
+
+- After the 2026-08-19 backend binary upgrade, messages received while only Web was open were routed to guestbook instead of current conversations.
+- `/local/signalr/online` returning `Connected` was insufficient: it only proved transport state, not the backend's business registration or SignalR group membership.
+
+Confirmed root cause and protocol:
+
+- The Node bridge registered only on initial connect and did not call `RegisterUser` after SignalR automatic reconnect.
+- The official Electron 1.4.7 client calls `RegisterUser` again after reconnect.
+- The upgraded backend accepts `EnsureRejoinGroup("2", 0)` and returns `true`; the old client form `EnsureRejoinGroup("2", "Client")` now fails argument binding.
+- `SyncClientState("2", false)` is accepted and explicitly clears suspended state.
+
+Implementation:
+
+- `server.js` now:
+  - re-registers with `RegisterUser(accountId, false, true, 0)` in `onreconnected`;
+  - refreshes registration after 45 seconds when `/local/signalr/online` is called;
+  - invokes `SyncClientState(accountId, false)` and `EnsureRejoinGroup(accountId, 0)`;
+  - returns `lastRegisteredAt`, registration reason, recovery results, and warnings.
+- `public/app.js` browser SignalR fallback now applies the same numeric mode and reconnect registration behavior.
+
+Do not locally move guestbook records into current to mask this issue. Existing guestbook records remain real guestbook records; only new-message routing verifies the fix.

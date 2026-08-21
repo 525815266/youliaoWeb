@@ -31,6 +31,7 @@ const MEDIA_PROXY_TIMEOUT_MS = 30000;
 const PROMPTWORKS_TIMEOUT_MS = Math.max(10000, Number(process.env.PROMPTWORKS_TIMEOUT_MS || 60000));
 const SIGNALR_START_TIMEOUT_MS = 12000;
 const SIGNALR_KEEP_ALIVE_MS = 120000;
+const SIGNALR_REGISTRATION_REFRESH_MS = 45000;
 const DATABASE_GUARD_ENABLED = process.env.YOUCHAT_DATABASE_GUARD_ENABLED !== "0";
 const DATABASE_GUARD_INTERVAL_MS = Math.max(60000, Number(process.env.YOUCHAT_DATABASE_GUARD_INTERVAL_MS || 5 * 60 * 1000));
 const DATABASE_GUARD_MIN_HISTORY_COUNT = Number(process.env.YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT || 1000);
@@ -3289,6 +3290,45 @@ function getSignalRConnectionKey(apiBase, accountId) {
   return `${getSignalRBaseUrl(apiBase)}::${String(accountId || "").trim()}`;
 }
 
+async function registerSignalRClient(connection, apiBase, accountId, options = {}) {
+  const normalizedAccountId = String(accountId || "").trim();
+  const key = getSignalRConnectionKey(apiBase, normalizedAccountId);
+  const isReconnect = Boolean(options.isReconnect);
+  const registerResult = await connection.invoke("RegisterUser", normalizedAccountId, false, isReconnect, 0);
+  const recovery = {
+    syncClientState: null,
+    ensureRejoinGroup: null,
+    warnings: []
+  };
+
+  try {
+    recovery.syncClientState = await connection.invoke("SyncClientState", normalizedAccountId, false);
+  } catch (error) {
+    recovery.warnings.push(`SyncClientState: ${error.message}`);
+  }
+
+  try {
+    recovery.ensureRejoinGroup = await connection.invoke("EnsureRejoinGroup", normalizedAccountId, 0);
+  } catch (error) {
+    recovery.warnings.push(`EnsureRejoinGroup: ${error.message}`);
+  }
+
+  const registeredAt = Date.now();
+  const cached = signalRHubConnections.get(key);
+  if (cached?.connection === connection) {
+    cached.lastRegisteredAt = registeredAt;
+    cached.lastRegistrationReason = options.reason || (isReconnect ? "reconnected" : "online");
+    cached.lastRegistrationRecovery = recovery;
+  }
+
+  return {
+    registerResult,
+    registeredAt,
+    reason: options.reason || (isReconnect ? "reconnected" : "online"),
+    recovery
+  };
+}
+
 async function ensureServerSignalRConnection(apiBase, accountId) {
   const normalizedAccountId = String(accountId || "").trim();
   if (!normalizedAccountId) throw new Error("SignalR accountId is required");
@@ -3326,14 +3366,32 @@ async function ensureServerSignalRConnection(apiBase, accountId) {
       if (error) console.warn(`SignalR bridge closed: ${error.message}`);
     });
 
+    connection.onreconnected(async () => {
+      try {
+        await registerSignalRClient(connection, apiBase, normalizedAccountId, {
+          isReconnect: true,
+          reason: "transport-reconnected"
+        });
+      } catch (error) {
+        const current = signalRHubConnections.get(key);
+        if (current?.connection === connection) current.lastRegistrationError = error.message;
+        console.warn(`SignalR bridge re-registration failed: ${error.message}`);
+      }
+    });
+
     await withTimeout(connection.start(), SIGNALR_START_TIMEOUT_MS, "SignalR bridge start");
-    await connection.invoke("RegisterUser", normalizedAccountId, false, false, 0);
     signalRHubConnections.set(key, {
       connection,
       connecting: null,
       hubUrl,
       accountId: normalizedAccountId,
-      lastUsedAt: Date.now()
+      lastUsedAt: Date.now(),
+      lastRegisteredAt: 0,
+      lastRegistrationError: ""
+    });
+    await registerSignalRClient(connection, apiBase, normalizedAccountId, {
+      isReconnect: false,
+      reason: "connection-started"
     });
     return connection;
   })();
@@ -3362,7 +3420,11 @@ function getSignalRConnectionStatus(apiBase, accountId, connection = null) {
   return {
     state: activeConnection?.state || "Disconnected",
     hubUrl: cached?.hubUrl || buildSignalRHubUrl(apiBase, normalizedAccountId),
-    lastUsedAt: cached?.lastUsedAt ? new Date(cached.lastUsedAt).toISOString() : ""
+    lastUsedAt: cached?.lastUsedAt ? new Date(cached.lastUsedAt).toISOString() : "",
+    lastRegisteredAt: cached?.lastRegisteredAt ? new Date(cached.lastRegisteredAt).toISOString() : "",
+    lastRegistrationReason: cached?.lastRegistrationReason || "",
+    lastRegistrationRecovery: cached?.lastRegistrationRecovery || null,
+    lastRegistrationError: cached?.lastRegistrationError || ""
   };
 }
 
@@ -3386,6 +3448,15 @@ async function handleSignalROnline(req, res) {
   for (const candidateBase of getApiBaseCandidates(apiBase)) {
     try {
       const connection = await ensureServerSignalRConnection(candidateBase, accountId);
+      const key = getSignalRConnectionKey(candidateBase, accountId);
+      const cached = signalRHubConnections.get(key);
+      const registrationAge = Date.now() - Number(cached?.lastRegisteredAt || 0);
+      if (registrationAge >= SIGNALR_REGISTRATION_REFRESH_MS) {
+        await registerSignalRClient(connection, candidateBase, accountId, {
+          isReconnect: true,
+          reason: "online-refresh"
+        });
+      }
       const status = getSignalRConnectionStatus(candidateBase, accountId, connection);
       sendJson(res, 200, {
         success: true,
@@ -3396,6 +3467,10 @@ async function handleSignalROnline(req, res) {
         accountId,
         state: status.state,
         lastUsedAt: status.lastUsedAt,
+        lastRegisteredAt: status.lastRegisteredAt,
+        lastRegistrationReason: status.lastRegistrationReason,
+        registrationRecovery: status.lastRegistrationRecovery,
+        lastRegistrationError: status.lastRegistrationError,
         failedAttempts: attempts
       });
       return;

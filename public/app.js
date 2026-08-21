@@ -2855,7 +2855,7 @@ async function ensureSignalRConnection() {
       state.signalRStatus = "connected";
       clearReconnectState("browser-signalr");
       log("SignalR reconnected", { connectionId });
-      registerSignalRUser(connection).catch((error) => log("SignalR register after reconnect failed", { error: error.message }));
+      registerSignalRUser(connection, { isReconnect: true }).catch((error) => log("SignalR register after reconnect failed", { error: error.message }));
     });
 
     state.signalRStatus = "connecting";
@@ -2879,12 +2879,28 @@ async function ensureSignalRConnection() {
   }
 }
 
-async function registerSignalRUser(connection = state.signalRConnection) {
+async function registerSignalRUser(connection = state.signalRConnection, options = {}) {
   if (!connection || connection.state !== "Connected") return;
   const accountId = getSignalRAccountId();
   if (!accountId) return;
-  await connection.invoke("RegisterUser", accountId, false, false, 0);
-  log("SignalR user registered", { accountId, mode: 0 });
+  await connection.invoke("RegisterUser", accountId, false, Boolean(options.isReconnect), 0);
+  const recoveryWarnings = [];
+  try {
+    await connection.invoke("SyncClientState", accountId, false);
+  } catch (error) {
+    recoveryWarnings.push(`SyncClientState: ${error.message}`);
+  }
+  try {
+    await connection.invoke("EnsureRejoinGroup", accountId, 0);
+  } catch (error) {
+    recoveryWarnings.push(`EnsureRejoinGroup: ${error.message}`);
+  }
+  log("SignalR user registered", {
+    accountId,
+    mode: 0,
+    isReconnect: Boolean(options.isReconnect),
+    recoveryWarnings
+  });
 }
 
 function buildServerSignalRKey(accountId = getSignalRAccountId()) {

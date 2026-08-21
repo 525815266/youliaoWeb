@@ -469,7 +469,7 @@ npm run fnos:repair:sidecars
 
 - 当前不会使用假数据，接口失败会显示真实失败信息并写入抓包日志。
 - 右上角客户端设置和 Web AI 设置已经分离；不要把原生 `System/GetOptions` 里的 `aiOptions` 当成 Web AI 推荐配置。
-- `挂起` 当前是 Web 本地自动刷新暂停，后续如果抓到原生服务端挂起接口，再替换这一层逻辑。
+- Web 在线桥会显式调用 `SyncClientState(accountId, false)` 保持未挂起状态；服务端重启或 SignalR 重连后会重新 `RegisterUser` 并调用 `EnsureRejoinGroup(accountId, 0)`。`/local/signalr/online` 需要同时检查 `state=Connected`、`lastRegisteredAt` 和 `registrationRecovery.ensureRejoinGroup=true`，不能只看传输连接状态。
 - “当前”会话必须使用 `/Contact/GetContactList` + 短客服 `accountId`。当前飞牛数据里 `Boom666` 对应短 id 是 `2`；不带 `accountId` 的同接口会返回全量联系人，不能当作当前列表数量。
 - 聊天消息卡片已按真实类型区分：`contentType=5` 网页卡片、`contentType=6` 小程序、`contentType=8` 文件卡片。
 - 小程序卡片会优先使用真实 `miniProTitle/miniProName/miniProImg/miniImgUrl`，没有真实封面时只显示“小程序类型占位图”，不伪造商品图或小程序截图。

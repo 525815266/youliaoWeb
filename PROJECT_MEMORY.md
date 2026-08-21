@@ -71,6 +71,7 @@
 75. [2026-06-17 悠聊人工回复导入 PromptWorks 训练](#75-2026-06-17-悠聊人工回复导入-promptworks-训练)
 79. [2026-06-29 会话列表键盘切换与 Skill 训练标记台](#79-2026-06-29-会话列表键盘切换与-skill-训练标记台)
 80. [2026-06-30 订单号场景 Skill 训练纠偏](#80-2026-06-30-订单号场景-skill-训练纠偏)
+84. [2026-08-21 Web 在线但新消息进入留言修复](#84-2026-08-21-web-在线但新消息进入留言修复)
 
 ## 1. 项目目标
 
@@ -7764,3 +7765,43 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 - 服务端 Docker 项目仍没有 Git remote。
 - 因 `YouChatService` 大于普通 GitHub 单文件限制，不能直接推；需先运行 `scripts/prepare_github_publish.ps1 -MigrateLfs` 或改用 Release 附件/外部制品方式。
 - 不要把服务端二进制或 GHCR 工作流塞进 Web 仓库；Web 仓库只记录文档和前端代码。
+
+## 84. 2026-08-21 Web 在线但新消息进入留言修复
+
+现象：
+
+- 2026-08-19 更新服务端程序后，只开 Web 客服时，新消息进入“留言”，没有按在线规则分配到“当前”。
+- `/local/signalr/online` 虽然返回 `state=Connected`，但该状态只表示 SignalR 传输连接存活，不能证明服务端仍保留客服业务在线登记和消息组成员关系。
+
+根因：
+
+- `server.js` 的 Node SignalR 桥仅在第一次建连时调用 `RegisterUser`。
+- 后端服务重启或 SignalR 自动重连后，Node 桥没有像官方 Electron 1.4.7 客户端一样重新调用 `RegisterUser`。
+- Web 每 60 秒调用一次在线保活，但旧实现命中连接缓存后直接返回，没有刷新业务在线登记。
+- 新服务端 `EnsureRejoinGroup` 的第二个参数是数字模式 `0`；官方 1.4.7 包中的旧调用使用字符串 `"Client"`，会返回参数绑定失败。
+
+修复：
+
+- `server.js`
+  - SignalR `onreconnected` 后用 `RegisterUser(accountId, false, true, 0)` 重新登记。
+  - 在线登记同步调用 `SyncClientState(accountId, false)`，明确解除挂起状态。
+  - 调用 `EnsureRejoinGroup(accountId, 0)`，确保重新加入客户端消息组。
+  - Web 在线保活每 45 秒以上刷新一次业务登记；前端原有 60 秒节流会稳定触发。
+  - `/local/signalr/online` 返回最近登记时间、原因、入组结果和兼容警告，后续不再只看 `Connected`。
+- `public/app.js`
+  - 浏览器 SignalR 兜底路径在自动重连后使用 `isReconnect=true`。
+  - 同样同步未挂起状态并按数字模式 `0` 重新入组。
+
+真实验证：
+
+- 解包原客户端 `C:\Program Files\youchat-desktop\resources\app.asar`，确认官方客户端初次登录和重连都会调用 `RegisterUser`。
+- 主套真实 hub 探测：
+  - `RegisterUser("2", false, true, 0)` 成功；
+  - `SyncClientState("2", false)` 成功；
+  - `EnsureRejoinGroup("2", 0)` 返回 `true`；
+  - `EnsureRejoinGroup("2", "Client")` 返回参数绑定失败，确认新服务端签名差异。
+
+边界：
+
+- 本修复不把已经进入“留言”的历史记录伪造移动到“当前”；已有留言仍通过真实 `AccessIn/AccessInAll` 接入。
+- 验收目标是修复部署后产生的新消息：Web 在线且未挂起时进入“当前”，Web 停止在线登记后才进入“留言”。
