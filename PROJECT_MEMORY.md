@@ -7805,6 +7805,13 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
   - 主套 `5177 -> 18080`：`state=Connected`、`lastRegistrationReason=connection-started`、`ensureRejoinGroup=true`、无警告；
   - 第二套 `5178 -> 18082`：`state=Connected`、`lastRegistrationReason=connection-started`、`ensureRejoinGroup=true`、无警告；
   - 两套 `System/GetAccountInfo.userId` 均非 0，服务端业务账号处于登录状态。
+- 持续保活验证：超过 45 秒后，两套都返回 `lastRegistrationReason=online-refresh`、新登记时间和 `ensureRejoinGroup=true`。
+- 新消息路由闭环验证：
+  - 修复后的主套 Node 桥在 `2026-08-21 11:42:48/11:42:53` 收到真实 `msgNotice/allMsgNotice`；
+  - 随后用 `application/x-www-form-urlencoded` 回查 `/Contact/GetContactList`；
+  - 新会话 `Toyoke` 为 `accountId=2`、`conversationId=31745`，出现在“当前”；
+  - 修复前四条旧会话仍为 `accountId=0`，保留在“留言”；
+  - 因此已证明服务端真实分配恢复，没有通过前端移动或筛选伪造结果。
 
 边界：
 

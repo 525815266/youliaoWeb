@@ -4926,5 +4926,11 @@ Deployment verification:
 - Primary `5177 -> 18080`: connected, `EnsureRejoinGroup=true`, no registration warnings.
 - Secondary `5178 -> 18082`: connected, `EnsureRejoinGroup=true`, no registration warnings.
 - Both backend `System/GetAccountInfo.userId` values were non-zero after deployment.
+- After the 45-second refresh threshold, both returned `lastRegistrationReason=online-refresh` with new registration timestamps and `EnsureRejoinGroup=true`.
+- Real routing proof on primary:
+  - Node bridge received real `msgNotice/allMsgNotice` around 2026-08-21 11:42:48/11:42:53.
+  - Form-urlencoded `/Contact/GetContactList` showed the new `Toyoke` conversation as `accountId=2`, `conversationId=31745`, current total `1`.
+  - The four pre-fix guestbook conversations remained `accountId=0`, guestbook total `4`.
+  - This proves backend assignment recovered; no local list movement was used.
 
 Do not locally move guestbook records into current to mask this issue. Existing guestbook records remain real guestbook records; only new-message routing verifies the fix.
