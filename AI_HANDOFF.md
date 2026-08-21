@@ -4919,4 +4919,12 @@ Implementation:
   - returns `lastRegisteredAt`, registration reason, recovery results, and warnings.
 - `public/app.js` browser SignalR fallback now applies the same numeric mode and reconnect registration behavior.
 
+Deployment verification:
+
+- Commit: `bd212b6 Keep Web client registered online after reconnect`.
+- Deployed both Web targets with `scripts/deploy-fnos-web-all.py`.
+- Primary `5177 -> 18080`: connected, `EnsureRejoinGroup=true`, no registration warnings.
+- Secondary `5178 -> 18082`: connected, `EnsureRejoinGroup=true`, no registration warnings.
+- Both backend `System/GetAccountInfo.userId` values were non-zero after deployment.
+
 Do not locally move guestbook records into current to mask this issue. Existing guestbook records remain real guestbook records; only new-message routing verifies the fix.

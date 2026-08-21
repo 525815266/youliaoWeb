@@ -7800,6 +7800,11 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
   - `SyncClientState("2", false)` 成功；
   - `EnsureRejoinGroup("2", 0)` 返回 `true`；
   - `EnsureRejoinGroup("2", "Client")` 返回参数绑定失败，确认新服务端签名差异。
+- commit：`bd212b6 Keep Web client registered online after reconnect`。
+- 已通过 `scripts/deploy-fnos-web-all.py` 同步飞牛两套 Web：
+  - 主套 `5177 -> 18080`：`state=Connected`、`lastRegistrationReason=connection-started`、`ensureRejoinGroup=true`、无警告；
+  - 第二套 `5178 -> 18082`：`state=Connected`、`lastRegistrationReason=connection-started`、`ensureRejoinGroup=true`、无警告；
+  - 两套 `System/GetAccountInfo.userId` 均非 0，服务端业务账号处于登录状态。
 
 边界：
 
