@@ -4934,3 +4934,45 @@ Deployment verification:
   - This proves backend assignment recovered; no local list movement was used.
 
 Do not locally move guestbook records into current to mask this issue. Existing guestbook records remain real guestbook records; only new-message routing verifies the fix.
+
+## 2026-08-21 Handoff: Secondary Message-State Recovery
+
+Reported symptom:
+
+- Secondary customer-service conversation state/counts looked abnormal and appeared to be another SQLite fallback.
+
+Evidence and root cause:
+
+- Secondary remained on MySQL: `databaseType=0`, database `youchat2`, account `猫猫一号`, account ID `2`.
+- `/vol1/1000/Docker/youchat-dev-web-2/logs/api-capture.ndjson` proves a real `POST /Conversation/AccessInAll` succeeded at `2026-08-21 14:03:32`. Eight guestbook contacts moved to current because of that command, not because MySQL mutated them autonomously.
+- Secondary browser storage still held the primary API URL (`18080`). The secondary proxy rejected that stale `__target`, while default-target requests still reached `18082`, producing inconsistent refresh behavior.
+- The old database guard repaired whenever `health.ok` was false. A transient API/count probe could therefore trigger backend restart even when `databaseType` remained MySQL.
+- Direct MySQL inspection found all eight batch-access conversations already had `Conversation.EndDate`, while `Contact.ConversationId/AccountId` still pointed to account `2`. This was a real ended-conversation/still-bound half-state.
+
+Implementation:
+
+- Added `YOUCHAT_BROWSER_API_BASE` and exposed it as `/health.browserApiBase`.
+- `public/app.js` now applies the server-authoritative browser API base before hydrating login fields and overwrites stale browser storage.
+- The proxy maps its own configured browser API base back to `DEFAULT_API_BASE` instead of rejecting it or forwarding to the wrong stack.
+- `AccessInAll` now requires a modal confirmation that displays the affected guestbook count.
+- Database guard now requires two confirmed failures, three seconds apart, and repairs only explicit unsafe database/config modes. Count anomalies and transient API failures remain visible but cannot restart the backend.
+- New env controls:
+  - `YOUCHAT_DATABASE_GUARD_FAILURE_THRESHOLD=2`
+  - `YOUCHAT_DATABASE_GUARD_CONFIRM_DELAY_MS=3000`
+
+Live recovery and verification:
+
+- Used the native `Conversation/ShutDownAll(accountId=2,endType=1)` endpoint to normalize the eight already-ended records; no direct SQL update was used.
+- Before: current `8`, guestbook `0`, history `3`.
+- After: current `0`, guestbook `0`, history `32`.
+- No chat data was deleted. The current weekly chat table grew from `81` to `110` because the backend appended normal system close records. Bound contacts and stored unread total are both now `0`.
+- Deployed both Web targets with `scripts/deploy-fnos-web-all.py`.
+- Secondary health now reports browser API `18082`, MySQL, guard repair count `0`, no pending repair reason, and SignalR `Connected` through `host.docker.internal:18082`.
+- New secondary container logs contain no rejected API target and no database-guard repair.
+
+Operational rules:
+
+- Check API capture for `AccessInAll`, `ShutDownAll`, and `UnBound` before blaming the database.
+- Low/changed list counts do not prove SQLite fallback; verify `databaseType`, connection string, and service config.
+- Keep browser-facing secondary API at LAN `18082` and container-facing API at `host.docker.internal:18082`; never mix either with primary `18080`.
+- Normalize conversation state through native YouChat endpoints, never direct `Contact`/`Conversation` SQL edits.

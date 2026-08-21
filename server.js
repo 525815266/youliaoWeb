@@ -10,6 +10,7 @@ const signalR = require("@microsoft/signalr");
 
 const PORT = Number(process.env.PORT || 5177);
 const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "http://192.168.9.83:18080/api";
+const BROWSER_API_BASE = String(process.env.YOUCHAT_BROWSER_API_BASE || "").trim();
 const FNOS_MYSQL_CONNECTION_STRING = ensureMySQLConnectionStringOptions(process.env.YOUCHAT_MYSQL_CONNECTION_STRING || "Server=mysql;Port=3306;Database=1556504756803862529;User ID=yz;Password=w5B22RLPpprsrxdt;CharSet=utf8mb4;SslMode=None;AllowPublicKeyRetrieval=True;Allow User Variables=true;");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const CLIENT_WWWROOT = process.env.YOUCHAT_DESKTOP_WWWROOT || "C:\\Program Files\\youchat-desktop\\wwwroot";
@@ -35,6 +36,8 @@ const SIGNALR_REGISTRATION_REFRESH_MS = 45000;
 const DATABASE_GUARD_ENABLED = process.env.YOUCHAT_DATABASE_GUARD_ENABLED !== "0";
 const DATABASE_GUARD_INTERVAL_MS = Math.max(60000, Number(process.env.YOUCHAT_DATABASE_GUARD_INTERVAL_MS || 5 * 60 * 1000));
 const DATABASE_GUARD_MIN_HISTORY_COUNT = Number(process.env.YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT || 1000);
+const DATABASE_GUARD_FAILURE_THRESHOLD = Math.max(2, Number(process.env.YOUCHAT_DATABASE_GUARD_FAILURE_THRESHOLD || 2));
+const DATABASE_GUARD_CONFIRM_DELAY_MS = Math.max(1000, Number(process.env.YOUCHAT_DATABASE_GUARD_CONFIRM_DELAY_MS || 3000));
 const CONTAINER_API_BASE = String(process.env.YOUCHAT_CONTAINER_API_BASE || "").trim();
 const CONTAINER_HOST_GATEWAY = String(process.env.YOUCHAT_CONTAINER_HOST_GATEWAY || "host.docker.internal").trim();
 const IS_CONTAINER_RUNTIME = fs.existsSync("/.dockerenv") || process.env.YOUCHAT_CONTAINER_NETWORK === "1";
@@ -86,7 +89,9 @@ const databaseGuardState = {
   lastError: "",
   lastHealth: null,
   lastResult: null,
-  repairCount: 0
+  repairCount: 0,
+  consecutiveFailures: 0,
+  pendingRepairReason: ""
 };
 
 const mimeTypes = {
@@ -1542,7 +1547,10 @@ function summarizeDatabaseGuardState() {
     lastCheckedAt: databaseGuardState.lastCheckedAt,
     lastRepairAt: databaseGuardState.lastRepairAt,
     lastError: databaseGuardState.lastError,
-    repairCount: databaseGuardState.repairCount
+    repairCount: databaseGuardState.repairCount,
+    consecutiveFailures: databaseGuardState.consecutiveFailures,
+    failureThreshold: DATABASE_GUARD_FAILURE_THRESHOLD,
+    pendingRepairReason: databaseGuardState.pendingRepairReason
   };
 }
 
@@ -2076,7 +2084,36 @@ async function runDatabaseGuardCheck(reason = "timer") {
     });
     databaseGuardState.lastHealth = health;
     databaseGuardState.lastCheckedAt = new Date().toISOString();
-    if (!health.ok || Number(health.databaseType) !== 0) {
+    let repairReason = getDatabaseGuardRepairReason(health);
+    if (!repairReason) {
+      databaseGuardState.consecutiveFailures = 0;
+      databaseGuardState.pendingRepairReason = "";
+      return { health };
+    }
+
+    databaseGuardState.consecutiveFailures = 1;
+    databaseGuardState.pendingRepairReason = repairReason;
+    while (databaseGuardState.consecutiveFailures < DATABASE_GUARD_FAILURE_THRESHOLD) {
+      await new Promise((resolve) => setTimeout(resolve, DATABASE_GUARD_CONFIRM_DELAY_MS));
+      const confirmation = await getFnOSDatabaseHealth({
+        apiBase: DEFAULT_API_BASE,
+        minHistoryCount: DATABASE_GUARD_MIN_HISTORY_COUNT
+      });
+      databaseGuardState.lastHealth = confirmation;
+      databaseGuardState.lastCheckedAt = new Date().toISOString();
+      const confirmedReason = getDatabaseGuardRepairReason(confirmation);
+      if (!confirmedReason) {
+        console.warn(`[database-guard] transient anomaly ignored after ${reason}: ${repairReason}`);
+        databaseGuardState.consecutiveFailures = 0;
+        databaseGuardState.pendingRepairReason = "";
+        return { health: confirmation, transient: true };
+      }
+      repairReason = confirmedReason;
+      databaseGuardState.pendingRepairReason = confirmedReason;
+      databaseGuardState.consecutiveFailures += 1;
+    }
+
+    if (databaseGuardState.consecutiveFailures >= DATABASE_GUARD_FAILURE_THRESHOLD) {
       const result = await restoreFnOSDatabaseToMySQL({
         apiBase: DEFAULT_API_BASE,
         minHistoryCount: DATABASE_GUARD_MIN_HISTORY_COUNT
@@ -2085,7 +2122,9 @@ async function runDatabaseGuardCheck(reason = "timer") {
       databaseGuardState.lastHealth = result.after || health;
       databaseGuardState.lastRepairAt = new Date().toISOString();
       databaseGuardState.repairCount += 1;
-      console.warn(`[database-guard] repaired database mode after ${reason}`);
+      databaseGuardState.consecutiveFailures = 0;
+      databaseGuardState.pendingRepairReason = "";
+      console.warn(`[database-guard] repaired database mode after ${reason}: ${repairReason}`);
       return result;
     }
     return { health };
@@ -2096,6 +2135,27 @@ async function runDatabaseGuardCheck(reason = "timer") {
   } finally {
     databaseGuardState.running = false;
   }
+}
+
+function getDatabaseGuardRepairReason(health) {
+  if (!health || typeof health !== "object") return "";
+
+  const runtimeTypeKnown = health.databaseType !== null
+    && health.databaseType !== undefined
+    && health.databaseType !== ""
+    && Number.isFinite(Number(health.databaseType));
+  if (runtimeTypeKnown && Number(health.databaseType) !== 0) {
+    return `runtime databaseType=${health.databaseType}`;
+  }
+
+  const config = health.serviceConfig;
+  if (!config?.available || !config.exists) return "";
+  if (!config.validJson) return "service config is not valid JSON";
+  if (Number(config.databaseType) !== 0) return `service config databaseType=${config.databaseType}`;
+  if (!config.connectionStringPresent) return "service config MySQL connection string is missing";
+  if (!config.connectionStringHasPublicKeyRetrieval) return "service config is missing AllowPublicKeyRetrieval=True";
+  if (config.autoShutDown !== false) return "service config autoShutDown is enabled";
+  return "";
 }
 
 async function handleFnOSDatabase(req, res) {
@@ -3650,7 +3710,9 @@ function getTargetBase(reqUrl) {
   // the allowlist is a forged forward-proxy attempt, so fall back to the default.
   let base = DEFAULT_API_BASE;
   if (requested) {
-    if (isAllowedApiTarget(requested)) {
+    if (BROWSER_API_BASE && normalizeApiBase(requested) === normalizeApiBase(BROWSER_API_BASE)) {
+      base = DEFAULT_API_BASE;
+    } else if (isAllowedApiTarget(requested)) {
       base = requested;
     } else {
       console.warn(`Rejected /api __target not on allowlist: ${requested}`);
@@ -4389,6 +4451,7 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {
       ok: true,
       apiBase: DEFAULT_API_BASE,
+      browserApiBase: BROWSER_API_BASE || DEFAULT_API_BASE,
       aiBase: DEFAULT_AI_BASE,
       aiModel: DEFAULT_AI_MODEL,
       aiProvider: DEFAULT_AI_PROVIDER,

@@ -176,6 +176,7 @@ cp data/reply-skills.example.json /vol1/1000/Docker/youchat-dev-web/data/reply-s
 WEB_PORT=5177
 YOUCHAT_WEB_IMAGE=ghcr.io/<GitHub用户名或组织名>/<仓库名>:latest
 YOUCHAT_API_BASE=http://host.docker.internal:18080/api
+YOUCHAT_BROWSER_API_BASE=http://192.168.9.83:18080/api
 ```
 
 然后运行：
@@ -458,12 +459,14 @@ npm run fnos:repair:sidecars
 - `/local/client-options/save` 会先读取当前 `/System/GetOptions`，合并设置，并强制保持 `dataBaseOptions.databaseType=0` 与 MySQL 连接串。
 - `/System/SetOptions` 必须用点号 `form-data` 字段提交，例如 `jobOptions.autoShutDown=false`。不要用 JSON 提交，实测 JSON 会让后端绑定异常并切回 SQLite。
 - 保存后会再次读取 `/System/GetOptions`，确认 `databaseType=0` 且 `jobOptions.autoShutDown=false`，否则不会提示保存成功。
-- 保存后会重新检查数据库，如果发现被切到 SQLite 或历史数量异常，会立即调用 MySQL 修复流程。
-- Web 服务启动后会启用数据库守护，默认每 5 分钟检查一次；发现异常会自动切回 MySQL。
+- 保存后会重新检查数据库，如果确认被切到 SQLite，会立即调用 MySQL 修复流程。
+- Web 服务启动后会启用数据库守护，默认每 5 分钟检查一次；数据库模式或服务配置连续两次确认异常才会自动修复。历史数量和联系人数量仅用于告警，不会单独触发服务重启。
 - 守护配置可通过环境变量调整：
   - `YOUCHAT_DATABASE_GUARD_ENABLED=1`
   - `YOUCHAT_DATABASE_GUARD_INTERVAL_MS=300000`
   - `YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT=1000`
+  - `YOUCHAT_DATABASE_GUARD_FAILURE_THRESHOLD=2`
+  - `YOUCHAT_DATABASE_GUARD_CONFIRM_DELAY_MS=3000`
 
 ## 当前注意点
 

@@ -7817,3 +7817,54 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 
 - 本修复不把已经进入“留言”的历史记录伪造移动到“当前”；已有留言仍通过真实 `AccessIn/AccessInAll` 接入。
 - 验收目标是修复部署后产生的新消息：Web 在线且未挂起时进入“当前”，Web 停止在线登记后才进入“留言”。
+
+## 85. 2026-08-21 第二套消息状态异常诊断与收敛
+
+用户现象：
+
+- 第二套客服的当前/留言/历史状态异常，怀疑数据库再次切回 SQLite。
+- 第二套 Web 为 `http://192.168.9.83:5178`，对应后端 `18082`，客服账号 `猫猫一号`、短账号 ID `2`。
+
+真实根因不是 SQLite：
+
+1. `POST /System/GetOptions` 和 `/local/fnos/health` 都确认 `databaseType=0`、`databaseMode=mysql`，连接的是第二套独立库 `youchat2`。
+2. 第二套捕获日志 `logs/api-capture.ndjson` 记录了 `2026-08-21 14:03:32` 的真实 `POST /Conversation/AccessInAll`，`accountId=2`、返回 `success=true`。因此 8 条留言同时转入当前，是一次真实“全部接入”，不是数据库自行改状态。
+3. 第二套浏览器的 `localStorage.youchat.apiBase` 仍残留第一套 `18080`。第二套容器日志曾反复拒绝该 `__target`，导致一部分请求按第二套默认目标执行、另一部分前端状态仍围绕第一套地址刷新，形成混乱体验。
+4. 旧数据库守护把任何 `health.ok=false` 都当成数据库故障。一次列表探测/API 抖动也可能触发 `ConnectDatabase`、配置修复和后端重启。
+5. 数据库逐表核对发现 8 个批量接入会话都已有 `Conversation.EndDate`，但对应 `Contact.ConversationId/AccountId` 仍指向客服 2，形成“会话已结束、联系人仍绑定”的半状态。API 因此仍把它们返回到当前列表。
+
+代码修复：
+
+- 新增 `YOUCHAT_BROWSER_API_BASE`：
+  - 主套下发 `http://192.168.9.83:18080/api`；
+  - 第二套下发 `http://192.168.9.83:18082/api`。
+- `/health` 返回 `browserApiBase`，前端 `boot()` 在填充登录配置前读取该值并覆盖错误的旧 `localStorage`。第二套刷新后不再沿用第一套 `18080`。
+- API 代理识别容器权威下发的浏览器地址，并映射回该容器自己的 `DEFAULT_API_BASE`，避免把 LAN 地址误当成任意转发目标。
+- 留言右键“全部接入”不再立即执行；先弹出确认框，明确显示将接入的留言数量和状态变化。
+- 数据库守护新增连续确认：
+  - `YOUCHAT_DATABASE_GUARD_FAILURE_THRESHOLD=2`；
+  - `YOUCHAT_DATABASE_GUARD_CONFIRM_DELAY_MS=3000`。
+- 守护只在运行时/服务配置明确不是安全 MySQL 模式时修复。历史数量低、联系人为空或一次 API 失败仍会出现在健康告警中，但不会再触发数据库重连或服务重启。
+
+真实数据收敛：
+
+- 8 条“当前”逐条确认均已有结束时间，不存在仍活跃的会话。
+- 使用原生接口 `POST /Conversation/ShutDownAll`，参数 `accountId=2,endType=1` 正常归档，没有直接修改数据库。
+- 归档前：当前 `8`、留言 `0`、历史 `3`。
+- 归档后：当前 `0`、留言 `0`、历史 `32`。
+- 消息未删除；`ChatContent_2026_08_17` 从 `81` 增为 `110`，新增的是正常的系统结束记录；归档后绑定联系人为 `0`、未读字段合计为 `0`。
+
+部署验证：
+
+- `scripts/deploy-fnos-web-all.py` 已同步主套和第二套 Web。
+- 第二套 `/health.browserApiBase=http://192.168.9.83:18082/api`。
+- 第二套数据库仍为 MySQL，`guard.repairCount=0`、`pendingRepairReason=""`、`consecutiveFailures=0`。
+- 第二套 SignalR：`state=Connected`、实际桥接 `http://host.docker.internal:18082/api`、无登记警告。
+- 新容器日志中 `Rejected /api` 为 `0`，数据库守护误修复为 `0`。
+
+后续规则：
+
+- 判断“状态乱了”时先看 `api-capture.ndjson` 是否存在 `AccessInAll/ShutDownAll/UnBound`，不要先归因数据库。
+- 数据库模式以 `databaseType`、连接串和服务配置为准；列表数量不能单独证明 SQLite 回退。
+- 第二套浏览器地址必须是 `18082`，容器内部地址必须是 `host.docker.internal:18082`；两者用途不同，不能和主套 `18080` 混用。
+- 对业务状态收敛优先调用悠聊原生接口，不直接改 `Contact` 或 `Conversation` 表。

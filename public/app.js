@@ -609,7 +609,7 @@ function $(id) {
   return document.getElementById(id);
 }
 
-function boot() {
+async function boot() {
   [
     "loginView",
     "reconnectOverlay",
@@ -723,6 +723,7 @@ function boot() {
     el[id] = $(id);
   });
 
+  await applyServerRuntimeConfig();
   hydrateLoginFields();
   applyAiProviderState();
   hydrateAiSettingsFields();
@@ -731,6 +732,23 @@ function boot() {
   renderAll();
   loadReplySkills();
   loadAiProviderPresetsFromServer();
+}
+
+async function applyServerRuntimeConfig() {
+  try {
+    const response = await fetch("/health", { cache: "no-store" });
+    if (!response.ok) return;
+    const payload = await response.json();
+    const configuredBase = String(payload?.browserApiBase || "").trim();
+    if (!configuredBase) return;
+    const normalized = normalizeApiBase(configuredBase);
+    if (normalized === state.apiBase) return;
+    state.apiBase = normalized;
+    localStorage.setItem("youchat.apiBase", normalized);
+    log("runtime API base applied", { apiBase: normalized });
+  } catch (error) {
+    log("runtime config load failed", { error: error.message });
+  }
 }
 
 function bindEvents() {
@@ -13914,13 +13932,7 @@ async function runContactAction(action, contact) {
     }
 
     if (action === "access-all") {
-      const accountId = await getBulkAccessAccountId(contact);
-      if (!accountId) {
-        throw new Error("未识别到有效客服账号，无法执行全部接入");
-      }
-      await api("/Conversation/AccessInAll", { accountId });
-      toast("已提交全部接入请求。");
-      await loadContacts({ preserveScroll: true });
+      showAccessAllConfirmation(contact);
       return;
     }
 
@@ -13972,6 +13984,37 @@ async function runContactAction(action, contact) {
   } catch (error) {
     toast(`操作失败：${error.message}`, true);
   }
+}
+
+function showAccessAllConfirmation(contact) {
+  const count = Math.max(
+    Number(state.listServerCounts.guestbook || 0),
+    Number(state.listCounts.guestbook || 0),
+    state.listTab === "guestbook" ? state.contacts.length : 0
+  );
+  openToolModal({
+    type: "access-all-confirm",
+    title: "全部接入留言",
+    body: `
+      <div class="modal-copy">
+        <strong>确认接入${count ? ` ${count} 条` : "全部"}留言？</strong>
+        <p>接入后，这些会话会从“留言”转入当前客服的“当前”列表。</p>
+      </div>
+    `,
+    confirmText: count ? `接入 ${count} 条` : "全部接入",
+    onConfirm: async () => {
+      try {
+        const accountId = await getBulkAccessAccountId(contact);
+        if (!accountId) throw new Error("未识别到有效客服账号，无法执行全部接入");
+        await api("/Conversation/AccessInAll", { accountId });
+        closeToolModal();
+        toast("已提交全部接入请求。");
+        await loadContacts({ preserveScroll: true });
+      } catch (error) {
+        toast(`全部接入失败：${error.message}`, true);
+      }
+    }
+  });
 }
 
 function removeContactLocally(contactId) {
