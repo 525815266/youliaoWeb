@@ -7868,3 +7868,46 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 - 数据库模式以 `databaseType`、连接串和服务配置为准；列表数量不能单独证明 SQLite 回退。
 - 第二套浏览器地址必须是 `18082`，容器内部地址必须是 `host.docker.internal:18082`；两者用途不同，不能和主套 `18080` 混用。
 - 对业务状态收敛优先调用悠聊原生接口，不直接改 `Contact` 或 `Conversation` 表。
+
+## 86. 2026-09-28 MySQL 重启后消息接收假在线修复
+
+用户现象：
+
+- 飞牛 Web 页面和 API 可以打开，但主套不再接收新消息。
+- 容器列表仍显示 `Up`，因此仅看 Docker 状态会误判为服务正常。
+
+根因证据：
+
+- MySQL 容器在 `2026-09-28 00:44:05` 重启。
+- 主套消息表此前停在 `2026-09-28 00:18:45`。
+- 主套原生服务在 `00:23:48` 产生约 `1.64 GB` native core dump。
+- 服务日志出现 `Unable to connect to any of the specified MySQL hosts` 和 `socket服务异常退出`。
+- 原生服务进程后来虽被容器拉起，HTTP API 也恢复，但它在 MySQL 尚未就绪时完成初始化，数据库消息 worker/Socket 链路没有完整重建。这是“HTTP 在线、消息 worker 离线”的假在线，不是 SQLite 回退。
+
+永久修复：
+
+- 服务端项目 `C:\Users\ACER\Downloads\youChat-linux1\youChat-linux`：
+  - `docker/autologin.sh` 持续探测 MySQL TCP；发生中断后等待数据库连续 3 次探测成功，再写入 `restart.request`，重启悠聊进程并重建数据库/消息 worker，随后重新登录。
+  - `docker/run-youchat.sh` 增加 `ulimit -c 0`，避免 native crash 再写出数 GB core；应用日志和 Docker 日志仍用于诊断。
+  - 服务端 commit：`f3510ee Recover message workers after MySQL restarts`。
+- 通过 `scripts/fnos_deploy_all.py` 同步主套 `/vol1/1000/Docker/youchat` 和第二套 `/vol1/1000/Docker/youchat-2`，保留各自 `.env`、compose 和业务数据。
+- 重启 `youchat-autologin`、`youchat-autologin-2`，使新监控脚本加载。
+
+线上验证：
+
+- 四个脚本均通过 `sh -n`：两套 `autologin.sh` 与 `run-youchat.sh`。
+- 主套账号恢复为 `Boom`，第二套恢复为 `猫猫一号`；两套 `System/GetAccountInfo.userId` 均非 0。
+- 主套 `5177 -> 18080`、第二套 `5178 -> 18082` 的 `/local/signalr/online` 均返回：
+  - `state=Connected`；
+  - `lastRegistrationReason=online-refresh`；
+  - `ensureRejoinGroup=true`；
+  - `warnings=[]`。
+- 主套 `ChatContent_2026_09_28` 已增长到 `108` 条，最大 `CreateDate=2026-09-28 14:34:10`，晚于故障前的 `00:18:45`，并存在连续真实新消息，证明接收和写库链路已恢复。
+- 第二套数据库仍为 MySQL `youchat2`，账号和 SignalR 正常；最新业务消息仍为 `2026-09-01 14:34:12`，当前没有新的真实流量可用于写入闭环，不应凭旧时间认定服务异常。
+
+以后验收规则：
+
+- `docker ps=Up`、API 200、SignalR `Connected` 都不能单独证明消息接收正常。
+- 必须同时验证：账号已登录、SignalR 已业务登记并重新入组、当前周 `ChatContent_*` 在实发测试消息后新增记录。
+- 数据库模式必须从 `System/GetOptions.databaseType` 和连接串确认，不能用历史数量变化推断 SQLite 回退。
+- 现有 `/vol1/1000/Docker/youchat/core` 暂不删除；约 `1.64 GB`，确认不再需要 native crash 调试后再人工清理。

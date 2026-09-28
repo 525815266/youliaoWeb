@@ -4976,3 +4976,45 @@ Operational rules:
 - Low/changed list counts do not prove SQLite fallback; verify `databaseType`, connection string, and service config.
 - Keep browser-facing secondary API at LAN `18082` and container-facing API at `host.docker.internal:18082`; never mix either with primary `18080`.
 - Normalize conversation state through native YouChat endpoints, never direct `Contact`/`Conversation` SQL edits.
+
+## 2026-09-28 Handoff: Recover Message Workers After MySQL Restart
+
+Reported symptom:
+
+- The fnOS Web client and HTTP API remained reachable, but the primary stack stopped receiving new messages.
+- Docker still reported the native service container as `Up`.
+
+Confirmed root cause:
+
+- `youchat-mysql` restarted at `2026-09-28 00:44:05`.
+- The primary native service produced an approximately `1.64 GB` core dump at `00:23:48`.
+- Native logs contained `Unable to connect to any of the specified MySQL hosts` and `socket服务异常退出`.
+- The container supervisor restarted the process while MySQL was unavailable. HTTP later recovered, but the database-backed message/Socket workers were not rebuilt. This was a false-online native service, not SQLite fallback and not a Web list-filter bug.
+
+Backend implementation:
+
+- Backend workspace: `C:\Users\ACER\Downloads\youChat-linux1\youChat-linux`.
+- Commit: `f3510ee Recover message workers after MySQL restarts`.
+- `docker/autologin.sh` now monitors MySQL TCP availability. After an outage, it waits for three consecutive successful probes, writes `restart.request`, restarts the native process, rebuilds workers, and logs the account back in.
+- `docker/run-youchat.sh` now applies `ulimit -c 0` to prevent future multi-gigabyte native core files. Application and Docker logs remain available.
+- The backend repository has no Git remote. Do not push it into the Web repository.
+
+Deployment and live verification:
+
+- Deployed both backend targets with `scripts/fnos_deploy_all.py`:
+  - primary `/vol1/1000/Docker/youchat`, API `18080`;
+  - secondary `/vol1/1000/Docker/youchat-2`, API `18082`.
+- Restarted both autologin sidecars so the new monitor is active.
+- Both copies of `autologin.sh` and `run-youchat.sh` pass `sh -n`.
+- Primary account is `Boom`; secondary account is `猫猫一号`; both account API responses contain nonzero `userId`.
+- Re-registered both Web Node SignalR bridges:
+  - primary `5177 -> 18080` and secondary `5178 -> 18082` are `Connected`;
+  - both return `lastRegistrationReason=online-refresh`, `EnsureRejoinGroup=true`, and no warnings.
+- Primary real-data proof: `1556504756803862529.ChatContent_2026_09_28` reached `108` rows and `MAX(CreateDate)=2026-09-28 14:34:10`, later than the pre-failure stop time `00:18:45`. Consecutive new rows prove the receive/write path recovered.
+- Secondary remains on MySQL database `youchat2`. Its latest business row is still `2026-09-01 14:34:12`; no current second-stack traffic was available for an end-to-end new-row assertion.
+
+Operational rule:
+
+- Never treat container `Up`, HTTP 200, or SignalR transport `Connected` alone as message-path health.
+- A valid receive-path check requires all of: nonzero logged-in account, successful business registration/rejoin, and a new row in the current `ChatContent_*` table after a real test message.
+- Keep `/vol1/1000/Docker/youchat/core` until native crash debugging is no longer needed; it is about `1.64 GB` and was intentionally not deleted.
