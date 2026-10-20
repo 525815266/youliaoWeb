@@ -5050,3 +5050,13 @@ Validated sample:
 - A separate deposit/0.1% order without influencer-chain evidence was dismissed by AI.
 - With auto scan off and auto notify on, manual scan still ran and sent nothing.
 - Recent scan advanced persisted contact cursors from page 1 to page 7 with zero scan errors and zero automatic sends.
+
+Deployment:
+
+- Feature commit: `7934ee8 Add campaign influencer-floor inspector`.
+- Deployed both fnOS Web stacks with `scripts/deploy-fnos-web-all.py`: primary `5177 -> 18080`, secondary `5178 -> 18082`.
+- Both health checks passed; the guide PNG is served by the primary with HTTP 200.
+- Both Node SignalR bridges are `Connected` with `registrationRecovery.ensureRejoinGroup=true` and no registration warnings.
+- Primary live golden-sample scan returned 2 candidates, 2 AI reviews, 0 errors, 0 automatic sends; the target order remains `deposit + taobao_influencer_floor_0_1 + resolved`.
+- Primary has 3 persisted findings while secondary has 0 and a different state timestamp, confirming per-stack state isolation.
+- The first remote image build had one transient `npm ci` exit. A plain retry completed in about three minutes with zero dependency vulnerabilities; the final cached deployment succeeded for both stacks.

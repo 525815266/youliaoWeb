@@ -7965,3 +7965,13 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 - 另一个只有定金和 `0.1%`、没有达人链路证据的真实订单被 `gpt-6-luna` 判为 `dismissed`，证明定金分类不会直接触发通知。
 - 关闭自动巡检、打开自动通知后再次执行手动巡检：扫描未跳过、候选正常生成、`autoSentGroups=0`、发送计数未增长。
 - 近期巡检无错误，分页游标从 `1` 推进到 `7` 并持久化，自动发送计数保持 `0`。
+
+提交与飞牛部署：
+
+- 功能提交：`7934ee8 Add campaign influencer-floor inspector`。
+- 已用 `scripts/deploy-fnos-web-all.py` 同步两套 Web：主套 `5177 -> 18080`、第二套 `5178 -> 18082`，两套 `/health` 均通过。
+- 新指南图在主套 `/assets/campaign-influencer-floor-guide.png` 返回 HTTP `200` 和 `image/png`。
+- 两套 SignalR 均为 `Connected`，`registrationRecovery.ensureRejoinGroup=true`、`warnings=[]`。
+- 主套线上再次巡检黄金样本，检查 1 位客户、得到 2 个候选、AI 复核 2 个、错误 0、自动发送 0；黄金订单仍为 `deposit + taobao_influencer_floor_0_1 + resolved`。
+- 主套状态有 3 个结果，第二套状态仍为 0 个结果，`updatedAt` 不同，证明两套 `campaign-commission-scan.json` 独立持久化。
+- 首次 Docker build 在 `npm ci` 阶段发生一次临时退出；plain build 重试用约 3 分钟完成，依赖审计为 0 漏洞。正式双套部署随后使用缓存成功，旧容器在失败期间未被替换。
