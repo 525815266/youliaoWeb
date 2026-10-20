@@ -5060,3 +5060,29 @@ Deployment:
 - Primary live golden-sample scan returned 2 candidates, 2 AI reviews, 0 errors, 0 automatic sends; the target order remains `deposit + taobao_influencer_floor_0_1 + resolved`.
 - Primary has 3 persisted findings while secondary has 0 and a different state timestamp, confirming per-stack state isolation.
 - The first remote image build had one transient `npm ci` exit. A plain retry completed in about three minutes with zero dependency vulnerabilities; the final cached deployment succeeded for both stacks.
+
+## 2026-10-20 Handoff: Dedicated Campaign Review Tool
+
+Reported problems:
+
+- Campaign findings were embedded in the Skill panel, competed with Skill scrolling, and only rendered the first four persisted findings.
+- Finding reasons were line-clamped and proposed customer text was not visible.
+- Sending did not visibly navigate to the finding's customer conversation.
+
+Current implementation:
+
+- Campaign review is an independent right-side tab: `data-tool-tab="campaign"`. Its badge is the sum of `pending`, `pending_review`, and `send_error`, capped visually at `99+`.
+- `renderSkillReplyPanel()` contains only Skill UI. `renderCampaignToolPanel()` owns the campaign page and `.campaign-tool-view` owns its vertical scroll.
+- `renderCampaignSkillInspector()` renders every persisted finding; do not reintroduce `findings.slice(...)`.
+- The dedicated page shows full order title, full review reason, and the proposed `customerMessage` for actionable findings.
+- Each row has `data-campaign-open`. `openCampaignFindingContact()` first honors persisted `listSource`, then falls back to real `/Contact/GetContactInfo`, selects the contact, loads messages, and opens chat on mobile.
+- Send calls `openCampaignFindingContact()` before `/local/campaign-skill/action`, then reloads the message stream and forces it to the bottom.
+- New candidates persist `listSource`; old persisted findings without it remain supported by the contact-info fallback.
+
+Validated locally against real data:
+
+- API returned 12 persisted findings and the DOM rendered all 12.
+- Desktop campaign viewport: `812px` client height, `1924px` scroll height, `overflow-y:auto`; all reasons fit without inner clipping.
+- Viewing finding `3006:5127531302022067248` switched the real chat to `薏芅` and left the message stream exactly at the bottom.
+- At `430x900`, the campaign page rendered 12 rows with no row-level horizontal overflow; viewing the first finding switched from tools to the real `请和阿橙联络🍊` chat and landed at the bottom.
+- No real campaign message was sent during UI validation.

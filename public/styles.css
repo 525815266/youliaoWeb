@@ -2798,7 +2798,7 @@ textarea:focus-visible {
 
 .tool-tabs {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   width: 100%;
   flex: 0 0 42px;
   height: 42px;
@@ -2810,13 +2810,38 @@ textarea:focus-visible {
   min-width: 0;
   border: 0;
   border-right: 1px solid #e5edf6;
-  padding: 0 4px;
+  padding: 0 1px;
   overflow: hidden;
   color: #4d5b6d;
-  font-size: 13px;
+  font-size: 11px;
   background: transparent;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.campaign-tool-tab {
+  position: relative;
+}
+
+.tool-tab-badge {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  min-width: 15px;
+  height: 15px;
+  border: 2px solid #f8fbff;
+  border-radius: 999px;
+  padding: 0 3px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+  background: #e5484d;
+}
+
+.tool-tab.is-active .tool-tab-badge {
+  border-color: #fff;
 }
 
 .tool-tab:last-child {
@@ -2859,6 +2884,35 @@ textarea:focus-visible {
 .tool-content.is-quick-tool {
   height: auto;
   overflow: hidden;
+}
+
+.tool-content.is-campaign-tool {
+  height: auto;
+  padding: 0;
+  overflow: hidden;
+}
+
+.campaign-tool-view {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: #8abdf1 #eef5fc;
+  scrollbar-width: auto;
+}
+
+.campaign-tool-view::-webkit-scrollbar {
+  width: 10px;
+}
+
+.campaign-tool-view::-webkit-scrollbar-thumb {
+  border: 2px solid #eef5fc;
+  border-radius: 999px;
+  background: #79b2eb;
+}
+
+.campaign-tool-view::-webkit-scrollbar-track {
+  background: #eef5fc;
 }
 
 .tool-content.is-history-tool {
@@ -3659,6 +3713,16 @@ textarea:focus-visible {
   background: #fdeceb;
 }
 
+.campaign-kind {
+  border: 1px solid #d5e2f0;
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: #526071;
+  font-size: 10px;
+  line-height: 1.3;
+  background: #fff;
+}
+
 .campaign-finding-main p,
 .campaign-finding-main small {
   display: block;
@@ -3672,6 +3736,11 @@ textarea:focus-visible {
 
 .campaign-finding-main p b {
   color: #344055;
+  font-weight: 600;
+}
+
+.campaign-order-title {
+  color: #344055 !important;
   font-weight: 600;
 }
 
@@ -3713,6 +3782,39 @@ textarea:focus-visible {
   font-size: 11px;
   line-height: 1.4;
   background: #fff;
+}
+
+.campaign-tool-view .campaign-finding-main small {
+  display: block;
+  max-width: none;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.campaign-reply-preview {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+  border: 1px solid #dceafb;
+  border-radius: 5px;
+  padding: 6px 7px;
+  color: #40516a;
+  font-size: 11px;
+  line-height: 1.45;
+  background: #f5faff;
+}
+
+.campaign-reply-preview b {
+  color: #0d63c7;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.campaign-reply-preview span {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .skill-tabs {
@@ -7468,7 +7570,8 @@ textarea:focus-visible {
 
   .tool-content.is-skill-tool,
   .tool-content.is-quick-tool,
-  .tool-content.is-history-tool {
+  .tool-content.is-history-tool,
+  .tool-content.is-campaign-tool {
     overflow: hidden;
   }
 

@@ -753,6 +753,7 @@ function buildCampaignCandidate(contact, order, messages, settings) {
     userName: getCampaignContactUserName(contact),
     nickName: String(contact?.nickName || contact?.userRemark || ""),
     accountId: String(firstNonEmpty(contact?.accountId, contact?.accId, contact?.csAccountId, "") || ""),
+    listSource: String(contact?.campaignListSource || ""),
     orderNo,
     title: String(order?.title || order?.goodsName || ""),
     orderTime,
@@ -796,6 +797,7 @@ async function resolveCampaignContact(options = {}) {
     userName: String(options.userName || getCampaignContactUserName(info) || ""),
     nickName: String(options.nickName || info.nickName || info.userRemark || ""),
     accountId: String(options.accountId || info.accountId || info.accId || ""),
+    campaignListSource: String(options.listSource || ""),
     records: Array.isArray(info.records) ? info.records : []
   };
 }
@@ -983,6 +985,7 @@ function buildCampaignFinding(candidate, review, existing = null) {
     userName: candidate.userName,
     nickName: candidate.nickName,
     accountId: candidate.accountId,
+    listSource: candidate.listSource,
     orderNo: candidate.orderNo,
     title: candidate.title,
     orderTime: candidate.orderTime,

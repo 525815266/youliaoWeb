@@ -3122,7 +3122,7 @@ async function connect(event) {
     await keepServerSignalROnline({ force: true });
     ensureSignalRConnection().catch((error) => log("SignalR connect failed", { error: error.message, url: buildSignalRUrl() }));
     showWorkbench();
-    await Promise.all([loadContacts(), loadFaq(), loadFriendRequestBadgeTotals(), loadClientNoticeBadge()]);
+    await Promise.all([loadContacts(), loadFaq(), loadFriendRequestBadgeTotals(), loadClientNoticeBadge(), loadCampaignSkill({ silent: true })]);
     await Promise.all([loadMessages(1, "replace", { forceBottom: true }), loadContactInfo(), loadToolDataForActiveTab()]);
     startAutoRefresh();
     toast("已连接真实接口，当前页面不再使用假数据。");
@@ -9790,10 +9790,24 @@ function applyCampaignSkillPayload(payload) {
     counts: { ...(payload.counts || {}) },
     findings: Array.isArray(payload.findings) ? payload.findings : state.campaignSkill?.findings || []
   };
+  renderCampaignToolBadge();
+}
+
+function getCampaignPendingCount(data = state.campaignSkill) {
+  const counts = data?.counts || {};
+  return Number(counts.pending || 0) + Number(counts.pending_review || 0) + Number(counts.send_error || 0);
+}
+
+function renderCampaignToolBadge() {
+  const badge = document.querySelector("[data-campaign-tab-badge]");
+  if (!badge) return;
+  const count = getCampaignPendingCount();
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.hidden = count <= 0;
 }
 
 function rerenderSkillPanelPreservingScroll() {
-  if (state.activeTool !== "skill") return;
+  if (state.activeTool !== "skill" && state.activeTool !== "campaign") return;
   const snapshot = captureToolScrollSnapshot();
   renderToolContent();
   window.requestAnimationFrame(() => restoreToolScrollSnapshot(snapshot));
@@ -9855,7 +9869,8 @@ async function runCampaignSkillScan(scope = "current") {
       contactId,
       userName,
       nickName: state.activeContact?.nickName || state.activeContact?.userRemark || "",
-      accountId: getAccountId(state.activeContact)
+      accountId: getAccountId(state.activeContact),
+      listSource: state.listTab
     });
   }
   state.campaignSkillScanning = true;
@@ -9885,6 +9900,9 @@ async function actOnCampaignFinding(key, action) {
   state.campaignSkillSaving = true;
   rerenderSkillPanelPreservingScroll();
   try {
+    if (action === "send" && targetFinding) {
+      await openCampaignFindingContact(targetFinding);
+    }
     const response = await fetch("/local/campaign-skill/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -9895,7 +9913,8 @@ async function actOnCampaignFinding(key, action) {
     applyCampaignSkillPayload(payload);
     toast(action === "send" ? "巡检提醒与指南图已分开发送。" : "该候选已忽略。");
     if (action === "send" && String(getContactId(state.activeContact) || "") === String(targetFinding?.contactId || "")) {
-      loadMessages(1, "replace", { forceBottom: true });
+      await loadMessages(1, "replace", { forceBottom: true });
+      scheduleMessageListBottom({ force: true, watchImages: true });
     }
   } catch (error) {
     toast(`${action === "send" ? "发送" : "更新"}巡检结果失败：${error.message}`, true);
@@ -9903,6 +9922,41 @@ async function actOnCampaignFinding(key, action) {
     state.campaignSkillSaving = false;
     rerenderSkillPanelPreservingScroll();
   }
+}
+
+async function openCampaignFindingContact(finding) {
+  const contactId = String(finding?.contactId || "");
+  if (!contactId) throw new Error("巡检结果缺少客户会话编号");
+  const sourceTab = ["current", "guestbook", "history"].includes(finding.listSource) ? finding.listSource : "";
+  let contact = state.contacts.find((item) => String(getContactId(item)) === contactId) || null;
+
+  if (!contact && sourceTab && sourceTab !== state.listTab) {
+    state.listTab = sourceTab;
+    state.contactListPage = 1;
+    state.contactListHasMore = false;
+    renderConversationTabs();
+    await loadContacts({ preserveScroll: false });
+    contact = state.contacts.find((item) => String(getContactId(item)) === contactId) || null;
+  }
+
+  if (!contact) {
+    const payload = await api("/Contact/GetContactInfo", { contactId });
+    const raw = unwrapPayloadData(payload);
+    contact = normalizeContact({
+      ...(raw && typeof raw === "object" ? raw : {}),
+      id: contactId,
+      contactId,
+      userName: finding.userName || raw?.userName || "",
+      nickName: finding.nickName || raw?.nickName || raw?.userRemark || "",
+      accountId: finding.accountId || raw?.accountId || raw?.accId || ""
+    }, 0);
+    state.contacts = mergeContacts([contact], state.contacts);
+    renderContacts();
+  }
+
+  await selectContactById(contactId);
+  focusContactCard(contactId, { preventScroll: false });
+  if (isMobileWorkbench()) setMobilePanel("chat");
 }
 
 function buildSkillSuggestion() {
@@ -12099,7 +12153,7 @@ function normalizeAccountDetail(item) {
 }
 
 function usesInternalToolScroll(tab = state.activeTool) {
-  return tab === "history" || tab === "skill" || tab === "quick";
+  return tab === "history" || tab === "skill" || tab === "quick" || tab === "campaign";
 }
 
 function setToolTab(tab) {
@@ -12114,6 +12168,7 @@ function setToolTab(tab) {
   el.toolContent?.classList.toggle("is-compact-tool", !usesInternalScroll);
   el.toolContent?.classList.toggle("is-skill-tool", tab === "skill");
   el.toolContent?.classList.toggle("is-quick-tool", tab === "quick");
+  el.toolContent?.classList.toggle("is-campaign-tool", tab === "campaign");
   renderToolContent();
   if (
     tab === "history" &&
@@ -12134,10 +12189,10 @@ function loadToolDataForActiveTab() {
     return loadFaq();
   }
   if (tab === "skill") {
-    return Promise.all([
-      state.replySkills.length ? Promise.resolve() : loadReplySkills(),
-      loadCampaignSkill({ silent: Boolean(state.campaignSkill) })
-    ]);
+    return state.replySkills.length ? Promise.resolve() : loadReplySkills();
+  }
+  if (tab === "campaign") {
+    return loadCampaignSkill({ silent: Boolean(state.campaignSkill) });
   }
   if (tab === "order" && getContactUserName(state.activeContact)) {
     return loadOrders(state.orderPage || 1);
@@ -12155,6 +12210,7 @@ function getToolScrollSelector(tab = state.activeTool) {
   if (tab === "skill") return ".skill-panel-scroll";
   if (tab === "quick") return ".quick-list";
   if (tab === "history") return "[data-history-list]";
+  if (tab === "campaign") return ".campaign-tool-view";
   return "";
 }
 
@@ -12188,6 +12244,12 @@ function renderToolContent() {
   el.toolContent.classList.toggle("is-compact-tool", !usesInternalScroll);
   el.toolContent.classList.toggle("is-skill-tool", state.activeTool === "skill");
   el.toolContent.classList.toggle("is-quick-tool", state.activeTool === "quick");
+  el.toolContent.classList.toggle("is-campaign-tool", state.activeTool === "campaign");
+  if (state.activeTool === "campaign") {
+    el.toolContent.innerHTML = renderCampaignToolPanel();
+    finishRender();
+    return;
+  }
   if (!contact) {
     el.toolContent.innerHTML = '<div class="empty-state">请选择会话后查看右侧工具。</div>';
     finishRender();
@@ -12355,7 +12417,6 @@ function renderSkillReplyPanel() {
         <span>${escapeHtml(matchText)} / ${state.replySkillsLoading ? "加载中" : `${state.replySkills.length} 个 skill`}</span>
       </div>
       <div class="skill-panel-scroll">
-        ${renderCampaignSkillInspector()}
         <div class="skill-tabs" role="group" aria-label="技能分类">
           ${buildSkillCategoryTabs(suggestion).map((item) => `
             <button class="${item.value === state.skillCategory ? "is-active" : ""}" type="button" data-skill-category="${escapeAttr(item.value)}">
@@ -12404,8 +12465,8 @@ function renderCampaignSkillInspector() {
     if (aActionable !== bActionable) return aActionable ? -1 : 1;
     return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
   });
-  const visibleFindings = findings.slice(0, 4);
-  const pendingCount = Number(counts.pending || 0) + Number(counts.pending_review || 0) + Number(counts.send_error || 0);
+  const visibleFindings = findings;
+  const pendingCount = getCampaignPendingCount(data);
   const busy = state.campaignSkillScanning || data?.runtime?.running;
   const lastScan = data?.stats?.lastScanAt ? formatShortDateTime(data.stats.lastScanAt) : "尚未巡检";
   return `
@@ -12456,17 +12517,30 @@ function renderCampaignFindingRow(finding) {
         <div class="campaign-finding-title">
           <button class="copy-link" type="button" data-copy="${escapeAttr(finding.orderNo || "")}">${escapeHtml(finding.orderNo || "无订单号")}</button>
           <span class="campaign-status ${status.className}">${escapeHtml(status.label)}</span>
+          <span class="campaign-kind">${isDeposit ? "定金单" : "大促订单"}</span>
         </div>
         <p><b>${escapeHtml(finding.nickName || finding.userName || `客户 ${finding.contactId}`)}</b> · ${escapeHtml(amounts)}</p>
+        ${finding.title ? `<p class="campaign-order-title">${escapeHtml(finding.title)}</p>` : ""}
         <small>${escapeHtml(finding.reason || finding.ruleLabel || "等待复核")}</small>
+        ${canAct && finding.customerMessage ? `
+          <div class="campaign-reply-preview">
+            <b>拟发送</b>
+            <span>${escapeHtml(finding.customerMessage)}</span>
+          </div>
+        ` : ""}
       </div>
       <div class="campaign-finding-actions">
         <span>${Math.round(Number(finding.confidence || 0) * 100)}%</span>
+        <button class="mini-action ghost" type="button" data-campaign-open="${escapeAttr(finding.key)}" ${state.campaignSkillSaving ? "disabled" : ""}>查看</button>
         ${canAct ? `<button class="mini-action" type="button" data-campaign-action="send" data-campaign-key="${escapeAttr(finding.key)}" ${state.campaignSkillSaving ? "disabled" : ""}>发送</button>` : ""}
         ${canAct ? `<button class="mini-action ghost" type="button" data-campaign-action="ignore" data-campaign-key="${escapeAttr(finding.key)}" ${state.campaignSkillSaving ? "disabled" : ""}>忽略</button>` : ""}
       </div>
     </article>
   `;
+}
+
+function renderCampaignToolPanel() {
+  return `<div class="campaign-tool-view">${renderCampaignSkillInspector()}</div>`;
 }
 
 function renderDatabaseRepairPanel() {
@@ -13413,6 +13487,13 @@ function renderAccountDetails() {
 
 function handleToolClick(event) {
   if (handlePreviewClickTarget(event)) return;
+
+  const campaignOpenTarget = event.target.closest("[data-campaign-open]");
+  if (campaignOpenTarget) {
+    const finding = state.campaignSkill?.findings?.find((item) => String(item.key) === String(campaignOpenTarget.dataset.campaignOpen));
+    if (finding) openCampaignFindingContact(finding).catch((error) => toast(`打开会话失败：${error.message}`, true));
+    return;
+  }
 
   const campaignTarget = event.target.closest("[data-campaign-action]");
   if (campaignTarget) {
