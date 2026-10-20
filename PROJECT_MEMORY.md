@@ -8002,3 +8002,11 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 - 桌面点击黄金样本 `contactId=3006` 的“查看”后，标题切换为“薏芅”，消息区距底部为 `0`，右侧仍保持“大促巡检”。
 - 移动端 `430x900` 下独立页宽度 430、渲染 12 行、无横向溢出；点击首条“查看”后切到“请和阿橙联络🍊”聊天页，消息区距底部为 `0`。
 - 未在验收中点击真实客户的“发送”，避免产生测试消息；发送前跳转和发送后刷新使用与已验证“查看”相同的定位函数。
+
+提交与部署：
+
+- 功能提交：`5d247d4 Move campaign inspector to dedicated tool`，已推送 `525815266/youliaoWeb` 的 `master`。
+- 已用 `scripts/deploy-fnos-web-all.py` 更新飞牛两套 Web：主套 `5177 -> 18080`、第二套 `5178 -> 18082`。
+- 两套 `/health.ok=true`，大促标签和 `renderCampaignToolPanel` 均存在，指南图均返回 `200 image/png`。
+- 两套数据库均为 MySQL，守护 `repairCount=0`、`consecutiveFailures=0`；SignalR 均为 `Connected`、`EnsureRejoinGroup=true`、无登记错误。
+- 主套部署后启动巡检正常结束：13 条结果、5 条待处理、`runtime.lastError` 为空；第二套仍为 0 条，证明部署保留且隔离两套 `campaign-commission-scan.json`。

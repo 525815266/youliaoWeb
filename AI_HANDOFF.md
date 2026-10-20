@@ -5086,3 +5086,10 @@ Validated locally against real data:
 - Viewing finding `3006:5127531302022067248` switched the real chat to `薏芅` and left the message stream exactly at the bottom.
 - At `430x900`, the campaign page rendered 12 rows with no row-level horizontal overflow; viewing the first finding switched from tools to the real `请和阿橙联络🍊` chat and landed at the bottom.
 - No real campaign message was sent during UI validation.
+
+Deployment state:
+
+- Commit `5d247d4 Move campaign inspector to dedicated tool` is on GitHub `master`.
+- Both fnOS Web stacks were deployed: primary `5177 -> 18080`, secondary `5178 -> 18082`.
+- Both health endpoints are OK, both stacks remain on MySQL with zero guard repairs/failures, and both SignalR bridges are `Connected` with `EnsureRejoinGroup=true` and no registration error.
+- The primary startup scan completed with 13 persisted findings, 5 actionable findings, and no runtime error. The secondary still has 0 findings, confirming per-stack state isolation survived deployment.
