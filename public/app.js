@@ -425,6 +425,10 @@ const state = {
   lastSkillPromptKey: "",
   replySkills: [],
   replySkillsLoading: false,
+  campaignSkill: null,
+  campaignSkillLoading: false,
+  campaignSkillScanning: false,
+  campaignSkillSaving: false,
   skillKeyword: "",
   skillCategory: SKILL_CATEGORY_CURRENT,
   skillAutoReply: localStorage.getItem("youchat.skill.autoReply") === "true",
@@ -9775,6 +9779,132 @@ async function saveReplySkills() {
   state.replySkills = Array.isArray(payload.skills) ? payload.skills : state.replySkills;
 }
 
+function applyCampaignSkillPayload(payload) {
+  if (!payload || typeof payload !== "object") return;
+  state.campaignSkill = {
+    ...(state.campaignSkill || {}),
+    ...payload,
+    settings: { ...(state.campaignSkill?.settings || {}), ...(payload.settings || {}) },
+    stats: { ...(state.campaignSkill?.stats || {}), ...(payload.stats || {}) },
+    runtime: { ...(state.campaignSkill?.runtime || {}), ...(payload.runtime || {}) },
+    counts: { ...(payload.counts || {}) },
+    findings: Array.isArray(payload.findings) ? payload.findings : state.campaignSkill?.findings || []
+  };
+}
+
+function rerenderSkillPanelPreservingScroll() {
+  if (state.activeTool !== "skill") return;
+  const snapshot = captureToolScrollSnapshot();
+  renderToolContent();
+  window.requestAnimationFrame(() => restoreToolScrollSnapshot(snapshot));
+}
+
+async function loadCampaignSkill(options = {}) {
+  if (state.campaignSkillLoading) return;
+  state.campaignSkillLoading = true;
+  if (!options.silent) rerenderSkillPanelPreservingScroll();
+  try {
+    const response = await fetch("/local/campaign-skill", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || payload.success === false) throw new Error(getMessage(payload) || `HTTP ${response.status}`);
+    applyCampaignSkillPayload(payload);
+  } catch (error) {
+    if (!options.silent) toast(`大促巡检状态加载失败：${error.message}`, true);
+  } finally {
+    state.campaignSkillLoading = false;
+    rerenderSkillPanelPreservingScroll();
+  }
+}
+
+async function saveCampaignSkillSettings(patch) {
+  if (state.campaignSkillSaving) return;
+  state.campaignSkillSaving = true;
+  const previous = { ...(state.campaignSkill?.settings || {}) };
+  applyCampaignSkillPayload({ settings: { ...previous, ...patch } });
+  rerenderSkillPanelPreservingScroll();
+  try {
+    const response = await fetch("/local/campaign-skill/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: patch })
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.success === false) throw new Error(getMessage(payload) || `HTTP ${response.status}`);
+    applyCampaignSkillPayload(payload);
+    toast("大促巡检设置已保存。");
+  } catch (error) {
+    applyCampaignSkillPayload({ settings: previous });
+    toast(`大促巡检设置保存失败：${error.message}`, true);
+  } finally {
+    state.campaignSkillSaving = false;
+    rerenderSkillPanelPreservingScroll();
+  }
+}
+
+async function runCampaignSkillScan(scope = "current") {
+  if (state.campaignSkillScanning) return;
+  const payload = {};
+  if (scope === "current") {
+    const contactId = getContactId(state.activeContact);
+    const userName = getContactUserName(state.activeContact);
+    if (!contactId || !userName) {
+      toast("请先选择一个真实会话再巡检当前客户。", true);
+      return;
+    }
+    Object.assign(payload, {
+      contactId,
+      userName,
+      nickName: state.activeContact?.nickName || state.activeContact?.userRemark || "",
+      accountId: getAccountId(state.activeContact)
+    });
+  }
+  state.campaignSkillScanning = true;
+  rerenderSkillPanelPreservingScroll();
+  try {
+    const response = await fetch("/local/campaign-skill/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (!response.ok || result.success === false) throw new Error(getMessage(result) || `HTTP ${response.status}`);
+    applyCampaignSkillPayload(result);
+    const summary = result.summary || {};
+    toast(`巡检完成：检查 ${summary.contacts || 0} 位客户，发现 ${summary.candidates || 0} 个候选。`);
+  } catch (error) {
+    toast(`大促巡检失败：${error.message}`, true);
+  } finally {
+    state.campaignSkillScanning = false;
+    rerenderSkillPanelPreservingScroll();
+  }
+}
+
+async function actOnCampaignFinding(key, action) {
+  if (!key || state.campaignSkillSaving) return;
+  const targetFinding = state.campaignSkill?.findings?.find((finding) => String(finding.key) === String(key)) || null;
+  state.campaignSkillSaving = true;
+  rerenderSkillPanelPreservingScroll();
+  try {
+    const response = await fetch("/local/campaign-skill/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, action })
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.success === false) throw new Error(getMessage(payload) || `HTTP ${response.status}`);
+    applyCampaignSkillPayload(payload);
+    toast(action === "send" ? "巡检提醒与指南图已分开发送。" : "该候选已忽略。");
+    if (action === "send" && String(getContactId(state.activeContact) || "") === String(targetFinding?.contactId || "")) {
+      loadMessages(1, "replace", { forceBottom: true });
+    }
+  } catch (error) {
+    toast(`${action === "send" ? "发送" : "更新"}巡检结果失败：${error.message}`, true);
+  } finally {
+    state.campaignSkillSaving = false;
+    rerenderSkillPanelPreservingScroll();
+  }
+}
+
 function buildSkillSuggestion() {
   const match = matchReplySkill();
   if (!match) return null;
@@ -12004,7 +12134,10 @@ function loadToolDataForActiveTab() {
     return loadFaq();
   }
   if (tab === "skill") {
-    return state.replySkills.length ? Promise.resolve() : loadReplySkills();
+    return Promise.all([
+      state.replySkills.length ? Promise.resolve() : loadReplySkills(),
+      loadCampaignSkill({ silent: Boolean(state.campaignSkill) })
+    ]);
   }
   if (tab === "order" && getContactUserName(state.activeContact)) {
     return loadOrders(state.orderPage || 1);
@@ -12222,6 +12355,7 @@ function renderSkillReplyPanel() {
         <span>${escapeHtml(matchText)} / ${state.replySkillsLoading ? "加载中" : `${state.replySkills.length} 个 skill`}</span>
       </div>
       <div class="skill-panel-scroll">
+        ${renderCampaignSkillInspector()}
         <div class="skill-tabs" role="group" aria-label="技能分类">
           ${buildSkillCategoryTabs(suggestion).map((item) => `
             <button class="${item.value === state.skillCategory ? "is-active" : ""}" type="button" data-skill-category="${escapeAttr(item.value)}">
@@ -12233,6 +12367,105 @@ function renderSkillReplyPanel() {
         ${groups.length ? groups.map((group) => renderSkillGroup(group, suggestion)).join("") : '<p class="empty-state skill-empty">没有匹配的 skill。</p>'}
       </div>
     </section>
+  `;
+}
+
+function getCampaignFindingStatusMeta(status) {
+  const items = {
+    pending: { label: "待确认", className: "warn" },
+    pending_review: { label: "待 AI 复核", className: "warn" },
+    low_confidence: { label: "证据不足", className: "muted" },
+    dismissed: { label: "AI 已排除", className: "muted" },
+    resolved: { label: "已人工解释", className: "ok" },
+    sent: { label: "已通知", className: "ok" },
+    ignored: { label: "已忽略", className: "muted" },
+    send_error: { label: "发送失败", className: "danger" }
+  };
+  return items[String(status || "")] || { label: String(status || "未知"), className: "muted" };
+}
+
+function renderCampaignSkillInspector() {
+  const data = state.campaignSkill;
+  const loading = state.campaignSkillLoading && !data;
+  if (loading) {
+    return '<section class="campaign-inspector is-loading"><span>大促巡检</span><small>正在读取真实订单规则...</small></section>';
+  }
+  const settings = data?.settings || {};
+  const counts = data?.counts || {};
+  const findings = Array.isArray(data?.findings) ? [...data.findings] : [];
+  const activeContactId = String(getContactId(state.activeContact) || "");
+  const actionableStatuses = new Set(["pending", "pending_review", "send_error"]);
+  findings.sort((a, b) => {
+    const aActive = String(a.contactId || "") === activeContactId;
+    const bActive = String(b.contactId || "") === activeContactId;
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    const aActionable = actionableStatuses.has(a.status);
+    const bActionable = actionableStatuses.has(b.status);
+    if (aActionable !== bActionable) return aActionable ? -1 : 1;
+    return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+  });
+  const visibleFindings = findings.slice(0, 4);
+  const pendingCount = Number(counts.pending || 0) + Number(counts.pending_review || 0) + Number(counts.send_error || 0);
+  const busy = state.campaignSkillScanning || data?.runtime?.running;
+  const lastScan = data?.stats?.lastScanAt ? formatShortDateTime(data.stats.lastScanAt) : "尚未巡检";
+  return `
+    <section class="campaign-inspector ${settings.enabled === false ? "is-disabled" : ""}">
+      <header class="campaign-inspector-head">
+        <div class="campaign-inspector-title">
+          <strong>大促巡检</strong>
+          <span>定金单</span>
+          <span class="rule">达人 0.1% 保底</span>
+        </div>
+        <div class="campaign-inspector-switches">
+          <label title="每 15 分钟自动巡检近期客户"><input type="checkbox" data-action="toggle-campaign-enabled" ${settings.enabled !== false ? "checked" : ""} ${state.campaignSkillSaving ? "disabled" : ""}> 自动巡检</label>
+          <label title="仅自动巡检可主动通知，手动巡检始终先由客服确认"><input type="checkbox" data-action="toggle-campaign-auto" ${settings.autoSend ? "checked" : ""} ${settings.enabled === false || state.campaignSkillSaving ? "disabled" : ""}> 自动通知</label>
+        </div>
+      </header>
+      <div class="campaign-inspector-toolbar">
+        <span><b>${pendingCount}</b> 待处理</span>
+        <span class="campaign-inspector-meta">${escapeHtml(settings.model || "gpt-6-luna")} · ${escapeHtml(lastScan)}</span>
+        <div>
+          <button class="mini-action" type="button" data-action="scan-campaign-current" ${busy ? "disabled" : ""}>巡检当前</button>
+          <button class="mini-action" type="button" data-action="scan-campaign-recent" ${busy ? "disabled" : ""}>${busy ? "巡检中..." : "巡检近期"}</button>
+        </div>
+      </div>
+      ${visibleFindings.length ? `
+        <div class="campaign-finding-list">
+          ${visibleFindings.map(renderCampaignFindingRow).join("")}
+        </div>
+      ` : '<p class="campaign-inspector-empty">还没有命中异常规则。定金单只会先分类，不会直接判成达人保底。</p>'}
+    </section>
+  `;
+}
+
+function renderCampaignFindingRow(finding) {
+  const status = getCampaignFindingStatusMeta(finding.status);
+  const canAct = ["pending", "pending_review", "send_error", "low_confidence"].includes(finding.status);
+  const isDeposit = finding.orderKind === "deposit";
+  const expected = Number(finding.expectedRebate || 0);
+  const actual = Number(finding.actualRebate || 0);
+  const amounts = [
+    isDeposit ? `定金 ¥${formatMoney(finding.payment)}` : "大促订单",
+    finding.expectedAmount ? `成交 ¥${formatMoney(finding.expectedAmount)}` : "",
+    expected > 0 ? `查询 ¥${formatMoney(expected)}` : "",
+    actual > 0 ? `实际 ¥${formatMoney(actual)}` : ""
+  ].filter(Boolean).join(" / ");
+  return `
+    <article class="campaign-finding-row">
+      <div class="campaign-finding-main">
+        <div class="campaign-finding-title">
+          <button class="copy-link" type="button" data-copy="${escapeAttr(finding.orderNo || "")}">${escapeHtml(finding.orderNo || "无订单号")}</button>
+          <span class="campaign-status ${status.className}">${escapeHtml(status.label)}</span>
+        </div>
+        <p><b>${escapeHtml(finding.nickName || finding.userName || `客户 ${finding.contactId}`)}</b> · ${escapeHtml(amounts)}</p>
+        <small>${escapeHtml(finding.reason || finding.ruleLabel || "等待复核")}</small>
+      </div>
+      <div class="campaign-finding-actions">
+        <span>${Math.round(Number(finding.confidence || 0) * 100)}%</span>
+        ${canAct ? `<button class="mini-action" type="button" data-campaign-action="send" data-campaign-key="${escapeAttr(finding.key)}" ${state.campaignSkillSaving ? "disabled" : ""}>发送</button>` : ""}
+        ${canAct ? `<button class="mini-action ghost" type="button" data-campaign-action="ignore" data-campaign-key="${escapeAttr(finding.key)}" ${state.campaignSkillSaving ? "disabled" : ""}>忽略</button>` : ""}
+      </div>
+    </article>
   `;
 }
 
@@ -13181,6 +13414,12 @@ function renderAccountDetails() {
 function handleToolClick(event) {
   if (handlePreviewClickTarget(event)) return;
 
+  const campaignTarget = event.target.closest("[data-campaign-action]");
+  if (campaignTarget) {
+    actOnCampaignFinding(campaignTarget.dataset.campaignKey, campaignTarget.dataset.campaignAction);
+    return;
+  }
+
   const quickSendTarget = event.target.closest("[data-quick-send]");
   if (quickSendTarget) {
     setReplyTextContent(escapeHtml(quickSendTarget.dataset.quickSend || ""));
@@ -13314,6 +13553,14 @@ function handleToolClick(event) {
     state.skillAutoLearn = actionTarget.checked;
     localStorage.setItem("youchat.skill.autoLearn", String(state.skillAutoLearn));
     renderToolContent();
+  } else if (action === "toggle-campaign-enabled") {
+    saveCampaignSkillSettings({ enabled: actionTarget.checked });
+  } else if (action === "toggle-campaign-auto") {
+    saveCampaignSkillSettings({ autoSend: actionTarget.checked });
+  } else if (action === "scan-campaign-current") {
+    runCampaignSkillScan("current");
+  } else if (action === "scan-campaign-recent") {
+    runCampaignSkillScan("recent");
   } else if (action === "apply-skill-match") {
     const suggestion = buildSkillSuggestion();
     if (suggestion) {

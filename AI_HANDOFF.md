@@ -5018,3 +5018,35 @@ Operational rule:
 - Never treat container `Up`, HTTP 200, or SignalR transport `Connected` alone as message-path health.
 - A valid receive-path check requires all of: nonzero logged-in account, successful business registration/rejoin, and a new row in the current `ChatContent_*` table after a real test message.
 - Keep `/vol1/1000/Docker/youchat/core` until native crash debugging is no longer needed; it is about `1.64 GB` and was intentionally not deleted.
+
+## 2026-10-20 Handoff: Campaign Deposit / Influencer-Floor Inspector
+
+Purpose:
+
+- Inspect recent real Taobao/Tmall orders for the campaign failure mode where the query estimated a meaningful rebate but the settled order only has about `0.1%` commission.
+- Keep classification separate from detection: `orderKind=deposit` describes the order; `ruleKey=taobao_influencer_floor_0_1` describes the influencer/live-room floor rule. Never notify merely because an order is a deposit order.
+
+Implementation:
+
+- Server logic is in `server.js`; UI is at the top of the Skill panel in `public/app.js` and `public/styles.css`.
+- Persistent per-stack state is `data/campaign-commission-scan.json`. It is gitignored and excluded by `scripts/deploy-fnos-web.py`; deployments must preserve each stack's settings, page cursors, findings, and dedup state.
+- Guide asset: `public/assets/campaign-influencer-floor-guide.png`.
+- Local endpoints: `GET /local/campaign-skill`, `POST /local/campaign-skill/settings`, `POST /local/campaign-skill/scan`, `POST /local/campaign-skill/action`.
+- Native APIs used: `Contact/GetContactList`, `Contact/GetContactInfo`, `ChatContent/GetList`, `Order/GetPageList`, `ChatContent/GetOssConfig`, `ChatContent/SendMsg`.
+
+Behavior and safety:
+
+- `settings.enabled` is displayed as “自动巡检” and only controls startup/timer scans. Manual current/recent scans remain available when it is off.
+- Manual scans never auto-send, even if `autoSend=true`; they create findings for explicit human action.
+- Automatic notification defaults off, threshold defaults to `0.92`, and one timer run can notify at most one customer group.
+- AI review uses provider `sub2`, model `gpt-6-luna`, sequentially per candidate.
+- Query evidence is associated only when its amount is within 2% of the order notice amount. Existing manual explanation forces `resolved`. `sent/ignored` dedup is keyed by `contactId + orderNo`.
+- Customer output is three real messages: order-number notice, uploaded guide image, explanation.
+
+Validated sample:
+
+- `contactId=3006`, order `5127531302022067248`: deposit `50`, transaction `960`, query rebate `23.27`, actual `0.73`, commission `0.1%`, confidence `0.981`, `resolved`, no duplicate send.
+- Order `5127544730151030421` has transaction `239` and no amount-matching query, so expected rebate stays `0`.
+- A separate deposit/0.1% order without influencer-chain evidence was dismissed by AI.
+- With auto scan off and auto notify on, manual scan still ran and sent nothing.
+- Recent scan advanced persisted contact cursors from page 1 to page 7 with zero scan errors and zero automatic sends.

@@ -22,6 +22,8 @@ const DATA_DIR = path.join(__dirname, "data");
 const CONFIG_DIR = path.join(__dirname, "config");
 const AI_PROVIDERS_FILE = path.join(CONFIG_DIR, "ai-providers.json");
 const REPLY_SKILLS_FILE = path.join(DATA_DIR, "reply-skills.json");
+const CAMPAIGN_SKILL_FILE = path.join(DATA_DIR, "campaign-commission-scan.json");
+const CAMPAIGN_GUIDE_FILE = path.join(PUBLIC_DIR, "assets", "campaign-influencer-floor-guide.png");
 const API_CAPTURE_FILE = path.join(LOG_DIR, "api-capture.ndjson");
 const MAX_CAPTURE_TEXT = 8000;
 const MAX_LINK_PREVIEW_BYTES = 900000;
@@ -33,6 +35,7 @@ const PROMPTWORKS_TIMEOUT_MS = Math.max(10000, Number(process.env.PROMPTWORKS_TI
 const SIGNALR_START_TIMEOUT_MS = 12000;
 const SIGNALR_KEEP_ALIVE_MS = 120000;
 const SIGNALR_REGISTRATION_REFRESH_MS = 45000;
+const CAMPAIGN_SCAN_INTERVAL_MS = Math.max(5 * 60 * 1000, Number(process.env.YOUCHAT_CAMPAIGN_SCAN_INTERVAL_MS || 15 * 60 * 1000));
 const DATABASE_GUARD_ENABLED = process.env.YOUCHAT_DATABASE_GUARD_ENABLED !== "0";
 const DATABASE_GUARD_INTERVAL_MS = Math.max(60000, Number(process.env.YOUCHAT_DATABASE_GUARD_INTERVAL_MS || 5 * 60 * 1000));
 const DATABASE_GUARD_MIN_HISTORY_COUNT = Number(process.env.YOUCHAT_DATABASE_GUARD_MIN_HISTORY_COUNT || 1000);
@@ -92,6 +95,12 @@ const databaseGuardState = {
   repairCount: 0,
   consecutiveFailures: 0,
   pendingRepairReason: ""
+};
+const campaignScannerRuntime = {
+  running: false,
+  lastStartedAt: "",
+  lastCompletedAt: "",
+  lastError: ""
 };
 
 const mimeTypes = {
@@ -490,6 +499,762 @@ function writeReplySkills(payload) {
   fs.writeFileSync(tmpFile, JSON.stringify(next, null, 2), "utf8");
   fs.renameSync(tmpFile, REPLY_SKILLS_FILE);
   return next;
+}
+
+function defaultCampaignSkillState() {
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    settings: {
+      enabled: true,
+      autoSend: false,
+      providerId: "sub2",
+      model: "gpt-6-luna",
+      recentDays: 7,
+      contactPageSize: 50,
+      maxContactPages: 6,
+      maxCandidateContacts: 24,
+      maxAiReviewsPerRun: 12,
+      maxAutoSendsPerRun: 1,
+      pendingConfidence: 0.68,
+      autoSendConfidence: 0.92
+    },
+    guideImageUrl: "",
+    findings: [],
+    stats: {
+      scanCount: 0,
+      candidateCount: 0,
+      reviewedCount: 0,
+      sentCount: 0,
+      scanCursor: { current: 1, guestbook: 1, history: 1 },
+      lastScanAt: "",
+      lastScanReason: "",
+      lastError: ""
+    }
+  };
+}
+
+function clampNumber(value, minimum, maximum, fallback) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.min(maximum, Math.max(minimum, numberValue));
+}
+
+function normalizeCampaignSettings(settings = {}) {
+  const defaults = defaultCampaignSkillState().settings;
+  return {
+    enabled: normalizeBoolean(settings.enabled, defaults.enabled),
+    autoSend: normalizeBoolean(settings.autoSend, defaults.autoSend),
+    providerId: String(settings.providerId || defaults.providerId).trim() || defaults.providerId,
+    model: String(settings.model || defaults.model).trim() || defaults.model,
+    recentDays: clampNumber(settings.recentDays, 1, 30, defaults.recentDays),
+    contactPageSize: Math.round(clampNumber(settings.contactPageSize, 10, 100, defaults.contactPageSize)),
+    maxContactPages: Math.round(clampNumber(settings.maxContactPages, 1, 30, defaults.maxContactPages)),
+    maxCandidateContacts: Math.round(clampNumber(settings.maxCandidateContacts, 1, 100, defaults.maxCandidateContacts)),
+    maxAiReviewsPerRun: Math.round(clampNumber(settings.maxAiReviewsPerRun, 1, 50, defaults.maxAiReviewsPerRun)),
+    maxAutoSendsPerRun: Math.round(clampNumber(settings.maxAutoSendsPerRun, 0, 5, defaults.maxAutoSendsPerRun)),
+    pendingConfidence: clampNumber(settings.pendingConfidence, 0.5, 0.95, defaults.pendingConfidence),
+    autoSendConfidence: clampNumber(settings.autoSendConfidence, 0.75, 0.99, defaults.autoSendConfidence)
+  };
+}
+
+function normalizeCampaignFinding(finding = {}) {
+  return {
+    ...finding,
+    key: String(finding.key || ""),
+    contactId: String(finding.contactId || ""),
+    userName: String(finding.userName || ""),
+    accountId: String(finding.accountId || ""),
+    orderNo: String(finding.orderNo || ""),
+    confidence: clampNumber(finding.confidence, 0, 1, 0),
+    status: String(finding.status || "pending"),
+    updatedAt: String(finding.updatedAt || new Date().toISOString())
+  };
+}
+
+function readCampaignSkillState() {
+  ensureDataDir();
+  const defaults = defaultCampaignSkillState();
+  if (!fs.existsSync(CAMPAIGN_SKILL_FILE)) {
+    return writeCampaignSkillState(defaults);
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(CAMPAIGN_SKILL_FILE, "utf8"));
+    return {
+      version: 1,
+      updatedAt: parsed.updatedAt || defaults.updatedAt,
+      settings: normalizeCampaignSettings(parsed.settings),
+      guideImageUrl: String(parsed.guideImageUrl || ""),
+      findings: (Array.isArray(parsed.findings) ? parsed.findings : []).map(normalizeCampaignFinding).slice(0, 300),
+      stats: { ...defaults.stats, ...(parsed.stats || {}) }
+    };
+  } catch (error) {
+    const backup = `${CAMPAIGN_SKILL_FILE}.${Date.now()}.broken`;
+    fs.copyFileSync(CAMPAIGN_SKILL_FILE, backup);
+    console.warn(`Campaign skill state was invalid, backed up to ${backup}`);
+    return writeCampaignSkillState(defaults);
+  }
+}
+
+function writeCampaignSkillState(payload) {
+  ensureDataDir();
+  const defaults = defaultCampaignSkillState();
+  const next = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    settings: normalizeCampaignSettings(payload.settings),
+    guideImageUrl: String(payload.guideImageUrl || ""),
+    findings: (Array.isArray(payload.findings) ? payload.findings : [])
+      .map(normalizeCampaignFinding)
+      .sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0))
+      .slice(0, 300),
+    stats: { ...defaults.stats, ...(payload.stats || {}) }
+  };
+  const tmpFile = `${CAMPAIGN_SKILL_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(next, null, 2), "utf8");
+  fs.renameSync(tmpFile, CAMPAIGN_SKILL_FILE);
+  return next;
+}
+
+function campaignTimestamp(value) {
+  const numberValue = Number(value);
+  if (Number.isFinite(numberValue) && numberValue > 0) return numberValue < 100000000000 ? numberValue * 1000 : numberValue;
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getCampaignContactId(contact) {
+  return String(firstNonEmpty(contact?.id, contact?.contactId, contact?.contactID, contact?.customerId, contact?.wxid, "") || "");
+}
+
+function getCampaignContactUserName(contact) {
+  return String(firstNonEmpty(contact?.userName, contact?.wxid, contact?.userIdStr, contact?.userId, "") || "");
+}
+
+function getCampaignContactUpdateTime(contact) {
+  return campaignTimestamp(firstNonEmpty(contact?.updateTime, contact?.lastTime, contact?.sendTime, contact?.createTime));
+}
+
+function getCampaignOrderTime(order) {
+  return campaignTimestamp(firstNonEmpty(order?.paydt, order?.createdt, order?.payTime, order?.createTime, order?.createdAt));
+}
+
+function getCampaignOrderNo(order) {
+  return String(firstNonEmpty(order?.parentOrderNo, order?.orderNo, order?.orderId, order?.id, "") || "");
+}
+
+function isCampaignTaobaoOrder(order) {
+  const text = [order?.orderType, order?.platformName, order?.platform, order?.source, order?.title].filter(Boolean).join(" ");
+  return Number(order?.orderTypeId) === 1 || Number(order?.orderSource) === 1 || /(淘宝|天猫|taobao|tmall)/i.test(text);
+}
+
+function isCampaignOrderUsable(order) {
+  const statusText = [order?.statusStr, order?.reStatusStr, order?.statusName, order?.remark].filter(Boolean).join(" ");
+  if (/(退款|退货|维权|失效|关闭|取消|作废)/.test(statusText)) return false;
+  const status = Number(order?.status);
+  return !Number.isFinite(status) || status >= 0;
+}
+
+function hasCampaignOrderSignal(order) {
+  const title = String(order?.title || order?.goodsName || "");
+  return /(李佳琦|薇娅|达人|直播间|橱窗|主播|付定金|定金|预售|双11|双12|618|大促)/i.test(title);
+}
+
+function getCampaignMessageText(message) {
+  return String(firstNonEmpty(message?.content, message?.msg, message?.message, message?.text, "") || "").trim();
+}
+
+function getCampaignMessageSource(message) {
+  return String(firstNonEmpty(message?.source, message?.msgSource, message?.fromType, message?.direction, "") || "").toLowerCase();
+}
+
+function isCampaignManualOutgoing(message) {
+  const source = getCampaignMessageSource(message);
+  return source === "2" || source === "service" || source === "outgoing" || message?.isCustomerService === true;
+}
+
+function parseCampaignChatEvidence(messages = [], order = {}) {
+  const sorted = [...messages].sort((a, b) => getSampleMessageTime(a) - getSampleMessageTime(b));
+  const orderTime = getCampaignOrderTime(order);
+  const expected = [];
+  const notices = [];
+  const questions = [];
+  const explanations = [];
+  for (const message of sorted) {
+    const text = getCampaignMessageText(message);
+    if (!text) continue;
+    const time = getSampleMessageTime(message);
+    for (const match of text.matchAll(/(?:原|原价)\s*[:：]\s*(\d+(?:\.\d+)?)[\s\S]{0,28}?(?:补|圤|反|返)\s*[:：]\s*(\d+(?:\.\d+)?)/g)) {
+      expected.push({ amount: Number(match[1]), rebate: Number(match[2]), text, time });
+    }
+    for (const match of text.matchAll(/(?:付|符|驸)\s*[:：]\s*(\d+(?:\.\d+)?)[\s\S]{0,36}?若\s*(\d+(?:\.\d+)?)\s*成交[\s\S]{0,28}?(?:补|圤|反|返)\s*[:：]\s*(\d+(?:\.\d+)?)/g)) {
+      notices.push({ deposit: Number(match[1]), amount: Number(match[2]), rebate: Number(match[3]), text, time });
+    }
+    if (/(为什么|怎么|咋|相差|差好多|不一样|只有|这么少|没正常|没反|没返).{0,28}(返|反|圤|回馈|订单|佣金)|(?:返|反|圤|回馈).{0,28}(为什么|怎么|相差|少)/i.test(text)) {
+      questions.push({ text, time });
+    }
+    if (isCampaignManualOutgoing(message) && /(达人|直播间|橱窗|主播)/.test(text) && /(保底|0\.1|导致|最后点|不能正常|只有)/.test(text)) {
+      explanations.push({ text, time });
+    }
+  }
+  const nearest = (items) => items.slice().sort((a, b) => {
+    if (!orderTime) return b.time - a.time;
+    return Math.abs(a.time - orderTime) - Math.abs(b.time - orderTime);
+  })[0] || null;
+  const noticeMatch = nearest(notices);
+  const expectedPool = noticeMatch?.amount
+    ? expected.filter((item) => Math.abs(item.amount - noticeMatch.amount) <= Math.max(1, noticeMatch.amount * 0.02))
+    : expected;
+  const expectedMatch = nearest(expectedPool);
+  const latestQuestion = questions[questions.length - 1] || null;
+  const explainedAfterOrder = explanations.find((item) => !orderTime || item.time >= orderTime) || null;
+  return {
+    expectedAmount: Number(noticeMatch?.amount || expectedMatch?.amount || 0),
+    expectedRebate: Number(expectedMatch?.rebate || 0),
+    depositAmount: Number(noticeMatch?.deposit || order?.payment || 0),
+    noticeRebate: Number(noticeMatch?.rebate || order?.reUserBal || 0),
+    queryText: expectedMatch?.text || "",
+    noticeText: noticeMatch?.text || "",
+    questionText: latestQuestion?.text || "",
+    alreadyExplained: Boolean(explainedAfterOrder),
+    explanationText: explainedAfterOrder?.text || "",
+    recentMessages: sorted.slice(-36).map((message) => ({
+      source: getCampaignMessageSource(message),
+      time: getSampleMessageTime(message),
+      text: getCampaignMessageText(message).slice(0, 500)
+    }))
+  };
+}
+
+function buildCampaignCandidate(contact, order, messages, settings) {
+  const rate = Number(order?.commissionRate ?? order?.rate);
+  const payment = Number(order?.payment ?? order?.amount ?? order?.orderAmount);
+  const actualRebate = Number(order?.reUserBal ?? order?.rebate ?? order?.rebateAmount);
+  const orderTime = getCampaignOrderTime(order);
+  const cutoff = Date.now() - Number(settings.recentDays || 7) * 24 * 60 * 60 * 1000;
+  if (!isCampaignTaobaoOrder(order) || !isCampaignOrderUsable(order)) return null;
+  if (!Number.isFinite(rate) || rate < 0.09 || rate > 0.11) return null;
+  if (!(payment > 0) || !(actualRebate > 0) || (orderTime && orderTime < cutoff)) return null;
+  const evidence = parseCampaignChatEvidence(messages, order);
+  const hasTitleSignal = hasCampaignOrderSignal(order);
+  const depositRatio = evidence.expectedAmount > 0 ? payment / evidence.expectedAmount : 1;
+  const looksLikeDeposit = /定金|预售/.test(String(order?.title || "")) || (evidence.expectedAmount > payment && depositRatio <= 0.35);
+  if (!hasTitleSignal && !looksLikeDeposit) return null;
+  let deterministicConfidence = 0.46;
+  if (hasTitleSignal) deterministicConfidence += 0.14;
+  if (looksLikeDeposit) deterministicConfidence += 0.12;
+  if (evidence.expectedRebate > 0) deterministicConfidence += 0.12;
+  if (evidence.expectedRebate >= actualRebate * 5) deterministicConfidence += 0.08;
+  if (evidence.questionText) deterministicConfidence += 0.05;
+  const orderNo = getCampaignOrderNo(order);
+  return {
+    key: `${getCampaignContactId(contact)}:${orderNo}`,
+    contactId: getCampaignContactId(contact),
+    userName: getCampaignContactUserName(contact),
+    nickName: String(contact?.nickName || contact?.userRemark || ""),
+    accountId: String(firstNonEmpty(contact?.accountId, contact?.accId, contact?.csAccountId, "") || ""),
+    orderNo,
+    title: String(order?.title || order?.goodsName || ""),
+    orderTime,
+    payment,
+    expectedAmount: evidence.expectedAmount,
+    expectedRebate: evidence.expectedRebate,
+    actualRebate,
+    commissionRate: rate,
+    depositRatio,
+    orderKind: looksLikeDeposit ? "deposit" : "campaign_order",
+    ruleKey: "taobao_influencer_floor_0_1",
+    ruleLabel: "淘宝达人 0.1% 保底",
+    pendingConfidence: settings.pendingConfidence,
+    deterministicConfidence: Math.min(0.97, deterministicConfidence),
+    evidence
+  };
+}
+
+function campaignContactLooksRelevant(contact) {
+  const records = Array.isArray(contact?.records) ? contact.records : [];
+  const text = records.map(getCampaignMessageText).join("\n");
+  return /(李佳琦|薇娅|达人|直播间|橱窗|主播|付定金|预售|若\s*\d+(?:\.\d+)?\s*成交|返利.*(?:少|不一样)|回馈.*(?:少|不一样))/i.test(text);
+}
+
+async function resolveCampaignContact(options = {}) {
+  const contactId = String(options.contactId || "").trim();
+  let info = {};
+  if (contactId) {
+    try {
+      const payload = await postYouChatApi("/Contact/GetContactInfo", { contactId }, options.apiBase || DEFAULT_API_BASE);
+      const data = getPayloadData(payload);
+      info = data && typeof data === "object" ? data : {};
+    } catch (error) {
+      console.warn(`Campaign contact ${contactId} info failed: ${error.message}`);
+    }
+  }
+  return {
+    ...info,
+    id: contactId || getCampaignContactId(info),
+    contactId: contactId || getCampaignContactId(info),
+    userName: String(options.userName || getCampaignContactUserName(info) || ""),
+    nickName: String(options.nickName || info.nickName || info.userRemark || ""),
+    accountId: String(options.accountId || info.accountId || info.accId || ""),
+    records: Array.isArray(info.records) ? info.records : []
+  };
+}
+
+async function collectCampaignContacts(settings, options = {}, scanState = null) {
+  if (options.contactId || options.userName) {
+    return [await resolveCampaignContact(options)].filter((contact) => getCampaignContactId(contact) && getCampaignContactUserName(contact));
+  }
+  const cutoff = Date.now() - Number(settings.recentDays || 7) * 24 * 60 * 60 * 1000;
+  const tabs = [
+    { name: "current", isGuestbook: false, isHistory: false },
+    { name: "guestbook", isGuestbook: true, isHistory: false },
+    { name: "history", isGuestbook: false, isHistory: true }
+  ];
+  const seen = new Map();
+  for (const tab of tabs) {
+    const cursorMap = scanState?.stats?.scanCursor || {};
+    const startPage = Math.max(1, Number(cursorMap[tab.name] || 1));
+    const pages = [1];
+    for (let page = startPage; pages.length < settings.maxContactPages; page += 1) {
+      if (!pages.includes(page)) pages.push(page);
+    }
+    let nextPage = startPage;
+    let resetCursor = false;
+    for (const page of pages) {
+      const payload = await postYouChatApi("/Contact/GetContactList", {
+        pageIndex: page,
+        pageSize: settings.contactPageSize,
+        isGuestbook: tab.isGuestbook,
+        isHistory: tab.isHistory
+      }, options.apiBase || DEFAULT_API_BASE);
+      const contacts = getPayloadRecords(payload);
+      if (!contacts.length) {
+        resetCursor = true;
+        break;
+      }
+      let recentOnPage = 0;
+      contacts.forEach((contact) => {
+        const contactId = getCampaignContactId(contact);
+        const updatedAt = getCampaignContactUpdateTime(contact);
+        if (!contactId || (updatedAt && updatedAt < cutoff)) return;
+        recentOnPage += 1;
+        const current = seen.get(contactId);
+        if (!current || getCampaignContactUpdateTime(contact) > getCampaignContactUpdateTime(current)) {
+          seen.set(contactId, { ...contact, campaignListSource: tab.name });
+        }
+      });
+      if (page !== 1) nextPage = page + 1;
+      if (contacts.length < settings.contactPageSize || recentOnPage === 0) {
+        resetCursor = true;
+        break;
+      }
+    }
+    if (scanState?.stats) {
+      scanState.stats.scanCursor = {
+        ...(scanState.stats.scanCursor || {}),
+        [tab.name]: resetCursor ? 1 : nextPage
+      };
+    }
+  }
+  return [...seen.values()]
+    .sort((a, b) => getCampaignContactUpdateTime(b) - getCampaignContactUpdateTime(a))
+    .filter(campaignContactLooksRelevant)
+    .slice(0, settings.maxCandidateContacts);
+}
+
+async function fetchCampaignMessages(contact, settings, options = {}) {
+  const contactId = getCampaignContactId(contact);
+  const payload = await postYouChatApi("/ChatContent/GetList", {
+    contactId,
+    current: 1,
+    size: Math.max(80, Math.min(180, Number(settings.messageLimit || 140))),
+    onlyRepointMsg: false
+  }, options.apiBase || DEFAULT_API_BASE);
+  return getPayloadRecords(payload);
+}
+
+async function fetchCampaignOrders(contact, settings, options = {}) {
+  const contactId = getCampaignContactId(contact);
+  const userName = getCampaignContactUserName(contact);
+  const payload = await postYouChatApi("/Order/GetPageList", {
+    userName,
+    contactId,
+    orderType: 0,
+    orderDeviceType: 0,
+    current: 1,
+    size: 100,
+    keyword: ""
+  }, options.apiBase || DEFAULT_API_BASE);
+  return getPayloadRecords(payload);
+}
+
+function extractCampaignReviewJson(value) {
+  const text = String(value || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(text.slice(start, end + 1));
+    throw new Error("AI did not return valid JSON");
+  }
+}
+
+async function reviewCampaignCandidateWithAi(candidate, settings) {
+  const provider = resolveServerAiProvider(settings.providerId, "");
+  if (!provider) throw new Error(`AI provider ${settings.providerId} has no server key`);
+  const target = getAiChatCompletionsUrl(provider.baseUrl);
+  const conversation = candidate.evidence.recentMessages
+    .map((message) => `${message.source || "?"} | ${new Date(message.time || 0).toISOString()} | ${message.text}`)
+    .join("\n")
+    .slice(-12000);
+  const systemPrompt = [
+    "你是悠聊客服大促订单巡检器，只判断淘宝/天猫订单是否因达人、直播间或橱窗链路触发了0.1%保底佣金。",
+    "硬规则：佣金率必须约为0.1%，订单必须有效；低返金额本身不能作为结论。",
+    "结合订单标题、定金/成交额、查询时预计回馈、实际回馈和聊天上下文判断。",
+    "如果客服已经向客户解释过同一问题，shouldNotify 必须为 false，避免重复打扰。",
+    "证据不足时 shouldNotify=false。只返回一个JSON对象，不要Markdown。",
+    "字段：shouldNotify(boolean), confidence(0到1), reason(string), customerMessage(string), riskFlags(string数组)。"
+  ].join("\n");
+  const userPrompt = JSON.stringify({
+    order: {
+      orderNo: candidate.orderNo,
+      title: candidate.title,
+      payment: candidate.payment,
+      expectedAmount: candidate.expectedAmount,
+      expectedRebate: candidate.expectedRebate,
+      actualRebate: candidate.actualRebate,
+      commissionRate: candidate.commissionRate,
+      depositRatio: candidate.depositRatio
+    },
+    deterministicConfidence: candidate.deterministicConfidence,
+    alreadyExplained: candidate.evidence.alreadyExplained,
+    conversation
+  });
+  const response = await fetchWithTimeout(target, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAiAuthHeaders(provider.apiKey, provider.authType, target.toString())
+    },
+    body: JSON.stringify({
+      model: settings.model,
+      temperature: 0.1,
+      max_tokens: 700,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ]
+    })
+  }, AI_PROXY_TIMEOUT_MS, `Campaign AI review ${candidate.orderNo}`);
+  const text = await response.text();
+  if (!response.ok) throw new Error(`AI HTTP ${response.status}: ${trimCaptureText(text, 300)}`);
+  const payload = parseMaybeJson(text);
+  const content = payload?.choices?.[0]?.message?.content || payload?.choices?.[0]?.delta?.content || payload?.content || "";
+  const review = extractCampaignReviewJson(content);
+  return {
+    shouldNotify: Boolean(review.shouldNotify),
+    confidence: clampNumber(review.confidence, 0, 1, 0),
+    reason: String(review.reason || "AI 未给出原因").slice(0, 600),
+    customerMessage: String(review.customerMessage || "").slice(0, 1200),
+    riskFlags: (Array.isArray(review.riskFlags) ? review.riskFlags : []).map(String).slice(0, 8),
+    model: settings.model,
+    providerId: settings.providerId
+  };
+}
+
+function buildCampaignFinding(candidate, review, existing = null) {
+  const now = new Date().toISOString();
+  const aiConfidence = Number(review?.confidence || 0);
+  const confidence = review
+    ? Math.min(0.99, candidate.deterministicConfidence * 0.45 + aiConfidence * 0.55)
+    : candidate.deterministicConfidence;
+  let status = "pending_review";
+  if (candidate.evidence.alreadyExplained) status = "resolved";
+  else if (review?.shouldNotify && confidence >= Number(candidate.pendingConfidence || 0.68)) status = "pending";
+  else if (review && !review.shouldNotify) status = "dismissed";
+  else if (review) status = "low_confidence";
+  const { recentMessages, ...evidence } = candidate.evidence;
+  const preserved = existing && ["sent", "ignored"].includes(existing.status) ? existing.status : status;
+  return normalizeCampaignFinding({
+    ...(existing || {}),
+    key: candidate.key,
+    contactId: candidate.contactId,
+    userName: candidate.userName,
+    nickName: candidate.nickName,
+    accountId: candidate.accountId,
+    orderNo: candidate.orderNo,
+    title: candidate.title,
+    orderTime: candidate.orderTime,
+    payment: candidate.payment,
+    expectedAmount: candidate.expectedAmount,
+    expectedRebate: candidate.expectedRebate,
+    actualRebate: candidate.actualRebate,
+    commissionRate: candidate.commissionRate,
+    orderKind: candidate.orderKind,
+    ruleKey: candidate.ruleKey,
+    ruleLabel: candidate.ruleLabel,
+    deterministicConfidence: candidate.deterministicConfidence,
+    confidence,
+    status: preserved,
+    reason: candidate.evidence.alreadyExplained
+      ? `客服已解释过，避免重复发送：${candidate.evidence.explanationText}`
+      : review?.reason || "AI 复核失败，保留人工审核",
+    customerMessage: review?.customerMessage || "",
+    riskFlags: review?.riskFlags || [],
+    aiModel: review?.model || "",
+    aiProviderId: review?.providerId || "",
+    evidence,
+    firstSeenAt: existing?.firstSeenAt || now,
+    lastSeenAt: now,
+    reviewedAt: review ? now : existing?.reviewedAt || "",
+    updatedAt: now
+  });
+}
+
+async function ensureCampaignGuideUploaded(state, contactId, apiBase = DEFAULT_API_BASE) {
+  if (/^https?:\/\//i.test(state.guideImageUrl || "")) return state.guideImageUrl;
+  if (!fs.existsSync(CAMPAIGN_GUIDE_FILE)) throw new Error("大促巡检指南图不存在");
+  const fileName = `campaign-influencer-floor-${crypto.randomBytes(6).toString("hex")}.png`;
+  const configPayload = await postYouChatApi("/ChatContent/GetOssConfig", { contactId, fileName }, apiBase);
+  const config = getPayloadData(configPayload) || {};
+  const endpoint = extractUploadEndpoint(config);
+  if (!endpoint) throw new Error("GetOssConfig 未返回可识别的上传地址");
+  const objectKey = buildOssObjectKey(config, fileName);
+  const buffer = fs.readFileSync(CAMPAIGN_GUIDE_FILE);
+  const form = buildOssFormData(config, objectKey, fileName, "image/png", buffer);
+  const response = await fetchWithTimeout(endpoint, { method: "POST", body: form }, OSS_UPLOAD_TIMEOUT_MS, "Campaign guide upload");
+  const text = await response.text();
+  if (!response.ok) throw new Error(`指南图上传失败 HTTP ${response.status}`);
+  const url = extractUploadedUrl(parseMaybeJson(text), firstNonEmpty(config.qnDomain, config.qiniuDomain, endpoint), objectKey);
+  if (!url) throw new Error("指南图上传完成但未生成外网地址");
+  state.guideImageUrl = url;
+  return url;
+}
+
+function waitCampaign(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resolveCampaignAccountId(finding, apiBase = DEFAULT_API_BASE) {
+  if (finding.accountId) return finding.accountId;
+  try {
+    const payload = await postYouChatApi("/Contact/GetContactInfo", { contactId: finding.contactId }, apiBase);
+    const info = getPayloadData(payload) || {};
+    const accountId = String(firstNonEmpty(info.accountId, info.accId, info.csAccountId, "") || "");
+    if (accountId) finding.accountId = accountId;
+    return accountId;
+  } catch {
+    return "";
+  }
+}
+
+async function sendCampaignFindingGroup(findings, state, options = {}) {
+  const active = findings.filter((finding) => finding && finding.status !== "sent");
+  if (!active.length) return { sent: 0 };
+  const first = active[0];
+  if (active.some((finding) => String(finding.contactId) !== String(first.contactId))) {
+    throw new Error("只能合并发送同一客户的巡检结果");
+  }
+  const apiBase = options.apiBase || DEFAULT_API_BASE;
+  const accountId = await resolveCampaignAccountId(first, apiBase);
+  const imageUrl = await ensureCampaignGuideUploaded(state, first.contactId, apiBase);
+  const orderNos = [...new Set(active.map((finding) => finding.orderNo).filter(Boolean))];
+  const intro = `亲，AI巡检发现以下订单可能触发了达人渠道保底：${orderNos.join("、")}。`;
+  const explanation = "从订单佣金率和下单链路看，可能是在查询后又进入了达人直播间或橱窗，订单最终只按平台 0.1% 的保底佣金结算，所以没有按查询时的金额正常回馈。下次请先加购物车，转链后直接从购物车下单，期间不要再点达人或直播间链接。";
+  const send = (content, contentType) => postYouChatApi("/ChatContent/SendMsg", {
+    contactId: first.contactId,
+    accountId,
+    content,
+    contentType
+  }, apiBase);
+  await send(intro, 0);
+  await waitCampaign(280);
+  await send(imageUrl, 1);
+  await waitCampaign(280);
+  await send(explanation, 0);
+  const now = new Date().toISOString();
+  active.forEach((finding) => {
+    finding.status = "sent";
+    finding.sentAt = now;
+    finding.sentMode = options.manual ? "manual" : "auto";
+    finding.updatedAt = now;
+  });
+  state.stats.sentCount = Number(state.stats.sentCount || 0) + active.length;
+  return { sent: active.length, orderNos };
+}
+
+async function runCampaignSkillScan(reason = "manual", options = {}) {
+  if (campaignScannerRuntime.running) {
+    return { busy: true, state: readCampaignSkillState(), summary: { message: "大促巡检正在运行" } };
+  }
+  campaignScannerRuntime.running = true;
+  campaignScannerRuntime.lastStartedAt = new Date().toISOString();
+  campaignScannerRuntime.lastError = "";
+  const state = readCampaignSkillState();
+  const settings = state.settings;
+  const startedAt = Date.now();
+  try {
+    if (!settings.enabled && reason === "timer") {
+      return { skipped: true, state, summary: { message: "大促巡检已关闭" } };
+    }
+    const contacts = await collectCampaignContacts(settings, options, state);
+    const candidates = [];
+    const errors = [];
+    for (const contact of contacts) {
+      try {
+        const [messages, orders] = await Promise.all([
+          fetchCampaignMessages(contact, settings, options),
+          fetchCampaignOrders(contact, settings, options)
+        ]);
+        orders.forEach((order) => {
+          const candidate = buildCampaignCandidate(contact, order, messages, settings);
+          if (candidate) candidates.push(candidate);
+        });
+      } catch (error) {
+        errors.push(`${getCampaignContactId(contact) || getCampaignContactUserName(contact)}: ${error.message}`);
+      }
+    }
+
+    const existingByKey = new Map(state.findings.map((finding) => [finding.key, finding]));
+    const reviewed = [];
+    for (const candidate of candidates.slice(0, settings.maxAiReviewsPerRun)) {
+      const existing = existingByKey.get(candidate.key) || null;
+      if (existing && ["sent", "ignored"].includes(existing.status)) {
+        existing.lastSeenAt = new Date().toISOString();
+        existing.updatedAt = existing.lastSeenAt;
+        reviewed.push(existing);
+        continue;
+      }
+      let review = null;
+      try {
+        review = await reviewCampaignCandidateWithAi(candidate, settings);
+      } catch (error) {
+        errors.push(`${candidate.orderNo}: ${error.message}`);
+      }
+      const finding = buildCampaignFinding(candidate, review, existing);
+      existingByKey.set(candidate.key, finding);
+      reviewed.push(finding);
+    }
+    candidates.slice(settings.maxAiReviewsPerRun).forEach((candidate) => {
+      const existing = existingByKey.get(candidate.key) || null;
+      if (!existing) existingByKey.set(candidate.key, buildCampaignFinding(candidate, null, null));
+    });
+    state.findings = [...existingByKey.values()];
+
+    let autoSentGroups = 0;
+    if (settings.autoSend && reason !== "manual" && settings.maxAutoSendsPerRun > 0) {
+      const grouped = new Map();
+      reviewed.filter((finding) => finding.status === "pending" && finding.confidence >= settings.autoSendConfidence)
+        .forEach((finding) => {
+          if (!grouped.has(finding.contactId)) grouped.set(finding.contactId, []);
+          grouped.get(finding.contactId).push(finding);
+        });
+      for (const group of grouped.values()) {
+        if (autoSentGroups >= settings.maxAutoSendsPerRun) break;
+        try {
+          await sendCampaignFindingGroup(group, state, { apiBase: options.apiBase, manual: false });
+          autoSentGroups += 1;
+        } catch (error) {
+          errors.push(`send ${group[0]?.contactId}: ${error.message}`);
+          group.forEach((finding) => {
+            finding.status = "send_error";
+            finding.reason = `${finding.reason || ""} | 发送失败：${error.message}`.trim();
+            finding.updatedAt = new Date().toISOString();
+          });
+        }
+      }
+    }
+
+    state.stats.scanCount = Number(state.stats.scanCount || 0) + 1;
+    state.stats.candidateCount = Number(state.stats.candidateCount || 0) + candidates.length;
+    state.stats.reviewedCount = Number(state.stats.reviewedCount || 0) + reviewed.length;
+    state.stats.lastScanAt = new Date().toISOString();
+    state.stats.lastScanReason = reason;
+    state.stats.lastError = errors.join(" | ").slice(0, 2000);
+    const saved = writeCampaignSkillState(state);
+    campaignScannerRuntime.lastCompletedAt = new Date().toISOString();
+    return {
+      state: saved,
+      summary: {
+        contacts: contacts.length,
+        candidates: candidates.length,
+        reviewed: reviewed.length,
+        autoSentGroups,
+        elapsedMs: Date.now() - startedAt,
+        errors
+      }
+    };
+  } catch (error) {
+    state.stats.lastError = error.message;
+    state.stats.lastScanAt = new Date().toISOString();
+    state.stats.lastScanReason = reason;
+    writeCampaignSkillState(state);
+    campaignScannerRuntime.lastError = error.message;
+    throw error;
+  } finally {
+    campaignScannerRuntime.running = false;
+  }
+}
+
+function publicCampaignSkillState(state = readCampaignSkillState()) {
+  const counts = state.findings.reduce((result, finding) => {
+    result[finding.status] = (result[finding.status] || 0) + 1;
+    return result;
+  }, {});
+  return {
+    ...state,
+    runtime: { ...campaignScannerRuntime },
+    counts
+  };
+}
+
+async function handleCampaignSkill(req, res) {
+  const pathname = new URL(req.url, `http://localhost:${PORT}`).pathname;
+  try {
+    if (req.method === "GET" && pathname === "/local/campaign-skill") {
+      sendJson(res, 200, { success: true, ...publicCampaignSkillState() });
+      return;
+    }
+    const body = req.method === "POST" ? await readBody(req) : Buffer.alloc(0);
+    const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
+    if (req.method === "POST" && pathname === "/local/campaign-skill/settings") {
+      const state = readCampaignSkillState();
+      state.settings = normalizeCampaignSettings({ ...state.settings, ...(payload.settings || payload) });
+      const saved = writeCampaignSkillState(state);
+      sendJson(res, 200, { success: true, message: "大促巡检设置已保存", ...publicCampaignSkillState(saved) });
+      return;
+    }
+    if (req.method === "POST" && pathname === "/local/campaign-skill/scan") {
+      const result = await runCampaignSkillScan("manual", payload);
+      sendJson(res, 200, { success: true, ...result, ...publicCampaignSkillState(result.state) });
+      return;
+    }
+    if (req.method === "POST" && pathname === "/local/campaign-skill/action") {
+      const state = readCampaignSkillState();
+      const finding = state.findings.find((item) => String(item.key) === String(payload.key || ""));
+      if (!finding) throw new Error("没有找到该巡检结果");
+      if (payload.action === "ignore") {
+        finding.status = "ignored";
+        finding.ignoredAt = new Date().toISOString();
+        finding.updatedAt = finding.ignoredAt;
+      } else if (payload.action === "send") {
+        if (finding.status === "sent") throw new Error("该订单已经发送过，已阻止重复发送");
+        await sendCampaignFindingGroup([finding], state, { manual: true });
+      } else if (payload.action === "reopen") {
+        finding.status = "pending";
+        finding.updatedAt = new Date().toISOString();
+      } else {
+        throw new Error("不支持的巡检动作");
+      }
+      const saved = writeCampaignSkillState(state);
+      sendJson(res, 200, { success: true, message: "巡检结果已更新", ...publicCampaignSkillState(saved) });
+      return;
+    }
+    sendJson(res, 405, { success: false, message: "Method not allowed" });
+  } catch (error) {
+    sendJson(res, 400, { success: false, message: error.message || "大促巡检失败" });
+  }
 }
 
 function normalizeLearnedSkill(skill) {
@@ -4392,6 +5157,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.url.startsWith("/local/campaign-skill")) {
+    await handleCampaignSkill(req, res);
+    return;
+  }
+
   if (req.url.startsWith("/local/fnos/")) {
     await handleFnOSDatabase(req, res);
     return;
@@ -4455,6 +5225,11 @@ const server = http.createServer(async (req, res) => {
       aiBase: DEFAULT_AI_BASE,
       aiModel: DEFAULT_AI_MODEL,
       aiProvider: DEFAULT_AI_PROVIDER,
+      campaignSkill: {
+        running: campaignScannerRuntime.running,
+        lastCompletedAt: campaignScannerRuntime.lastCompletedAt,
+        lastError: campaignScannerRuntime.lastError
+      },
       promptWorksApiBase: PROMPTWORKS_API_BASE,
       port: PORT
     });
@@ -4489,10 +5264,28 @@ function startDatabaseGuard() {
   setInterval(() => runDatabaseGuardCheck("timer"), DATABASE_GUARD_INTERVAL_MS);
 }
 
+function startCampaignSkillScanner() {
+  const state = readCampaignSkillState();
+  console.log(`Campaign skill: ${state.settings.enabled ? "enabled" : "disabled"}, checking every ${Math.round(CAMPAIGN_SCAN_INTERVAL_MS / 60000)} minute(s)`);
+  if (state.settings.enabled) {
+    setTimeout(() => runCampaignSkillScan("startup").catch((error) => {
+      console.error(`Campaign startup scan failed: ${error.message}`);
+    }), 60000);
+  }
+  setInterval(() => {
+    const current = readCampaignSkillState();
+    if (!current.settings.enabled) return;
+    runCampaignSkillScan("timer").catch((error) => {
+      console.error(`Campaign timer scan failed: ${error.message}`);
+    });
+  }, CAMPAIGN_SCAN_INTERVAL_MS);
+}
+
 server.listen(PORT, () => {
   console.log(`YouChat dev web: http://localhost:${PORT}`);
   console.log(`Proxy target: ${DEFAULT_API_BASE}`);
   startDatabaseGuard();
+  startCampaignSkillScanner();
 });
 
 // 全局兜底：单个请求 handler 里未捕获的异常/拒绝不应该打崩整个服务，

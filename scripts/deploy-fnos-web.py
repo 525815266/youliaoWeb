@@ -37,6 +37,7 @@ EXCLUDED_FILES = {
 EXCLUDED_RELATIVE_PATHS = {
     "config/ai-providers.json",
     "data/reply-skills.json",
+    "data/campaign-commission-scan.json",
     "logs/api-capture.ndjson",
 }
 EXCLUDED_PATTERNS = ("*.log", "*.tmp", "*.temp", "*.tar", "*.tar.gz", "*.zip")
