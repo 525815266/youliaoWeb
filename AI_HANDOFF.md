@@ -5114,4 +5114,12 @@ Verification notes:
 
 - The modified local proxy uploaded the full 2.4MB PNG in `19391ms`, returned HTTP 200, and generated a `https://qiniu.yunsert.com/...png` URL.
 - Upload probes never called `ChatContent/SendMsg`; no real customer received test content.
-- After future deployment, verify both `5177` and `5178` with `/local/oss-upload` plus `/health`; keep the server timeout lower than the browser proxy timeout.
+- For future releases, verify both `5177` and `5178` with `/local/oss-upload` plus `/health`; keep the server timeout lower than the browser proxy timeout.
+
+Deployment result:
+
+- Commit `85eac2e Fix Qiniu image upload stalls` was deployed to both fnOS Web stacks.
+- Primary `5177` used its real backend-issued Qiniu config and uploaded the 2,463,841-byte PNG in `19188ms`, HTTP 200.
+- Secondary `5178` uploaded the same PNG through its deployed proxy in `18689ms`, HTTP 200, using a valid temporary config issued by the primary backend. This verifies the secondary Web image and proxy code.
+- Secondary backend `18082` currently returns `success=true, data=null` from `GetOssConfig` for multiple real contacts. Direct image sending in that stack therefore remains blocked before upload; treat it as a backend configuration/capability issue, not a Web proxy regression.
+- Both stacks report MySQL mode, zero database-guard failures, SignalR `Connected`, `ensureRejoinGroup=true`, and no registration error.

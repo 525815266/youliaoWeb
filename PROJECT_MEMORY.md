@@ -8033,3 +8033,11 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 - 主 Web 容器内 Node/undici 使用 HTTPS 上传同图，HTTP 200，用时约 19.4 秒，证明容器网络正常，故障点是 HTTP 上传路径和旧超时组合。
 - 修改后的本地 `/local/oss-upload` 上传同图返回 200，服务端记录 `19391ms`，返回 `https://qiniu.yunsert.com/...png`。
 - 测试只验证 OSS 上传，没有调用 `ChatContent/SendMsg`，未向真实客户发送测试消息。
+
+部署结果：
+
+- 修复提交 `85eac2e Fix Qiniu image upload stalls` 已部署到两套飞牛 Web。
+- 主套 `5177` 使用主后端真实 `GetOssConfig` 上传 2,463,841 字节原图成功，HTTP 200，服务端耗时 `19188ms`。
+- 第二套 `5178` 的代理使用有效临时七牛配置上传同图成功，HTTP 200，服务端耗时 `18689ms`，证明第二套 Web 镜像和代理修复生效。
+- 第二套后端 `18082` 的 `GetOssConfig` 对多个真实联系人均返回 `success=true, data=null`，因此第二套从聊天输入框直接发送图片仍受后端不签发 OSS 配置限制；这不是 Web 代理或本次 HTTPS 修复失败。
+- 两套 `/health` 正常，数据库均为 `databaseType=0/mysql`，守护连续失败数为 0；SignalR 均为 `Connected`、`ensureRejoinGroup=true`、无登记错误。
