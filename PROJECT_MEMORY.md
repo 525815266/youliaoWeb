@@ -8041,3 +8041,4 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 - 第二套 `5178` 的代理使用有效临时七牛配置上传同图成功，HTTP 200，服务端耗时 `18689ms`，证明第二套 Web 镜像和代理修复生效。
 - 第二套后端 `18082` 的 `GetOssConfig` 对多个真实联系人均返回 `success=true, data=null`，因此第二套从聊天输入框直接发送图片仍受后端不签发 OSS 配置限制；这不是 Web 代理或本次 HTTPS 修复失败。
 - 两套 `/health` 正常，数据库均为 `databaseType=0/mysql`，守护连续失败数为 0；SignalR 均为 `Connected`、`ensureRejoinGroup=true`、无登记错误。
+- 实际公网 Lucky 地址 `https://yzkf.xmmhsj.cn:8001` 上传同一张 2,463,841 字节原图成功，HTTP 200，总耗时约 `19.08s`、服务端上传 `18692ms`；HTTPS 反代没有截断请求，也没有再触发 mixed content。

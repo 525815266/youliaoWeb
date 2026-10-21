@@ -5123,3 +5123,4 @@ Deployment result:
 - Secondary `5178` uploaded the same PNG through its deployed proxy in `18689ms`, HTTP 200, using a valid temporary config issued by the primary backend. This verifies the secondary Web image and proxy code.
 - Secondary backend `18082` currently returns `success=true, data=null` from `GetOssConfig` for multiple real contacts. Direct image sending in that stack therefore remains blocked before upload; treat it as a backend configuration/capability issue, not a Web proxy regression.
 - Both stacks report MySQL mode, zero database-guard failures, SignalR `Connected`, `ensureRejoinGroup=true`, and no registration error.
+- The real Lucky public route `https://yzkf.xmmhsj.cn:8001` uploaded the same 2,463,841-byte PNG successfully: HTTP 200, `19.08s` end-to-end, `18692ms` server upload time, and an HTTPS CDN URL. The reverse proxy accepted the full request without mixed-content fallback.
