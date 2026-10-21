@@ -16,11 +16,12 @@ const AI_PROVIDER_STORAGE_KEY = "youchat.ai.provider";
 const AI_PROVIDER_SETTINGS_STORAGE_KEY = "youchat.ai.providers";
 const DEFAULT_AI_PROVIDER = "sub2";
 const API_REQUEST_TIMEOUT_MS = 45000;
-const IMAGE_UPLOAD_TIMEOUT_MS = 20000;
-const LOCAL_IMAGE_UPLOAD_TIMEOUT_MS = 12000;
+const IMAGE_UPLOAD_TIMEOUT_MS = 60000;
+const LOCAL_IMAGE_UPLOAD_TIMEOUT_MS = 70000;
 const MAX_UPLOAD_IMAGE_EDGE = 1600;
-const MAX_UPLOAD_IMAGE_BYTES = 900 * 1024;
+const MAX_UPLOAD_IMAGE_BYTES = 700 * 1024;
 const IMAGE_UPLOAD_JPEG_QUALITY = 0.86;
+const IMAGE_UPLOAD_MIN_JPEG_QUALITY = 0.58;
 const POST_SEND_REFRESH_DELAY_MS = 80;
 const SIGNALR_KEEP_ALIVE_MS = 120000;
 const SIGNALR_START_TIMEOUT_MS = 12000;
@@ -7998,24 +7999,44 @@ async function prepareImageForUpload(file) {
   }
 
   const scale = Math.min(1, MAX_UPLOAD_IMAGE_EDGE / maxEdge);
-  const targetWidth = Math.max(1, Math.round(width * scale));
-  const targetHeight = Math.max(1, Math.round(height * scale));
+  let targetWidth = Math.max(1, Math.round(width * scale));
+  let targetHeight = Math.max(1, Math.round(height * scale));
   const canvas = document.createElement("canvas");
-  canvas.width = targetWidth;
-  canvas.height = targetHeight;
-  const ctx = canvas.getContext("2d", { alpha: false });
-  if (!ctx) {
-    bitmap.close?.();
-    return file;
+  const qualitySteps = [IMAGE_UPLOAD_JPEG_QUALITY, 0.76, 0.66, IMAGE_UPLOAD_MIN_JPEG_QUALITY];
+  let bestBlob = null;
+  let bestWidth = targetWidth;
+  let bestHeight = targetHeight;
+
+  for (let sizePass = 0; sizePass < 3; sizePass += 1) {
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) break;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
+    ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+
+    for (const quality of qualitySteps) {
+      const candidate = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+      if (!candidate) continue;
+      if (!bestBlob || candidate.size < bestBlob.size) {
+        bestBlob = candidate;
+        bestWidth = targetWidth;
+        bestHeight = targetHeight;
+      }
+      if (candidate.size <= MAX_UPLOAD_IMAGE_BYTES) break;
+    }
+    if (bestBlob?.size <= MAX_UPLOAD_IMAGE_BYTES) break;
+    if (!bestBlob) break;
+
+    const shrink = Math.max(0.72, Math.min(0.88, Math.sqrt(MAX_UPLOAD_IMAGE_BYTES / bestBlob.size) * 0.96));
+    targetWidth = Math.max(1, Math.round(targetWidth * shrink));
+    targetHeight = Math.max(1, Math.round(targetHeight * shrink));
   }
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, targetWidth, targetHeight);
-  ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
   bitmap.close?.();
 
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", IMAGE_UPLOAD_JPEG_QUALITY));
-  if (!blob || blob.size >= file.size) return file;
-  const optimized = new File([blob], replaceImageExtension(file.name || "image.png", ".jpg"), {
+  if (!bestBlob || bestBlob.size >= file.size) return file;
+  const optimized = new File([bestBlob], replaceImageExtension(file.name || "image.png", ".jpg"), {
     type: "image/jpeg",
     lastModified: Date.now()
   });
@@ -8026,8 +8047,8 @@ async function prepareImageForUpload(file) {
     toBytes: optimized.size,
     width,
     height,
-    targetWidth,
-    targetHeight
+    targetWidth: bestWidth,
+    targetHeight: bestHeight
   });
   return optimized;
 }
@@ -8059,11 +8080,16 @@ async function uploadChatImage(file) {
 
   const objectKey = buildOssObjectKey(config, uploadFileName);
   const localPayload = { config, objectKey, file: uploadFile, fileName: uploadFileName };
+  let proxyError = null;
   try {
     setSendingStage("正在通过本地代理上传图片...");
     return await uploadImageViaLocalProxy(localPayload);
-  } catch (proxyError) {
-    log("local oss upload failed, retry via browser", { error: proxyError.message, objectKey });
+  } catch (error) {
+    proxyError = error;
+    log("local oss upload failed", { error: error.message, objectKey });
+    if (isImageUploadTimeout(error)) {
+      throw new Error(formatImageUploadFailure(error));
+    }
   }
 
   try {
@@ -8083,8 +8109,22 @@ async function uploadChatImage(file) {
     if (!uploadedUrl) throw new Error("OSS 上传完成，但未生成图片地址");
     return uploadedUrl;
   } catch (error) {
-    throw new Error(`图片上传失败：${error.message}`);
+    log("browser oss upload failed", { error: error.message, proxyError: proxyError?.message, objectKey });
+    throw new Error(formatImageUploadFailure(proxyError, error));
   }
+}
+
+function isImageUploadTimeout(error) {
+  return /timed?\s*out|timeout|超时/i.test(String(error?.message || error || ""));
+}
+
+function formatImageUploadFailure(...errors) {
+  const messages = errors.map((error) => String(error?.message || error || "").trim()).filter(Boolean);
+  if (errors.some(isImageUploadTimeout)) return "图片上传超时，文字和图片草稿已保留，请重试";
+  if (messages.some((message) => /failed to fetch|fetch failed|networkerror|network request/i.test(message))) {
+    return "图片上传连接失败，文字和图片草稿已保留，请重试";
+  }
+  return `图片上传失败，文字和图片草稿已保留${messages[0] ? `：${messages[0]}` : ""}`;
 }
 
 async function uploadImageViaLocalProxy({ config, objectKey, file, fileName }) {
@@ -8134,10 +8174,21 @@ function extractUploadEndpoint(config) {
     config.ossHost,
     config.domain
   );
+  return normalizeUploadEndpoint(host, config);
+}
+
+function normalizeUploadEndpoint(host, config = {}) {
   if (!host) return "";
-  const text = String(host);
-  if (/^https?:\/\//i.test(text)) return text;
-  return `https://${text.replace(/^\/+/, "")}`;
+  const text = String(host).trim();
+  const normalized = /^https?:\/\//i.test(text) ? text : `https://${text.replace(/^\/+/, "")}`;
+  try {
+    const url = new URL(normalized);
+    const isQiniu = Boolean(config.qnToken || config.qiniuToken || config.uploadToken) || /(^|\.)qiniup\.com$/i.test(url.hostname);
+    if (isQiniu && url.protocol === "http:") url.protocol = "https:";
+    return url.toString();
+  } catch {
+    return normalized;
+  }
 }
 
 function buildOssObjectKey(config, fileName) {

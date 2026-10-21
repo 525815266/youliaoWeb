@@ -8010,3 +8010,26 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 - 两套 `/health.ok=true`，大促标签和 `renderCampaignToolPanel` 均存在，指南图均返回 `200 image/png`。
 - 两套数据库均为 MySQL，守护 `repairCount=0`、`consecutiveFailures=0`；SignalR 均为 `Connected`、`EnsureRejoinGroup=true`、无登记错误。
 - 主套部署后启动巡检正常结束：13 条结果、5 条待处理、`runtime.lastError` 为空；第二套仍为 0 条，证明部署保留且隔离两套 `campaign-commission-scan.json`。
+
+## 89. 2026-10-21 图片发送卡住与 `Failed to fetch` 修复
+
+问题与根因：
+
+- `ChatContent/GetOssConfig` 正常返回七牛配置，但 `qnRegionUrl` 是 `http://upload.qiniup.com`。
+- 1x1 小图偶尔可通过，2.4MB 实际图片在容器中走 HTTP POST 会卡住；服务端 20 秒超时，浏览器代理请求又只等 12 秒，随后在 HTTPS 页面回退到 HTTP 浏览器直传，最终被 mixed content/CORS 拦截并显示误导性的 `Failed to fetch`。
+- 旧流程可能留下仍在执行的代理请求，同时再发起浏览器直传，造成长时间“发送中”和重复上传风险。
+
+修复：
+
+- `public/app.js` 和 `server.js` 的上传地址解析会在识别到七牛 token 或 `*.qiniup.com` 时强制把 HTTP 升级为 HTTPS。
+- 服务端 OSS 超时调整为 60 秒，浏览器等待本地代理 70 秒，保证服务端先明确结束；代理超时后不再启动第二次直传。
+- 非 GIF/SVG 大图改为多轮等比例 JPEG 压缩，目标约 700KB，最大边 1600px；逐步调整质量和尺寸，不改变宽高比。
+- `/local/oss-upload` 成功响应和失败响应增加 `bytes`、`elapsedMs`、`endpointHost`、`stage`；超时返回 504。抓包日志只记录 endpoint host 和脱敏后的配置，不记录七牛 token。
+- 前端把超时、网络错误转换为中文提示，并明确文字和图片草稿仍保留；只有上传并提交成功的内容才从输入区移除。
+
+验证：
+
+- 飞牛宿主机原生 `curl -4` 使用 HTTPS 上传同一张 2,463,841 字节 PNG，HTTP 200，用时约 18 秒。
+- 主 Web 容器内 Node/undici 使用 HTTPS 上传同图，HTTP 200，用时约 19.4 秒，证明容器网络正常，故障点是 HTTP 上传路径和旧超时组合。
+- 修改后的本地 `/local/oss-upload` 上传同图返回 200，服务端记录 `19391ms`，返回 `https://qiniu.yunsert.com/...png`。
+- 测试只验证 OSS 上传，没有调用 `ChatContent/SendMsg`，未向真实客户发送测试消息。

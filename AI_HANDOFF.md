@@ -5093,3 +5093,25 @@ Deployment state:
 - Both fnOS Web stacks were deployed: primary `5177 -> 18080`, secondary `5178 -> 18082`.
 - Both health endpoints are OK, both stacks remain on MySQL with zero guard repairs/failures, and both SignalR bridges are `Connected` with `EnsureRejoinGroup=true` and no registration error.
 - The primary startup scan completed with 13 persisted findings, 5 actionable findings, and no runtime error. The secondary still has 0 findings, confirming per-stack state isolation survived deployment.
+
+## 2026-10-21 Handoff: Image Upload Stall Fix
+
+Confirmed root cause:
+
+- `ChatContent/GetOssConfig` returns a valid Qiniu token and `qnRegionUrl=http://upload.qiniup.com`.
+- Large HTTP multipart uploads stall, while the same 2,463,841-byte PNG uploads successfully to `https://upload.qiniup.com` from both the fnOS host (about 18s) and the primary Web container (about 19.4s).
+- The old client stopped waiting for `/local/oss-upload` after 12s while the server waited 20s, then retried the original HTTP endpoint in the browser. On the public HTTPS page that fallback becomes mixed-content/CORS `Failed to fetch` and can overlap the still-running proxy request.
+
+Implementation:
+
+- `extractUploadEndpoint()` in both `public/app.js` and `server.js` now upgrades Qiniu upload endpoints to HTTPS when a Qiniu token is present or the host ends in `.qiniup.com`.
+- Server OSS timeout is 60s; frontend proxy timeout is 70s. A proxy timeout is terminal for that attempt and does not trigger another browser upload.
+- `prepareImageForUpload()` performs iterative aspect-ratio-preserving JPEG compression for non-GIF/SVG images. Target size is 700KB, max edge is 1600px, and quality/dimensions step down only when needed.
+- `/local/oss-upload` returns structured diagnostics (`stage`, `bytes`, `elapsedMs`, `endpointHost`, `retryable`) and uses HTTP 504 for upload timeouts. Never log or return the Qiniu token.
+- Upload errors are mapped to stable Chinese messages. Composer text and image drafts remain available after failure; successful sends retain the existing duplicate-send lock.
+
+Verification notes:
+
+- The modified local proxy uploaded the full 2.4MB PNG in `19391ms`, returned HTTP 200, and generated a `https://qiniu.yunsert.com/...png` URL.
+- Upload probes never called `ChatContent/SendMsg`; no real customer received test content.
+- After future deployment, verify both `5177` and `5178` with `/local/oss-upload` plus `/health`; keep the server timeout lower than the browser proxy timeout.

@@ -38,7 +38,7 @@
 
 - 表情：插入微信/悠聊表情短码到输入框。
 - 发送指令：调用 `/ChatContent/SendSuperCmd`。
-- 选择图片：调用 `/ChatContent/GetOssConfig` 获取 OSS 参数，为每张图生成唯一 OSS key，优先走 `/local/oss-upload` 本地代理上传，浏览器直传只作为兜底，再用 `/ChatContent/SendMsg(contentType=1/4)` 发出。
+- 选择图片：调用 `/ChatContent/GetOssConfig` 获取 OSS 参数，为每张图生成唯一 OSS key；七牛上传地址统一升级为 HTTPS，大图先等比例压缩到约 700KB，再优先走 `/local/oss-upload` 本地代理上传。代理超时后不会立即重复直传，文字和图片草稿会保留；上传成功后再用 `/ChatContent/SendMsg(contentType=1/4)` 发出。
 - 红包：调用 `/ChatContent/GetRedPacks` 读取模板，再调用 `/ChatContent/SendRedPacks`。
 - 截图：使用浏览器屏幕捕获生成图片，再走图片发送链路。
 - 星标：把当前输入/推荐话术写入 `data/reply-skills.json`；如果输入框里已有草稿图片，会先走真实 OSS 上传拿到图片 URL，再把图片步骤一起写入 skill。

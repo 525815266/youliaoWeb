@@ -28,7 +28,7 @@ const API_CAPTURE_FILE = path.join(LOG_DIR, "api-capture.ndjson");
 const MAX_CAPTURE_TEXT = 8000;
 const MAX_LINK_PREVIEW_BYTES = 900000;
 const API_PROXY_TIMEOUT_MS = 60000;
-const OSS_UPLOAD_TIMEOUT_MS = 20000;
+const OSS_UPLOAD_TIMEOUT_MS = 60000;
 const AI_PROXY_TIMEOUT_MS = 90000;
 const MEDIA_PROXY_TIMEOUT_MS = 30000;
 const PROMPTWORKS_TIMEOUT_MS = Math.max(10000, Number(process.env.PROMPTWORKS_TIMEOUT_MS || 60000));
@@ -3495,10 +3495,29 @@ function extractUploadEndpoint(config) {
     config.ossHost,
     config.domain
   );
+  return normalizeUploadEndpoint(host, config);
+}
+
+function normalizeUploadEndpoint(host, config = {}) {
   if (!host) return "";
-  const text = String(host);
-  if (/^https?:\/\//i.test(text)) return text;
-  return `https://${text.replace(/^\/+/, "")}`;
+  const text = String(host).trim();
+  const normalized = /^https?:\/\//i.test(text) ? text : `https://${text.replace(/^\/+/, "")}`;
+  try {
+    const url = new URL(normalized);
+    const isQiniu = Boolean(config.qnToken || config.qiniuToken || config.uploadToken) || /(^|\.)qiniup\.com$/i.test(url.hostname);
+    if (isQiniu && url.protocol === "http:") url.protocol = "https:";
+    return url.toString();
+  } catch {
+    return normalized;
+  }
+}
+
+function getUploadEndpointHost(endpoint) {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return "";
+  }
 }
 
 function buildOssObjectKey(config, fileName) {
@@ -3613,8 +3632,13 @@ async function handleOssUpload(req, res) {
     return;
   }
 
+  const startedAt = Date.now();
+  let stage = "read_request";
+  let endpoint = "";
+  let uploadBytes = 0;
   try {
     const body = await readBody(req);
+    stage = "parse_request";
     const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
     const config = payload.config && typeof payload.config === "object" ? payload.config : {};
     const fileName = String(payload.fileName || `upload-${Date.now()}`);
@@ -3626,7 +3650,8 @@ async function handleOssUpload(req, res) {
     }
 
     const buffer = Buffer.from(base64, "base64");
-    const endpoint = extractUploadEndpoint(config);
+    uploadBytes = buffer.length;
+    endpoint = extractUploadEndpoint(config);
     if (!endpoint) {
       sendJson(res, 400, { success: false, message: "OSS upload endpoint is missing", config: summarizeUploadConfig(config) });
       return;
@@ -3634,7 +3659,9 @@ async function handleOssUpload(req, res) {
 
     const objectKey = payload.objectKey || buildOssObjectKey(config, fileName || createOssUploadFileName(fileName, contentType));
     const form = buildOssFormData(config, objectKey, fileName, contentType, buffer);
+    stage = "upload_upstream";
     const upstream = await fetchWithTimeout(endpoint, { method: "POST", body: form }, OSS_UPLOAD_TIMEOUT_MS, "OSS upload");
+    stage = "read_upstream_response";
     const text = await upstream.text();
     const parsed = parseMaybeJson(text);
     const url = extractUploadedUrl(parsed, firstNonEmpty(config.qnDomain, config.qiniuDomain, endpoint), objectKey);
@@ -3661,18 +3688,33 @@ async function handleOssUpload(req, res) {
       status: upstream.status,
       url,
       objectKey,
+      bytes: buffer.length,
+      elapsedMs: Date.now() - startedAt,
+      endpointHost: getUploadEndpointHost(endpoint),
       response: trimCaptureText(text, 1200)
     });
   } catch (error) {
+    const timedOut = /timed?\s*out|timeout/i.test(String(error.message || error));
+    const elapsedMs = Date.now() - startedAt;
     captureApi({
       at: new Date().toISOString(),
       method: req.method,
       url: req.url,
-      target: "/local/oss-upload",
-      status: 500,
+      target: endpoint || "/local/oss-upload",
+      status: timedOut ? 504 : 502,
+      requestBody: JSON.stringify({ stage, bytes: uploadBytes, elapsedMs, endpointHost: getUploadEndpointHost(endpoint) }),
       error: error.message
     });
-    sendJson(res, 500, { success: false, message: "OSS upload proxy failed", error: error.message });
+    sendJson(res, timedOut ? 504 : 502, {
+      success: false,
+      message: timedOut ? "图片上传超时" : "图片上传代理失败",
+      error: error.message,
+      stage,
+      bytes: uploadBytes,
+      elapsedMs,
+      endpointHost: getUploadEndpointHost(endpoint),
+      retryable: true
+    });
   }
 }
 
