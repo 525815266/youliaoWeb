@@ -26,6 +26,7 @@ def patch_autologin(text, helper):
         if '  sleep "$interval"\ndone' not in text:
             raise ValueError('autologin loop marker missing')
         text = text.replace('  sleep "$interval"\ndone', call + '  sleep "$interval"\ndone', 1)
+    text = text.replace('case "$database_mode" in', 'case "$startup_database_mode" in', 1)
     return text
 
 
@@ -43,6 +44,8 @@ for directory, container in [('youchat', 'youchat-autologin'), ('youchat-2', 'yo
     if after != before:
         file.with_suffix('.sh.before-health-' + str(int(time.time()))).write_text(before)
         file.write_text(after)
+        # Updating observability must not run the legacy database-switch startup sequence.
+        (file.parent.parent / 'docker-control/login-health-preserve-database').touch()
         subprocess.run(['docker', 'restart', container], check=True, timeout=60)
     print(directory, 'login health installed', flush=True)
 '''

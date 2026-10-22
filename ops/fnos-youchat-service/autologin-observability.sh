@@ -1,4 +1,9 @@
 # Sourced by autologin.sh. Repeated upstream timeouts must not look like a healthy login.
+startup_database_mode="$database_mode"
+if [ -f "$control_dir/login-health-preserve-database" ]; then
+  startup_database_mode="keep"
+  rm -f "$control_dir/login-health-preserve-database"
+fi
 login_timeout_count=0
 login_recoveries=0
 login_last_recovery=0

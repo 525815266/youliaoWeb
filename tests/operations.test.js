@@ -100,3 +100,26 @@ test("storage arrears surface as an actionable error, not a generic network fail
   assert.match(context.describeOssUploadFailure(451, '<Message>account is arrears, recharge</Message>'), /欠费/);
   assert.match(context.describeOssUploadFailure(403, 'AccessDenied'), /403/);
 });
+
+test("campaign guide uploads the compressed JPEG with matching name and MIME", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "../server.js"), "utf8");
+  const start = source.indexOf("async function ensureCampaignGuideUploaded(");
+  const end = source.indexOf("\nfunction waitCampaign", start);
+  let uploaded = false;
+  const context = vm.createContext({
+    DEFAULT_API_BASE: "test", CAMPAIGN_GUIDE_FILE: "guide.png", CAMPAIGN_GUIDE_UPLOAD_FILE: "guide.jpg",
+    OSS_UPLOAD_TIMEOUT_MS: 60000, crypto: { randomBytes: () => ({ toString: () => "random" }) },
+    fs: { existsSync: () => true, readFileSync: (file) => { assert.equal(file, "guide.jpg"); return Buffer.from("jpeg"); } },
+    postYouChatApi: async (url, data) => { assert.equal(data.fileName, "campaign-influencer-floor-random.jpg"); return {}; },
+    getPayloadData: () => ({}), extractUploadEndpoint: () => "https://storage.test", buildOssObjectKey: (_, file) => file,
+    buildOssFormData: (_, key, name, mime) => { assert.equal(key, name); assert.equal(mime, "image/jpeg"); return "form"; },
+    fetchWithTimeout: async () => { uploaded = true; return { ok: true, text: async () => "{}" }; },
+    parseMaybeJson: JSON.parse, firstNonEmpty: (...args) => args.find(Boolean), extractUploadedUrl: () => "https://storage.test/guide.jpg"
+  });
+  vm.runInContext(source.slice(start, end), context);
+  const state = {};
+  assert.equal(await context.ensureCampaignGuideUploaded(state, 48), "https://storage.test/guide.jpg");
+  assert.ok(uploaded);
+  assert.equal(state.guideImageUrl, "https://storage.test/guide.jpg");
+  assert.ok(fs.statSync(path.join(__dirname, "../public/assets/campaign-influencer-floor-guide-upload.jpg")).size < 700 * 1024);
+});

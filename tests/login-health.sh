@@ -3,7 +3,12 @@ set -eu
 control_dir="$(mktemp -d)"
 trap 'rm -rf "$control_dir"' EXIT
 pause_file="$control_dir/autologin.pause"
+database_mode=mysql
+touch "$control_dir/login-health-preserve-database"
 . "$1"
+[ "$startup_database_mode" = keep ]
+[ "$database_mode" = mysql ]
+[ ! -f "$control_dir/login-health-preserve-database" ]
 clock_value=2000
 restarts=0
 network_ok=1
