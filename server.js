@@ -3487,6 +3487,7 @@ async function handlePromptWorksImportTraining(req, res) {
 
 function extractUploadEndpoint(config) {
   const host = firstNonEmpty(
+    config.txHostUrl,
     config.qnRegionUrl,
     config.qiniuUploadUrl,
     config.qnUploadUrl,
@@ -3573,6 +3574,16 @@ function buildOssFormData(config, objectKey, fileName, contentType, buffer) {
     ? {
         key: objectKey,
         token: qiniuToken
+      }
+    : config.txHostUrl && config.txPolicy
+    ? {
+        key: objectKey,
+        policy: config.txPolicy,
+        "q-sign-algorithm": "sha1",
+        "q-ak": config.txQak,
+        "q-key-time": config.txQkeyTime,
+        "q-signature": config.txQsignature,
+        success_action_status: "200"
       }
     : {
         key: objectKey,
@@ -3688,6 +3699,8 @@ async function handleOssUpload(req, res) {
     sendJson(res, upstream.ok ? 200 : 502, {
       success: upstream.ok,
       status: upstream.status,
+      message: upstream.ok ? "" : describeOssUploadFailure(upstream.status, text),
+      retryable: upstream.status >= 500,
       url,
       objectKey,
       bytes: buffer.length,
@@ -3718,6 +3731,13 @@ async function handleOssUpload(req, res) {
       retryable: true
     });
   }
+}
+
+function describeOssUploadFailure(status, text) {
+  if (status === 451 && /arrears|recharge/i.test(text)) {
+    return "图片存储服务欠费，请联系悠聊服务商恢复该账号的存储服务";
+  }
+  return `图片存储服务拒绝上传（HTTP ${status}）`;
 }
 
 function parseMaybeJson(text) {

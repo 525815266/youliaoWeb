@@ -8090,6 +8090,7 @@ async function uploadChatImage(file) {
   } catch (error) {
     proxyError = error;
     log("local oss upload failed", { error: error.message, objectKey });
+    if (error.noBrowserFallback) throw new Error(formatImageUploadFailure(error));
     if (isImageUploadTimeout(error)) {
       throw new Error(formatImageUploadFailure(error));
     }
@@ -8150,7 +8151,9 @@ async function uploadImageViaLocalProxy({ config, objectKey, file, fileName }) {
     const detail = result.error && result.error !== result.message
       ? `${getMessage(result) || "图片上传代理失败"}：${result.error}`
       : getMessage(result);
-    throw new Error(detail || "图片上传代理未返回图片地址");
+    const error = new Error(detail || "图片上传代理未返回图片地址");
+    error.noBrowserFallback = result.retryable === false;
+    throw error;
   }
   return result.url;
 }
@@ -8166,6 +8169,7 @@ function fileToBase64(file) {
 
 function extractUploadEndpoint(config) {
   const host = firstValue(
+    config.txHostUrl,
     config.qnRegionUrl,
     config.qiniuUploadUrl,
     config.qnUploadUrl,
@@ -8256,6 +8260,16 @@ function buildOssUploadForm(config, objectKey, file, fileName = "") {
     ? {
         key: objectKey,
         token: qiniuToken
+      }
+    : config.txHostUrl && config.txPolicy
+    ? {
+        key: objectKey,
+        policy: config.txPolicy,
+        "q-sign-algorithm": "sha1",
+        "q-ak": config.txQak,
+        "q-key-time": config.txQkeyTime,
+        "q-signature": config.txQsignature,
+        success_action_status: "200"
       }
     : {
         key: objectKey,

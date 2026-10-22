@@ -5,6 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { appendCapture, summarizePollResponse } = require("../capture-log");
 const policy = require("../public/signalr-policy");
+const vm = require("node:vm");
 
 test("successful polls retain counts but omit customer bodies; failures remain available", () => {
   const buffer = Buffer.from(JSON.stringify({ success: true, data: { list: [{ message: "private" }], total: 9000 } }));
@@ -58,4 +59,44 @@ test("known hub notifications record metadata without forwarding message bodies"
   }
   assert.equal(received.length, 4);
   assert.ok(received.every((args) => args.length === 1 && typeof args[0] === "string"));
+});
+
+test("browser and proxy map native Tencent COS fields; Qiniu remains unchanged", () => {
+  const config = { txHostUrl: "https://example.cos.ap-shanghai.myqcloud.com", txPolicy: "policy",
+    txQak: "access-id", txQkeyTime: "100;200", txQsignature: "signature" };
+  for (const [file, builder] of [["server.js", "buildOssFormData"], ["public/app.js", "buildOssUploadForm"]]) {
+    const source = fs.readFileSync(path.join(__dirname, "..", file), "utf8");
+    const first = (...values) => values.find((value) => value !== undefined && value !== null && value !== "");
+    const context = vm.createContext({ FormData, Blob, firstNonEmpty: first, firstValue: first, normalizeUploadEndpoint: (value) => value });
+    for (const name of [builder, "extractUploadEndpoint"]) {
+      const start = source.indexOf(`function ${name}(`);
+      const end = source.indexOf("\nfunction ", start + 1);
+      assert.ok(start >= 0 && end > start);
+      vm.runInContext(source.slice(start, end), context);
+    }
+    assert.equal(context.extractUploadEndpoint(config), config.txHostUrl);
+    const build = (cfg) => builder === "buildOssFormData"
+      ? context[builder](cfg, "test.png", "test.png", "image/png", Buffer.from("test"))
+      : context[builder](cfg, "test.png", new Blob(["test"], { type: "image/png" }), "test.png");
+    const cos = build(config);
+    for (const [name, value] of Object.entries({ key: "test.png", policy: "policy", "q-sign-algorithm": "sha1",
+      "q-ak": "access-id", "q-key-time": "100;200", "q-signature": "signature", success_action_status: "200" })) {
+      assert.equal(cos.get(name), value, `${file}: ${name}`);
+    }
+    assert.equal(cos.has("OSSAccessKeyId"), false);
+    assert.equal(cos.get("file").name, "test.png");
+    const qiniu = build({ qnToken: "test-token" });
+    assert.equal(qiniu.get("token"), "test-token");
+    assert.equal(qiniu.has("q-signature"), false);
+  }
+});
+
+test("storage arrears surface as an actionable error, not a generic network failure", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../server.js"), "utf8");
+  const start = source.indexOf("function describeOssUploadFailure(");
+  const end = source.indexOf("\nfunction ", start + 1);
+  const context = vm.createContext({});
+  vm.runInContext(source.slice(start, end), context);
+  assert.match(context.describeOssUploadFailure(451, '<Message>account is arrears, recharge</Message>'), /欠费/);
+  assert.match(context.describeOssUploadFailure(403, 'AccessDenied'), /403/);
 });

@@ -51,6 +51,14 @@
 
 检查时两套均为 MySQL，未发现近两天切 SQLite、MySQL 崩溃或容器 OOM。主套仍有实时消息写入。PromptWorks 四个容器未见最近错误。主机约 6GB 内存、交换区使用较高，属于后续容量关注项；没有据此删除数据库或重启无关容器。
 
+### 第二套腾讯 COS 配置与欠费阻断
+
+登录恢复后第二套实际返回 `cloudType=1` 的腾讯 COS 配置，与主套七牛不同。旧 Web 没有识别 `txHostUrl`，也没有映射 `txPolicy/txQak/txQkeyTime/txQsignature`，因此单纯拿到配置仍无法上传。
+
+浏览器与 Node 代理补齐腾讯 PostObject 的 `policy`、`q-sign-algorithm=sha1`、`q-ak`、`q-key-time`、`q-signature`，保留七牛行为。用第二套自己的配置及 2,463,841 字节指南图请求 COS，服务明确返回 HTTP 451、`UnavailableForLegalReasons`，错误正文说明账户欠费、充值前不可用。
+
+增加明确的存储欠费提示；存储服务明确返回不可重试的 4xx 时，浏览器不再启动第二次直传。图片和文字草稿仍保留。此项需要悠聊服务商恢复该 COS 存储账户后才能完成真实成功上传验收，不能用第一套凭据或更换客户数据归属来掩盖。
+
 ## 维护入口
 
 设置环境变量 `FNOS_PASSWORD`，必要时设置 `FNOS_SUDO_PASSWORD`；不要把密码写入提交。

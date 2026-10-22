@@ -8065,3 +8065,15 @@ npm run skills:import:curated -- --input .\my-curated-skills.json --target http:
 - `scripts/install-fnos-login-health.py` 幂等安装两套自动登录补丁，只重启自动登录容器；原脚本会备份。
 - `scripts/repair-fnos-youchat-sidecars.py` 固化备份网络修复；`--no-deps` 避免顺带重启后端。
 - 没有向真实客户发送测试内容。最终部署及归档验证结果在本节继续补记。
+
+### 归档和连接验证
+
+- 旧日志完整压缩至原有云盘：`youchat-dev-web-20261022-162854.ndjson.gz`，压缩后 1,943,646,754 字节；解压 SHA-256 为 `9b2eaa60cb90c6c2b776e6784f0aa03b2f1973a1371c3636f16c21721019e5bf`。完整校验后释放原件，数据盘由 94% 降至 74%，可用约 19GB。
+- `4a5ba69` 已部署两套 Web；online/offline/consume 对 19 位错误账号均返回 400，客服编号 2 正常 Connected、EnsureRejoinGroup=true、warnings=[]。
+- 按原生客户端的表单参数查询，主套当时当前 203、留言 1、历史 6165；第二套当前/留言 0、历史 16。JSON body 并非这些原生列表接口的参数契约，忽略参数时会返回所有联系人，禁止把那种结果误报成分类数量。
+
+### 图片复测追加发现
+
+- 第二套恢复后返回腾讯 COS 配置，旧上传代码缺少 `txHostUrl` 和 `txQ*` 字段支持；现补齐浏览器及代理的腾讯 PostObject 字段，测试同时保护七牛分支。
+- 第二套真实 COS 上传 2.46MB 指南图返回 HTTP 451，服务明确提示存储账户欠费。图片发送仍受服务商存储欠费限制，不能报告为完全修好，也不能借用主套上传凭据。
+- 页面现对欠费给出明确原因，4xx 硬失败不会继续浏览器重复直传，保留草稿。恢复存储计费后需再次实测上传。

@@ -5141,3 +5141,12 @@ Read `docs/operations-audit-2026-10-22.md` and PROJECT_MEMORY section 90. Import
 - Checks: `npm run check`, `npm run test:operations`; Linux `sh tests/login-health.sh ops/fnos-youchat-service/autologin-observability.sh` uses mocks only.
 - Deployment excludes `_fnos_*.py` probes and Python caches. Preserve existing unrelated UI diagnostic files.
 - No customer messages sent for verification. No evidence of recent SQLite fallback/DB crash; no historical DB rows changed. Deployment and archive completion evidence follows in section 90.
+
+Follow-up findings and verification:
+
+- Both Webs deployed `4a5ba69`, reject long account IDs on all three SignalR routes, accept account 2, healthy rejoin with no warnings.
+- Primary historical capture archived and SHA-256 verified on cloud; 14.77GB reclaimed, disk 94% -> 74%, ~19GB available.
+- Native GetContactList expects form parameters. JSON body probes ignored filters and returned 8803/51 contacts; those are NOT category counts. Correct form probes gave primary current 203 / guestbook 1 / history 6165; secondary 0 / 0 / 16.
+- Secondary OSS is Tencent COS (`cloudType=1`), not Qiniu. Added txHostUrl and txPolicy/txQak/txQkeyTime/txQsignature -> PostObject form in browser+server. Tests cover both codepaths plus Qiniu.
+- Real secondary COS upload returned **HTTP 451 UnavailableForLegalReasons: account is arrears, unavailable until recharge**. This remains an external blocker requiring the storage owner/service provider to restore billing. Do not claim secondary image sending succeeds or substitute primary credentials.
+- `describeOssUploadFailure()` emits an explicit billing message; nonretryable upstream 4xx sets retryable=false, and `uploadChatImage()` does not start browser fallback. Draft preservation stays intact.
