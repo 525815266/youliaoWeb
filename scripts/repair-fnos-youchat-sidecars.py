@@ -46,6 +46,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import pathlib
+import shutil
+import yaml
 
 
 def fail(message: str) -> None:
@@ -121,7 +124,7 @@ def compose_up(target: dict) -> str:
         args += ["-p", str(project_name)]
     for compose_file in target.get("composeFiles") or []:
         args += ["-f", str(compose_file)]
-    args += ["up", "-d"]
+    args += ["up", "-d", "--no-deps"]
     args += [str(service) for service in target["services"]]
     proc = run(args, cwd=target["backendDir"])
     return (proc.stdout + proc.stderr).strip()
@@ -172,20 +175,57 @@ def repair_target(target: dict) -> dict:
 
     env = read_env_file(backend_dir)
     backup = ensure_cloud_backup_path(env.get("YOUCHAT_BACKUP_HOST_PATH", ""))
+    network = repair_sidecar_network(target, env)
     compose_output = compose_up(target)
     containers = [inspect_container(name) for name in target["containers"]]
     not_running = [item for item in containers if item["status"] != "running"]
     if not_running:
         fail(f"Some sidecar containers are not running: {not_running}")
     control = wait_control_status(target.get("controlStatusUrl", ""), env.get("YOUCHAT_CONTROL_TOKEN", ""))
+    if network.get("backupDatabaseHost"):
+        control_container = next(name for name in target["containers"] if "control" in name)
+        code = "import runpy; m=runpy.run_path('/app/control-api.py',run_name='repair'); m['save_backup_config']({'database':{'host':'host.docker.internal'}})"
+        run(["docker", "exec", control_container, "python", "-c", code])
     return {
         "name": target["name"],
         "backendDir": backend_dir,
         "backup": backup,
+        "network": network,
         "composeOutput": compose_output,
         "containers": containers,
         "controlStatus": control,
     }
+
+
+def repair_sidecar_network(target: dict, env: dict) -> dict:
+    # Match the configured backend DB, without redirecting an external MySQL host.
+    if env.get("YOUCHAT_DB_HOST") != "host.docker.internal":
+        return {"changed": False, "reason": "database uses another host"}
+    root = pathlib.Path(target["backendDir"])
+    changed = []
+    for name in dict.fromkeys([*target["composeFiles"], "compose.yaml", "docker-compose.yml"]):
+        file = root / name
+        if not file.exists():
+            continue
+        content = yaml.safe_load(file.read_text())
+        dirty = False
+        for service_name in ["youchat-autologin", "youchat-control", "youchat-backup"]:
+            service = (content.get("services") or {}).get(service_name)
+            if service is None:
+                continue
+            hosts = service.setdefault("extra_hosts", [])
+            if isinstance(hosts, dict):
+                if hosts.get("host.docker.internal") != "host-gateway":
+                    hosts["host.docker.internal"] = "host-gateway"
+                    dirty = True
+            elif "host.docker.internal:host-gateway" not in hosts:
+                hosts.append("host.docker.internal:host-gateway")
+                dirty = True
+        if dirty:
+            shutil.copy2(file, str(file) + f".before-network-{int(time.time())}")
+            file.write_text(yaml.safe_dump(content, sort_keys=False, allow_unicode=True))
+            changed.append(name)
+    return {"changed": bool(changed), "files": changed, "backupDatabaseHost": "host.docker.internal"}
 
 
 def main() -> None:

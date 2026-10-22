@@ -4,6 +4,8 @@
   "private": true,
   "description": "Secondary-development web workbench for YouChat.",
   "scripts": {
+    "test:operations": "node --test tests/operations.test.js",
+    "fnos:audit": "python scripts/audit-fnos-logs.py",
     "dev": "node server.js",
     "check": "node --check server.js && node --check public/app.js && node --check public/skill-training.js",
     "patch:export": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-devkit-patch.ps1",

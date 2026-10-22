@@ -23,7 +23,7 @@ const MAX_UPLOAD_IMAGE_BYTES = 700 * 1024;
 const IMAGE_UPLOAD_JPEG_QUALITY = 0.86;
 const IMAGE_UPLOAD_MIN_JPEG_QUALITY = 0.58;
 const POST_SEND_REFRESH_DELAY_MS = 80;
-const SIGNALR_KEEP_ALIVE_MS = 120000;
+const SIGNALR_KEEP_ALIVE_MS = window.YouChatSignalRPolicy.keepAliveMs;
 const SIGNALR_START_TIMEOUT_MS = 12000;
 const SERVER_SIGNALR_ONLINE_REFRESH_MS = 60000;
 const RECONNECT_LOGIN_REDIRECT_MS = 300000;
@@ -2812,7 +2812,7 @@ function getSignalRBaseUrl() {
 }
 
 function getSignalRAccountId() {
-  return String(firstValue(getContactListAccountId(), state.accountId, state.account, "") || "").trim();
+  return window.YouChatSignalRPolicy.normalizeAccountId(getContactListAccountId());
 }
 
 function buildSignalRUrl() {
@@ -2863,6 +2863,9 @@ async function ensureSignalRConnection() {
       .withAutomaticReconnect();
     if (window.signalR.LogLevel) builder.configureLogging(window.signalR.LogLevel.Warning);
     const connection = builder.build();
+    window.YouChatSignalRPolicy.observe(connection, (name) => {
+      state.signalRLastNotice = { name, at: Date.now() };
+    });
     connection.onreconnecting((error) => {
       state.signalRStatus = "reconnecting";
       if (shouldReportBrowserSignalRError(error)) {

@@ -5124,3 +5124,20 @@ Deployment result:
 - Secondary backend `18082` currently returns `success=true, data=null` from `GetOssConfig` for multiple real contacts. Direct image sending in that stack therefore remains blocked before upload; treat it as a backend configuration/capability issue, not a Web proxy regression.
 - Both stacks report MySQL mode, zero database-guard failures, SignalR `Connected`, `ensureRejoinGroup=true`, and no registration error.
 - The real Lucky public route `https://yzkf.xmmhsj.cn:8001` uploaded the same 2,463,841-byte PNG successfully: HTTP 200, `19.08s` end-to-end, `18692ms` server upload time, and an HTTPS CDN URL. The reverse proxy accepted the full request without mixed-content fallback.
+
+## 2026-10-22 Handoff: Dual Stack Operational Audit
+
+Read `docs/operations-audit-2026-10-22.md` and PROJECT_MEMORY section 90. Important correction: secondary `GetAccountInfo.userId` was stale. No upstream TCP existed and real LogIn timed out. After verified cloud backup and one secondary-only backend restart, upstream 7190/HTTPS and OSS config recovered. Never equate container Up or cached account identity with authenticated message flow.
+
+- `capture-log.js`: 32MiB capture files, three generations; successful polling bodies reduced to metadata, failures kept. Oversized legacy files preserved separately. Dockerfile must copy this module.
+- `scripts/archive-capture-log.py`: explicit cloud archive, gzip reread + SHA-256 verification before original removal. Active writer reopens the new pathname. Never delete legacy evidence blindly.
+- `public/signalr-policy.js`: shared Int32 validation, 15s heartbeat and eight observed hub notices. Must load before app.js. Frontend uses resolved account ID only. Online/offline/consume reject global 19-digit IDs. Actual confirmed short ID on both stacks is 2.
+- October 20 logs show long-ID RegisterUser on both stacks followed by primary binding Int32/NullReference errors. This is strong correlation, not native C# root-cause proof for every historical error.
+- `/local/signalr/online` now returns notice counters/timestamps, without event payloads. Unknown event warnings stay visible.
+- Secondary backup network repaired in both remote compose filenames. Control/backup/autologin get host-gateway; saved backup DB host is host.docker.internal. Original cloud path retained. Verified backup: `youchat-youchat2-20261022-163018.sql.gz`, 160746 bytes, 733923 bytes decompressed.
+- `scripts/repair-fnos-youchat-sidecars.py` persists that repair, requires host PyYAML and uses `--no-deps`.
+- `ops/fnos-youchat-service/autologin-observability.sh` + `scripts/install-fnos-login-health.py`: inline idempotent patch of remote autologin scripts; status in `/control/login-state.json`; three explicit upstream timeout responses + TCP reachable => bounded process recovery, 15-minute cooldown, max two until next success. Honors manual pause; credentials/ordinary rejection/network outage do not cause restart. Installer restarts only autologin sidecars.
+- `scripts/audit-fnos-logs.py`: read-only remote audit, API scan coverage, Docker tail limits, backup/login state, established 7190 peers. Raw logs must stay ignored, can contain private customer data.
+- Checks: `npm run check`, `npm run test:operations`; Linux `sh tests/login-health.sh ops/fnos-youchat-service/autologin-observability.sh` uses mocks only.
+- Deployment excludes `_fnos_*.py` probes and Python caches. Preserve existing unrelated UI diagnostic files.
+- No customer messages sent for verification. No evidence of recent SQLite fallback/DB crash; no historical DB rows changed. Deployment and archive completion evidence follows in section 90.

@@ -24,6 +24,7 @@ EXCLUDED_DIRS = {
     "reports",
     "logs",
     "deploy-dist",
+    "__pycache__",
 }
 EXCLUDED_FILES = {
     ".env",
@@ -40,7 +41,7 @@ EXCLUDED_RELATIVE_PATHS = {
     "data/campaign-commission-scan.json",
     "logs/api-capture.ndjson",
 }
-EXCLUDED_PATTERNS = ("*.log", "*.tmp", "*.temp", "*.tar", "*.tar.gz", "*.zip")
+EXCLUDED_PATTERNS = ("*.log", "*.tmp", "*.temp", "*.tar", "*.tar.gz", "*.zip", "_fnos_*.py", "*.pyc")
 
 
 def should_exclude(path: pathlib.Path) -> bool:

@@ -7,6 +7,8 @@ const net = require("net");
 const { Readable } = require("stream");
 const { URL } = require("url");
 const signalR = require("@microsoft/signalr");
+const { appendCapture, summarizePollResponse } = require("./capture-log");
+const signalRPolicy = require("./public/signalr-policy");
 
 const PORT = Number(process.env.PORT || 5177);
 const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "http://192.168.9.83:18080/api";
@@ -33,7 +35,7 @@ const AI_PROXY_TIMEOUT_MS = 90000;
 const MEDIA_PROXY_TIMEOUT_MS = 30000;
 const PROMPTWORKS_TIMEOUT_MS = Math.max(10000, Number(process.env.PROMPTWORKS_TIMEOUT_MS || 60000));
 const SIGNALR_START_TIMEOUT_MS = 12000;
-const SIGNALR_KEEP_ALIVE_MS = 120000;
+const SIGNALR_KEEP_ALIVE_MS = signalRPolicy.keepAliveMs;
 const SIGNALR_REGISTRATION_REFRESH_MS = 45000;
 const CAMPAIGN_SCAN_INTERVAL_MS = Math.max(5 * 60 * 1000, Number(process.env.YOUCHAT_CAMPAIGN_SCAN_INTERVAL_MS || 15 * 60 * 1000));
 const DATABASE_GUARD_ENABLED = process.env.YOUCHAT_DATABASE_GUARD_ENABLED !== "0";
@@ -319,7 +321,7 @@ function captureApi(entry) {
     const safeEntry = { ...entry };
     if (typeof safeEntry.requestBody === "string") safeEntry.requestBody = redactSensitiveCaptureText(safeEntry.requestBody);
     if (typeof safeEntry.responseBody === "string") safeEntry.responseBody = redactSensitiveCaptureText(safeEntry.responseBody);
-    fs.appendFileSync(API_CAPTURE_FILE, `${JSON.stringify(safeEntry)}\n`, "utf8");
+    appendCapture(API_CAPTURE_FILE, safeEntry);
   } catch (error) {
     console.warn(`Failed to write API capture log: ${error.message}`);
   }
@@ -4161,7 +4163,8 @@ function getSignalRConnectionKey(apiBase, accountId) {
 }
 
 async function registerSignalRClient(connection, apiBase, accountId, options = {}) {
-  const normalizedAccountId = String(accountId || "").trim();
+  const normalizedAccountId = signalRPolicy.normalizeAccountId(accountId);
+  if (!normalizedAccountId) throw new Error("SignalR requires a positive Int32 customer-service account ID");
   const key = getSignalRConnectionKey(apiBase, normalizedAccountId);
   const isReconnect = Boolean(options.isReconnect);
   const registerResult = await connection.invoke("RegisterUser", normalizedAccountId, false, isReconnect, 0);
@@ -4187,6 +4190,7 @@ async function registerSignalRClient(connection, apiBase, accountId, options = {
   const cached = signalRHubConnections.get(key);
   if (cached?.connection === connection) {
     cached.lastRegisteredAt = registeredAt;
+    cached.lastRegistrationError = "";
     cached.lastRegistrationReason = options.reason || (isReconnect ? "reconnected" : "online");
     cached.lastRegistrationRecovery = recovery;
   }
@@ -4200,7 +4204,7 @@ async function registerSignalRClient(connection, apiBase, accountId, options = {
 }
 
 async function ensureServerSignalRConnection(apiBase, accountId) {
-  const normalizedAccountId = String(accountId || "").trim();
+  const normalizedAccountId = signalRPolicy.normalizeAccountId(accountId);
   if (!normalizedAccountId) throw new Error("SignalR accountId is required");
 
   const key = getSignalRConnectionKey(apiBase, normalizedAccountId);
@@ -4227,6 +4231,14 @@ async function ensureServerSignalRConnection(apiBase, accountId) {
       .withAutomaticReconnect()
       .configureLogging(signalR.LogLevel.Warning)
       .build();
+
+    const notices = { total: 0, counts: {}, lastAt: "", lastName: "" };
+    signalRPolicy.observe(connection, (name) => {
+      notices.total += 1;
+      notices.counts[name] = (notices.counts[name] || 0) + 1;
+      notices.lastAt = new Date().toISOString();
+      notices.lastName = name;
+    });
 
     connection.onclose((error) => {
       const current = signalRHubConnections.get(key);
@@ -4257,7 +4269,8 @@ async function ensureServerSignalRConnection(apiBase, accountId) {
       accountId: normalizedAccountId,
       lastUsedAt: Date.now(),
       lastRegisteredAt: 0,
-      lastRegistrationError: ""
+      lastRegistrationError: "",
+      notices
     });
     await registerSignalRClient(connection, apiBase, normalizedAccountId, {
       isReconnect: false,
@@ -4294,7 +4307,8 @@ function getSignalRConnectionStatus(apiBase, accountId, connection = null) {
     lastRegisteredAt: cached?.lastRegisteredAt ? new Date(cached.lastRegisteredAt).toISOString() : "",
     lastRegistrationReason: cached?.lastRegistrationReason || "",
     lastRegistrationRecovery: cached?.lastRegistrationRecovery || null,
-    lastRegistrationError: cached?.lastRegistrationError || ""
+    lastRegistrationError: cached?.lastRegistrationError || "",
+    notices: cached?.notices || null
   };
 }
 
@@ -4307,10 +4321,10 @@ async function handleSignalROnline(req, res) {
   const body = await readBody(req);
   const payload = parseRequestPayload(body, req);
   const apiBase = normalizeApiBase(payload.apiBase || DEFAULT_API_BASE);
-  const accountId = String(payload.accountId || "").trim();
+  const accountId = signalRPolicy.normalizeAccountId(payload.accountId);
 
   if (!accountId) {
-    sendJson(res, 400, { success: false, message: "SignalR accountId is required" });
+    sendJson(res, 400, { success: false, message: "SignalR requires a positive Int32 customer-service account ID" });
     return;
   }
 
@@ -4341,6 +4355,7 @@ async function handleSignalROnline(req, res) {
         lastRegistrationReason: status.lastRegistrationReason,
         registrationRecovery: status.lastRegistrationRecovery,
         lastRegistrationError: status.lastRegistrationError,
+        notices: status.notices,
         failedAttempts: attempts
       });
       return;
@@ -4373,7 +4388,7 @@ async function handleSignalROffline(req, res) {
   const body = await readBody(req);
   const payload = parseRequestPayload(body, req);
   const apiBase = normalizeApiBase(payload.apiBase || DEFAULT_API_BASE);
-  const accountId = String(payload.accountId || "").trim();
+  const accountId = signalRPolicy.normalizeAccountId(payload.accountId);
 
   if (!accountId) {
     sendJson(res, 400, { success: false, message: "SignalR accountId is required" });
@@ -4445,7 +4460,7 @@ async function handleSignalRConsume(req, res) {
   const body = await readBody(req);
   const payload = parseRequestPayload(body, req);
   const apiBase = normalizeApiBase(payload.apiBase || DEFAULT_API_BASE);
-  const accountId = String(payload.accountId || "").trim();
+  const accountId = signalRPolicy.normalizeAccountId(payload.accountId);
   const contactId = Number(payload.contactId || 0);
   const msgId = Number(payload.msgId || 0);
 
@@ -4861,7 +4876,8 @@ async function proxyApi(req, res) {
       },
       requestBody: decodeCaptureBody(body, headers["content-type"] || headers["Content-Type"] || ""),
       responseContentType: upstream.headers.get("content-type") || "",
-      responseBody: decodeCaptureBody(buffer, upstream.headers.get("content-type") || "")
+      responseBody: summarizePollResponse(req.url, buffer, upstream.status)
+        ?? decodeCaptureBody(buffer, upstream.headers.get("content-type") || "")
     });
   } catch (error) {
     captureApi({
