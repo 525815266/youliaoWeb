@@ -3,7 +3,7 @@
     keepAliveMs: 15000,
     noticeNames: [
       "msgNotice", "allMsgNotice", "timeoutNotice", "connectionEstablished",
-      "groupJoined", "testRegisterMessage", "stateSyncComplete", "accessIn"
+      "groupJoined", "testRegisterMessage", "stateSyncComplete", "accessIn", "msgShutDown", "unBound"
     ],
     normalizeAccountId(value) {
       const text = String(value ?? "").trim();

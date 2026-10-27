@@ -5,6 +5,7 @@
   "description": "Secondary-development web workbench for YouChat.",
   "scripts": {
     "test:operations": "node --test tests/operations.test.js",
+    "test:contacts": "node --test tests/contact-list.test.js",
     "fnos:audit": "python scripts/audit-fnos-logs.py",
     "dev": "node server.js",
     "check": "node --check server.js && node --check public/app.js && node --check public/skill-training.js",

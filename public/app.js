@@ -450,6 +450,7 @@ const state = {
   mobilePanel: "list",
   contacts: [],
   contactListPage: 1,
+  contactListSnapshotId: "",
   contactListHasMore: false,
   contactListLoading: false,
   contactListAutoLoading: false,
@@ -3696,7 +3697,7 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
   let globalResult = null;
   const candidates = getContactListAccountCandidates();
   try {
-    globalResult = await fetchContactListPayload(tab, {
+    if (!candidates.length) globalResult = await fetchContactListPayload(tab, {
       ...options,
       omitAccountId: true
     }, {
@@ -3719,11 +3720,15 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
         source: "account",
         accountIdUsed: accountId
       });
-      if (isUsefulContactListResult(result)) return result;
+      if (isUsefulContactListResult(result) || isExplicitEmptyContactListResult(result)) return result;
       emptyAccountResults.push(result);
     } catch (error) {
       log("contact list account filter failed", { accountId, error: error.message });
     }
+  }
+
+  if (!globalResult && candidates.length && !emptyAccountResults.length) {
+    throw new Error("当前客服会话查询失败，请稍后重试");
   }
 
   if (globalResult && (isUsefulContactListResult(globalResult) || isExplicitEmptyContactListResult(globalResult) || globalResult.isZeroData)) {
@@ -3745,18 +3750,27 @@ async function fetchContactListWithFallback(tab = state.listTab, options = {}) {
 
 async function fetchContactListPayload(tab, options = {}, metadata = {}) {
   const params = buildContactListParams(tab, options);
-  const payload = await api("/Contact/GetContactList", params);
+  const payload = options.ordered
+    ? await api("/Contact/GetOrderedContactList", {
+      ...params, snapshotId: options.snapshotId || "", prefix: Boolean(options.prefix), selectedId: options.selectedId || ""
+    }, { asJson: true, timeoutMs: 60000 })
+    : await api("/Contact/GetContactList", params);
   const rawContacts = getRecords(payload).map(normalizeContact).map(applyReadStateToContact);
   const isGlobalCurrent = tab === "current" && String(metadata.source || "").startsWith("global");
   const contacts = sortContacts(isGlobalCurrent ? filterCurrentConversationContacts(rawContacts) : rawContacts);
-  const explicitTotal = isGlobalCurrent ? contacts.length : getExplicitTotal(payload);
+  const explicitTotal = isGlobalCurrent && !options.ordered ? contacts.length : getExplicitTotal(payload);
   return {
     payload,
     params,
     contacts,
     rawContacts,
     explicitTotal,
-    total: isGlobalCurrent ? contacts.length : getContactListPayloadTotal(payload, contacts),
+    total: isGlobalCurrent && !options.ordered ? contacts.length : getContactListPayloadTotal(payload, contacts),
+    snapshotId: payload?.data?.snapshotId || "",
+    snapshotReset: Boolean(payload?.data?.snapshotReset),
+    hasMore: payload?.data?.hasMore,
+    selectedContact: payload?.data?.selectedContact
+      ? applyReadStateToContact(normalizeContact(payload.data.selectedContact, 0)) : null,
     isZeroData: hasZeroDataPayload(payload),
     source: metadata.source || "server",
     accountIdUsed: metadata.accountIdUsed || params.accountId || ""
@@ -3884,11 +3898,13 @@ async function loadContacts(options = {}) {
   try {
     await ensureContactListAccountId();
     const mode = options.mode || "replace";
-    const page = Number(options.page || (mode === "append" ? (state.contactListPage || 1) + 1 : 1)) || 1;
+    const page = Number(options.page || (mode === "append" ? (state.contactListPage || 1) + 1
+      : mode === "merge" ? state.contactListPage || 1 : 1)) || 1;
     const previousHasMore = state.contactListHasMore;
     const previousCount = state.contacts.length;
     const selectedId = getContactId(state.activeContact);
     const previousContactScrollTop = el.contactList.scrollTop;
+    const listAnchor = captureContactListAnchor();
     const previousContactScrollHeight = el.contactList.scrollHeight;
     const previousContactWasNearBottom = isNearBottom(el.contactList, CONTACT_LIST_AUTOLOAD_THRESHOLD);
     const previousToolScrollTop = el.toolContent.scrollTop;
@@ -3902,7 +3918,11 @@ async function loadContacts(options = {}) {
       keyWord: options.keyWord,
       searchStr: options.searchStr,
       omitAccountId: options.omitAccountId,
-      accountIdOverride: options.accountIdOverride
+      accountIdOverride: options.accountIdOverride,
+      ordered: true,
+      selectedId: preserveScroll ? selectedId : "",
+      prefix: mode === "merge",
+      snapshotId: mode === "append" ? state.contactListSnapshotId : ""
     });
     if (loadToken !== contactListLoadToken || requestedTab !== state.listTab) {
       log("ignored stale contact list response", {
@@ -3942,14 +3962,13 @@ async function loadContacts(options = {}) {
       return;
     }
 
-    const nextContacts = mode === "append"
+    const nextContacts = mode === "append" && !result.snapshotReset
       ? mergeContacts(state.contacts, contacts)
-      : mode === "merge"
-      ? mergeContacts(contacts, state.contacts)
       : contacts;
     state.contacts = nextContacts;
+    state.contactListSnapshotId = result.snapshotId;
     state.contactListPage = mode === "merge" ? Math.max(state.contactListPage || 1, page) : page;
-    state.contactListHasMore = getContactListHasMore({
+    state.contactListHasMore = typeof result.hasMore === "boolean" ? result.hasMore : getContactListHasMore({
       mode,
       contacts,
       pageSize: options.pageSize || CONTACT_LIST_PAGE_SIZE,
@@ -3966,7 +3985,8 @@ async function loadContacts(options = {}) {
     state.listCounts[requestedTab] = state.totalContacts || state.contacts.length;
     state.listUnreadCounts[requestedTab] = sumContactUnread(state.contacts);
     const previousActiveAvatar = getContactAvatar(state.activeContact);
-    state.activeContact = state.contacts.find((contact) => String(getContactId(contact)) === String(selectedId)) || state.contacts[0] || null;
+    state.activeContact = state.contacts.find((contact) => String(getContactId(contact)) === String(selectedId))
+      || (preserveScroll ? result.selectedContact : null) || state.contacts[0] || null;
     const activeChanged = String(selectedId || "") !== String(getContactId(state.activeContact) || "");
     const activeAvatarChanged = !activeChanged && previousActiveAvatar !== getContactAvatar(state.activeContact);
     renderConversationTabs();
@@ -3982,9 +4002,9 @@ async function loadContacts(options = {}) {
       loadContactCounts().catch((error) => log("contact counts failed", { error: error.message }));
     }
     if (mode === "append") {
-      restoreScrollTop(el.contactList, previousContactScrollTop);
+      restoreContactListAnchor(listAnchor, previousContactScrollTop);
     } else if (preserveScroll) {
-      el.contactList.scrollTop = previousContactScrollTop;
+      restoreContactListAnchor(listAnchor, previousContactScrollTop);
       el.toolContent.scrollTop = previousToolScrollTop;
       const nextHistoryList = el.toolContent.querySelector("[data-history-list]");
       if (nextHistoryList) {
@@ -4024,6 +4044,21 @@ async function loadContacts(options = {}) {
   } finally {
     if (loadToken === contactListLoadToken) state.contactListLoading = false;
   }
+}
+
+function captureContactListAnchor() {
+  if (!el.contactList || el.contactList.scrollTop < 1) return null;
+  const top = el.contactList.getBoundingClientRect().top;
+  const card = [...el.contactList.querySelectorAll("[data-contact-id]")]
+    .find((item) => item.getBoundingClientRect().bottom > top);
+  return card ? { id: card.dataset.contactId, offset: card.getBoundingClientRect().top - top } : null;
+}
+
+function restoreContactListAnchor(anchor, fallback) {
+  const card = anchor && el.contactList.querySelector(`[data-contact-id="${CSS.escape(anchor.id)}"]`);
+  el.contactList.scrollTop = card
+    ? el.contactList.scrollTop + card.getBoundingClientRect().top - el.contactList.getBoundingClientRect().top - anchor.offset
+    : fallback;
 }
 
 async function showFriendRequestsDialog() {
@@ -14434,7 +14469,8 @@ function startAutoRefresh() {
     return;
   }
   refreshTimer = window.setInterval(async () => {
-    if (document.hidden) return;
+    if (document.hidden || state.autoRefreshRunning || state.contactListLoading) return;
+    state.autoRefreshRunning = true;
     try {
       await keepServerSignalROnline();
       await loadContacts({ preserveScroll: true, mode: state.contactListPage > 1 ? "merge" : "replace" });
@@ -14447,6 +14483,8 @@ function startAutoRefresh() {
       await loadClientNoticeBadge();
     } catch (error) {
       log("auto refresh error", { error: error.message });
+    } finally {
+      state.autoRefreshRunning = false;
     }
   }, 10000);
 }

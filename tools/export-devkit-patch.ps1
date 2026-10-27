@@ -68,6 +68,8 @@ try {
   $includePaths = @(
     "package.json",
     "server.js",
+    "capture-log.js",
+    "contact-list.js",
     "README.md",
     "PRODUCT.md",
     "DESIGN.md",

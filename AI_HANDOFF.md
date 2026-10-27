@@ -4,6 +4,14 @@
 
 ## Mission
 
+Latest list fix (2026-10-27): read `docs/contact-list-2026-10-27.md`. Both databases contain 10/27 messages. Do not restart the backend or force MySQL just because the list shows older dates. Native guestbook paging is oldest-first; list updateTime tracks notification-eligible messages, not every non-red-point chat.
+
+- `contact-list.js` + proxy virtual `/api/Contact/GetOrderedContactList`: complete category scan, pinned/time sort, scoped cache (8s), stable snapshot paging (2min, max 32). Dockerfile must copy the module.
+- Browser `loadContacts`: use ordered endpoint only for visible lists; merge refresh requests the entire loaded prefix and replaces stale rows. Snapshot expiration also replaces the prefix. Preserve visible row anchor and selected off-page contact. Never restore the reversed `mergeContacts(newRows, oldState)` refresh.
+- Native `GetContactList` remains for count probes and other clients. Short account-ID queries returning explicit zero are authoritative; no cross-account fallback. Respect native categories and red-point eligibility.
+- SignalR message/access/close/unbind events invalidate ordered cache; payloads remain unlogged. Polling remains 10s with an overlap guard. Full history scan currently ~1s for ~5860 contacts; remeasure if dataset grows substantially.
+- Tests: `npm run test:contacts`, `npm run test:operations`, `npm run check`. Details and deployment verification live in PROJECT_MEMORY section 91.
+
 Build a real-data Web customer-service workbench from the Windows Electron YouChat client. Do not invent users, ids, orders, balances, chat records, or quick replies. Prefer real API, captured logs, original Electron references, and persistent local files.
 
 ## Roots

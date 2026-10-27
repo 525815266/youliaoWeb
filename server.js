@@ -9,6 +9,18 @@ const { URL } = require("url");
 const signalR = require("@microsoft/signalr");
 const { appendCapture, summarizePollResponse } = require("./capture-log");
 const signalRPolicy = require("./public/signalr-policy");
+const { createContactPager } = require("./contact-list");
+const contactPager = createContactPager({
+  fetchPage: async (params, { base, authorization }) => {
+    const response = await fetchWithTimeout(`${base}/Contact/GetContactList`, {
+      method: "POST",
+      headers: authorization ? { Authorization: authorization } : {},
+      body: new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]))
+    }, 15000, "Contact list page");
+    if (!response.ok) throw new Error(`Contact list HTTP ${response.status}`);
+    return response.json();
+  }
+});
 
 const PORT = Number(process.env.PORT || 5177);
 const DEFAULT_API_BASE = process.env.YOUCHAT_API_BASE || "http://192.168.9.83:18080/api";
@@ -4261,6 +4273,7 @@ async function ensureServerSignalRConnection(apiBase, accountId) {
       notices.counts[name] = (notices.counts[name] || 0) + 1;
       notices.lastAt = new Date().toISOString();
       notices.lastName = name;
+      if (["msgNotice", "allMsgNotice", "accessIn", "msgShutDown", "unBound"].includes(name)) contactPager.invalidate();
     });
 
     connection.onclose((error) => {
@@ -4857,6 +4870,39 @@ async function proxyApi(req, res) {
 
   const failedAttempts = [];
   try {
+    if (cleanedPath === "/Contact/GetOrderedContactList" && req.method === "POST") {
+      const input = parseRequestPayload(body, req);
+      const params = {
+        id: 0,
+        isGuestbook: input.isGuestbook === true || input.isGuestbook === "true",
+        isHistory: input.isHistory === true || input.isHistory === "true"
+      };
+      if (input.accountId) {
+        params.accountId = signalRPolicy.normalizeAccountId(input.accountId);
+        if (!params.accountId) throw new Error("Invalid contact list account ID");
+      }
+      if (input.keyWord) params.keyWord = String(input.keyWord);
+      const targetBase = baseCandidates[0];
+      const authorization = headers.authorization || "";
+      const scope = crypto.createHash("sha256").update(JSON.stringify([targetBase, authorization])).digest("hex");
+      const result = await contactPager.page({
+        scope, params, context: { base: targetBase, authorization },
+        pageIndex: Math.max(1, Math.min(10000, Math.floor(Number(input.pageIndex) || 1))),
+        pageSize: Math.max(1, Math.min(1000, Math.floor(Number(input.pageSize) || 60))),
+        prefix: input.prefix === true,
+        selectedId: String(input.selectedId || ""),
+        snapshotId: String(input.snapshotId || "")
+      });
+      sendJson(res, 200, result);
+      captureApi({
+        at: new Date().toISOString(), method: req.method, url: req.url,
+        status: 200, ms: Date.now() - started,
+        responseBody: JSON.stringify({ success: true, data: {
+          count: result.data.list.length, total: result.data.total, hasMore: result.data.hasMore
+        } })
+      });
+      return;
+    }
     let upstream = null;
     let targetUrl = null;
     for (const candidateBase of baseCandidates) {
@@ -4875,6 +4921,8 @@ async function proxyApi(req, res) {
       throw new Error(failedAttempts.map((item) => `${item.target}: ${item.error}`).join("; ") || "YouChat API proxy failed");
     }
     const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (upstream.ok && /^\/(Conversation|Contact|ChatContent)\//.test(cleanedPath)
+      && !/\/(Get|Search|Query)/i.test(cleanedPath)) contactPager.invalidate();
     const responseHeaders = {};
 
     upstream.headers.forEach((value, key) => {
