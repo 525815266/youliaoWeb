@@ -11,6 +11,8 @@ Latest list fix (2026-10-27): read `docs/contact-list-2026-10-27.md`. Both datab
 - Native `GetContactList` remains for count probes and other clients. Short account-ID queries returning explicit zero are authoritative; no cross-account fallback. Respect native categories and red-point eligibility.
 - SignalR message/access/close/unbind events invalidate ordered cache; payloads remain unlogged. Polling remains 10s with an overlap guard. Full history scan currently ~1s for ~5860 contacts; remeasure if dataset grows substantially.
 - Tests: `npm run test:contacts`, `npm run test:operations`, `npm run check`. Details and deployment verification live in PROJECT_MEMORY section 91.
+- Deployed code `8bf9f7f` on both stacks; GHCR workflow `40521603277` succeeded. Nine list tests + eight operation tests pass. Full real pagination: primary 152/407/5858 (history 98 pages at test size 60); secondary 0/26/12. Public UI advanced to 10/27 22:36 and loaded 160 cards. Source-only deployment preserved remote data/config/compose; backend containers were not restarted.
+- During verification, live capture recorded ShutDownAll at 22:34:44 and AccessInAll at 22:35:12, causing category transfers. Verification scripts did not invoke them. Do not compare pre/post category counts as if membership were static. Backups: `/vol1/1000/Docker/.youchat-web-backups/20261027-222909/`.
 
 Build a real-data Web customer-service workbench from the Windows Electron YouChat client. Do not invent users, ids, orders, balances, chat records, or quick replies. Prefer real API, captured logs, original Electron references, and persistent local files.
 
