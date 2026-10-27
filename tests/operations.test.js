@@ -7,6 +7,42 @@ const { appendCapture, summarizePollResponse } = require("../capture-log");
 const policy = require("../public/signalr-policy");
 const vm = require("node:vm");
 
+test("a Basic-protected browser request preserves its YouChat login token through the proxy", async () => {
+  const browserSource = fs.readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
+  const serverSource = fs.readFileSync(path.join(__dirname, "../server.js"), "utf8");
+  const proxyContext = vm.createContext({});
+  const proxyStart = serverSource.indexOf("const PROXY_STRIPPED_REQUEST_HEADERS =");
+  const proxyEnd = serverSource.indexOf("\nfunction getAiChatCompletionsUrl(", proxyStart);
+  vm.runInContext(serverSource.slice(proxyStart, proxyEnd), proxyContext);
+  let checked = false;
+  const browserContext = vm.createContext({
+    state: { token: "YouChat test session" }, API_REQUEST_TIMEOUT_MS: 1000,
+    apiPath: (value) => `/api${value}`, toFormData: (data) => data,
+    parsePayload: JSON.parse, log: () => {}, summarize: (value) => value,
+    fetchWithTimeout: async (url, options) => {
+      assert.equal(url, "/api/Contact/GetContactList");
+      assert.equal(options.headers.Authorization, undefined);
+      const upstream = proxyContext.sanitizeProxyRequestHeaders({
+        authorization: "Basic ingress-credentials",
+        "x-youchat-authorization": options.headers["X-YouChat-Authorization"],
+        connection: "keep-alive", host: "proxy.example"
+      });
+      assert.equal(upstream.authorization, "YouChat test session");
+      assert.equal(upstream["x-youchat-authorization"], undefined);
+      assert.equal(upstream.connection, undefined);
+      assert.equal(upstream.host, undefined);
+      checked = true;
+      return { ok: true, status: 200, text: async () => '{"success":true}' };
+    }
+  });
+  const browserStart = browserSource.indexOf("async function api(");
+  const browserEnd = browserSource.indexOf("\nfunction toFormData(", browserStart);
+  vm.runInContext(browserSource.slice(browserStart, browserEnd), browserContext);
+  assert.equal((await browserContext.api("/Contact/GetContactList")).success, true);
+  assert.ok(checked);
+  assert.equal(proxyContext.sanitizeProxyRequestHeaders({ authorization: "legacy session" }).authorization, "legacy session");
+});
+
 test("successful polls retain counts but omit customer bodies; failures remain available", () => {
   const buffer = Buffer.from(JSON.stringify({ success: true, data: { list: [{ message: "private" }], total: 9000 } }));
   const result = JSON.parse(summarizePollResponse("/api/Contact/GetContactList?p=1", buffer, 200));

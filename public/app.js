@@ -3436,7 +3436,8 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = API_REQUEST_
 async function api(path, data = {}, options = {}) {
   const method = options.method || "POST";
   const headers = {};
-  if (state.token) headers.Authorization = state.token;
+  // Keep Authorization available for an authenticated reverse proxy.
+  if (state.token) headers["X-YouChat-Authorization"] = state.token;
   if (options.headers) Object.assign(headers, options.headers);
 
   let body;

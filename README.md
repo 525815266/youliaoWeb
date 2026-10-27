@@ -79,6 +79,12 @@ Web 默认后端地址对齐飞牛上的悠聊 Docker 服务：`http://192.168.9
 
 ## Web 客户端 Docker 部署
 
+Web 入口可以放在带 HTTP Basic Auth 的 HTTPS 反向代理后。浏览器使用
+`X-YouChat-Authorization` 传递悠聊登录 token，Node 代理再还原为后端所需的
+`Authorization`，避免覆盖入口的 Basic 凭据。反向代理应在转发到 Node 时清空
+入口的 `Authorization`，保留 `X-YouChat-Authorization`；这样入口密码不会被转给悠聊服务端。
+直接使用原有 `Authorization` 的内网客户端仍可正常访问 Node 代理。
+
 本节只针对本项目 `C:\youchat-dev-web`，也就是二开的 Web 客户端。飞牛上已有的悠聊服务端 Docker 项目 `/vol1/1000/Docker/youchat`、compose project `youliaoapp` 不属于本节范围，除非明确排查服务端，否则不要改动或重启。
 
 默认容器信息：

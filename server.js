@@ -4585,6 +4585,10 @@ const PROXY_STRIPPED_REQUEST_HEADERS = new Set([
 
 function sanitizeProxyRequestHeaders(requestHeaders) {
   const headers = { ...requestHeaders };
+  if (headers["x-youchat-authorization"]) {
+    headers.authorization = headers["x-youchat-authorization"];
+  }
+  delete headers["x-youchat-authorization"];
   Object.keys(headers).forEach((key) => {
     if (PROXY_STRIPPED_REQUEST_HEADERS.has(key.toLowerCase())) {
       delete headers[key];
