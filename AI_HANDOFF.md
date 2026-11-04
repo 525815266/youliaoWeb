@@ -4,6 +4,12 @@
 
 ## Mission
 
+2026-11-05 primary recovery: read `docs/primary-recovery-2026-11-05.md` and PROJECT_MEMORY section 92. Primary had no upstream connection and real LogIn timed out despite healthy Web/MySQL. Auto pause `reload database configuration` + autologin completion survived a container restart, but its in-memory ownership flag did not. This was NOT SQLite fallback.
+
+- Helper now resumes only proven completed managed pauses, keeps DB config on that startup, permits bounded timeout recovery during an owned pause, respects later manual pauses, and records fresh paused status. Installer supports `--stack primary|secondary|all` (default all). Never clear arbitrary pauses.
+- Installed only on primary; one supervised native process recovery at 00:15:55 restored real login. Auto state ok at 00:16:43/00:17:43, pause removed, upstream TCP established, SignalR/rejoin healthy. Latest weekly table 2 -> 18 -> 22 rows by 00:18:01, including genuine incoming source=0 rows. No customer test sends. DB stays MySQL; no Web/MySQL/secondary container restart.
+- Script hash `fad934e4e769da42c85f50c744e0fadd905a4fa3209aff27215bf8daec7a7bd5`; backup `docker/autologin.sh.before-health-1793808902` under primary native directory. Secondary script only dry-run checked; not installed. Do not report secondary authenticated based on TCP alone.
+
 Latest list fix (2026-10-27): read `docs/contact-list-2026-10-27.md`. Both databases contain 10/27 messages. Do not restart the backend or force MySQL just because the list shows older dates. Native guestbook paging is oldest-first; list updateTime tracks notification-eligible messages, not every non-red-point chat.
 
 - `contact-list.js` + proxy virtual `/api/Contact/GetOrderedContactList`: complete category scan, pinned/time sort, scoped cache (8s), stable snapshot paging (2min, max 32). Dockerfile must copy the module.
